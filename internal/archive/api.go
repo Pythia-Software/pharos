@@ -89,6 +89,7 @@ type Server struct {
 	queryMetadata chan struct{}
 	ask           askState
 	teams         teamsEnrollmentState
+	teamsWorker   teamsWorkerState
 	// ops is the operation registry (operations.go); journal writes it to
 	// the catalog, and leases watches other Pharos processes' leases.
 	ops     *opRegistry
@@ -118,6 +119,7 @@ type Server struct {
 func NewServer(config Config, catalog *Catalog) *Server {
 	server := &Server{Catalog: catalog, config: config, runs: []*SyncRun{}, queryMetadata: make(chan struct{}, 1)}
 	server.background.wake = make(chan struct{}, 1)
+	server.teamsWorker.wake = make(chan struct{}, 1)
 	server.claudeWatchWake = make(chan struct{}, 1)
 	server.claudeSettingsWake = make(chan struct{}, 1)
 	server.claudeWatch = server.newClaudeDownloads()
@@ -221,6 +223,7 @@ func (s *Server) Serve() error {
 	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.daemon("automaticLoop", s.automaticLoop)
 	s.daemon("backgroundLoop", s.backgroundLoop)
+	s.daemon("teamsLoop", s.teamsLoop)
 	s.daemon("cpuLedger", s.cpuLedgerLoop)
 	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
 	s.daemon("watchFeatureFlags", s.Catalog.watchFeatureFlags)
@@ -306,6 +309,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/teams/source-accounts") {
 		s.teamsSourceAccountsHTTP(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/teams/worker") {
+		s.teamsWorkerHTTP(w, r)
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/feedback/") {
@@ -1152,7 +1159,9 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		name, _ := url.PathUnescape(strings.TrimSuffix(strings.TrimPrefix(path, "/api/sources/"), "/remove"))
 		name = strings.TrimSuffix(name, "/")
 		var request probeRequestError
-		if err := s.removeSource(name); errors.As(err, &request) {
+		if err := s.removeSource(name); errors.Is(err, errTeamsSharingBusy) {
+			writeError(w, err, http.StatusConflict)
+		} else if errors.As(err, &request) {
 			writeError(w, err, http.StatusBadRequest)
 		} else if err != nil {
 			writeError(w, err, http.StatusInternalServerError)
@@ -1177,7 +1186,11 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.setSourceEnabled(source.Name, enabled); err != nil {
-			writeError(w, err, 500)
+			status := http.StatusInternalServerError
+			if errors.Is(err, errTeamsSharingBusy) {
+				status = http.StatusConflict
+			}
+			writeError(w, err, status)
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "source": name, "enabled": enabled}, 200)
@@ -1252,6 +1265,13 @@ func (s *Server) configuredSource(name string) (SourceConfig, error) {
 // requests. hostFileMu keeps a probe accept's read-modify-write of the host
 // file from dropping it.
 func (s *Server) setSourceEnabled(name string, enabled bool) error {
+	teamsSourceMutationMu.Lock()
+	defer teamsSourceMutationMu.Unlock()
+	lease, err := s.Catalog.beginTeamsSourceMutation(context.Background())
+	if err != nil {
+		return err
+	}
+	defer lease.Close()
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
 	index := slices.IndexFunc(s.config.Sources, func(source SourceConfig) bool { return source.Name == name })
@@ -1260,7 +1280,7 @@ func (s *Server) setSourceEnabled(name string, enabled bool) error {
 	}
 	hostFileMu.Lock()
 	// A library host's own sources live in its hosts/<id>.toml.
-	err := SetSourceEnabled(defaultString(s.config.Sources[index].File, s.config.Path), name, enabled)
+	err = SetSourceEnabled(defaultString(s.config.Sources[index].File, s.config.Path), name, enabled)
 	hostFileMu.Unlock()
 	if err != nil {
 		return err
@@ -1279,6 +1299,13 @@ func (s *Server) setSourceEnabled(name string, enabled bool) error {
 // replaced applies again. What was captured and indexed from it stays in
 // the library.
 func (s *Server) removeSource(name string) error {
+	teamsSourceMutationMu.Lock()
+	defer teamsSourceMutationMu.Unlock()
+	lease, err := s.Catalog.beginTeamsSourceMutation(context.Background())
+	if err != nil {
+		return err
+	}
+	defer lease.Close()
 	config := s.Config()
 	index := slices.IndexFunc(config.Sources, func(source SourceConfig) bool { return source.Name == name })
 	if index < 0 {
@@ -1288,7 +1315,7 @@ func (s *Server) removeSource(name string) error {
 		return probeRequestError{fmt.Errorf("%s is set up for every Mac in %s; remove it there", name, defaultString(file, config.Path))}
 	}
 	hostFileMu.Lock()
-	err := RemoveSource(config.Sources[index].File, name)
+	err = RemoveSource(config.Sources[index].File, name)
 	hostFileMu.Unlock()
 	if err != nil {
 		return err

@@ -1,0 +1,33 @@
+package archive
+
+import "github.com/gbdubs/pharos/internal/teams"
+
+// Capability IDs are announced only when the corresponding end-to-end
+// implementation and its safety gates are present in the compiled binary.
+// The version is the existing release ldflag, never synthesized for dev runs.
+type teamsCapabilityManifest = teams.CapabilityManifest
+
+const teamsFeatureBuildMinimum = "0.10.0"
+
+func teamsBuildCapabilities() teamsCapabilityManifest {
+	m := teamsCapabilityManifest{SchemaVersion: 1, AppVersion: pushVersion, Capabilities: []string{"deterministic_query_v1", "source_snapshot_v2"}}
+	// Scoped artifacts remain unadvertised until the separate content authority,
+	// privacy, model consent and result acceptance gates are complete.
+	return m
+}
+
+func teamsBuildEligible(m teamsCapabilityManifest, required string) bool {
+	if m.SchemaVersion != 1 || !teamsVersionAtLeast(m.AppVersion, teamsFeatureBuildMinimum) {
+		return false
+	}
+	for _, capability := range m.Capabilities {
+		if capability == required {
+			return true
+		}
+	}
+	return false
+}
+
+func teamsNumericBuildEligible(m teamsCapabilityManifest) bool {
+	return teamsBuildEligible(m, "source_snapshot_v2") && teamsBuildEligible(m, "deterministic_query_v1")
+}

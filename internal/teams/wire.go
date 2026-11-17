@@ -39,16 +39,24 @@ type MetricsDefault struct {
 	PolicyVersion int64 `json:"policy_version"`
 }
 type PollResponse struct {
-	ServerTime      time.Time      `json:"server_time"`
-	Work            []Work         `json:"work"`
-	Cancellations   []Cancellation `json:"cancellations"`
-	MetricsDefault  MetricsDefault `json:"metrics_default"`
-	NextPollSeconds int            `json:"next_poll_seconds"`
+	ServerTime       time.Time      `json:"server_time"`
+	Work             []Work         `json:"work"`
+	Cancellations    []Cancellation `json:"cancellations"`
+	MetricsDefault   MetricsDefault `json:"metrics_default"`
+	NextPollSeconds  int            `json:"next_poll_seconds"`
+	CapabilityStatus string         `json:"capability_status,omitempty"`
 }
 type PollRequest struct {
-	AppVersion  string   `json:"app_version"`
-	LibraryIDs  []string `json:"library_ids"`
-	WaitSeconds int      `json:"wait_seconds"`
+	AppVersion         string              `json:"app_version"`
+	LibraryIDs         []string            `json:"library_ids"`
+	WaitSeconds        int                 `json:"wait_seconds"`
+	CapabilityManifest *CapabilityManifest `json:"capability_manifest,omitempty"`
+}
+
+type CapabilityManifest struct {
+	SchemaVersion int      `json:"schema_version"`
+	AppVersion    string   `json:"app_version"`
+	Capabilities  []string `json:"capabilities"`
 }
 type Source struct {
 	Token            string `json:"token"`
@@ -91,6 +99,10 @@ type Submission struct {
 	EvaluationRevision int64           `json:"evaluation_revision"`
 	LocalRevision      int64           `json:"local_revision"`
 	ManifestSHA256     string          `json:"manifest_sha256"`
+	SourceBindingID    string          `json:"source_binding_id,omitempty"`
+	AssignmentSHA256   string          `json:"assignment_sha256,omitempty"`
+	InventoryRevision  int64           `json:"inventory_revision,omitempty"`
+	CatalogRevision    int64           `json:"catalog_revision,omitempty"`
 	OwnershipRevision  int64           `json:"ownership_revision"`
 	BaselineRevision   int64           `json:"baseline_revision"`
 	PayloadSHA256      string          `json:"payload_sha256"`
@@ -128,6 +140,11 @@ type Receipt struct {
 	ResponseID        *string   `json:"response_id,omitempty"`
 	FeedCursor        *int64    `json:"feed_cursor,omitempty"`
 	ProjectionPending bool      `json:"projection_pending,omitempty"`
+	SourceBindingID   string    `json:"source_binding_id,omitempty"`
+	AssignmentSHA256  string    `json:"assignment_sha256,omitempty"`
+	InventoryRevision int64     `json:"inventory_revision,omitempty"`
+	CatalogRevision   int64     `json:"catalog_revision,omitempty"`
+	PublicationState  string    `json:"publication_state,omitempty"`
 }
 
 func hashBytes(b []byte) string { sum := sha256.Sum256(b); return hex.EncodeToString(sum[:]) }
@@ -264,7 +281,7 @@ func LibraryPath(id, operation string) (string, error) {
 		}
 	}
 	switch operation {
-	case "privacy", "dirty":
+	case "privacy", "dirty", "source-watermark":
 		return "/v1/device/libraries/" + id + "/" + operation, nil
 	default:
 		return "", errors.New("invalid library operation")

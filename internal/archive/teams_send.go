@@ -187,6 +187,9 @@ func teamsSubmitFailure(err error) (string, string) {
 // withTeamsLibraryClient binds a send or receipt lookup to the current local
 // instance and protected installation credential. No worker calls it until
 // recovery, capability declaration and the remaining consent UI are enabled.
+var teamsDeviceClient = teams.NewDeviceClient
+var teamsLoadCredential = (*Catalog).loadTeamsCredential
+
 func (s *Server) withTeamsLibraryClient(ctx context.Context, action func(*teams.DeviceClient, LibraryDescriptor, *teams.EnrollmentCredential) error) error {
 	cfg := s.Config()
 	if s.Catalog == nil || cfg.CatalogPath == "" || canonical(cfg.CatalogPath) != canonical(s.Catalog.Path) {
@@ -201,14 +204,14 @@ func (s *Server) withTeamsLibraryClient(ctx context.Context, action func(*teams.
 	if err != nil {
 		return err
 	}
-	credential, err := s.Catalog.loadTeamsCredential(cfg, descriptor)
+	credential, err := teamsLoadCredential(s.Catalog, cfg, descriptor)
 	if err != nil {
 		return err
 	}
 	defer credential.Destroy()
 	key := credential.SigningKey()
 	defer clear(key)
-	client, err := teams.NewDeviceClient(credential.Origin, credential.InstallationID, key, false)
+	client, err := teamsDeviceClient(credential.Origin, credential.InstallationID, key, false)
 	if err != nil {
 		return err
 	}

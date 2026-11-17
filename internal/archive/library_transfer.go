@@ -1388,6 +1388,7 @@ var moveRetainedTables = []string{"ui_preferences", "query_table_query_snapshots
 	// Keep the identity fence even when the delivered history itself is gone.
 	// Native proofs require conversation rows and must instead be re-observed.
 	"teams_source_bindings", "teams_source_revision", "teams_source_mapping_revisions", "teams_source_mapping_current", "teams_source_mapping_exposure",
+	"teams_v2_uploads", "teams_v2_results", "teams_v2_declines",
 	"safety_state", "safety_cart", "safety_handoffs", "fix_state", "fix_cart", "fix_handoffs",
 	"source_states", "source_record_states", "source_item_states", "source_terminal_states", "sync_generations", "hosts", "protections", "repository_retirements", "library_delivery_checkpoints", "library_workspace_delivery_checkpoints"}
 
