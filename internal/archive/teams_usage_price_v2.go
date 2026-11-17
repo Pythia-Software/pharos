@@ -7,14 +7,13 @@ import (
 	"encoding/json"
 	"math/big"
 	"reflect"
+	"regexp"
 	"sort"
+	"strings"
 	"time"
-
-	"github.com/gbdubs/pharos/pricing"
 )
 
-// teamsExactPriceBook is usable only when the current SQLite price/alias book
-// exactly matches the pinned embedded book. Rates used for money are parsed as
+// teamsExactPriceBook uses pinned calculation inputs. Rates used for money are parsed as
 // decimal rationals from the immutable source, never from SQLite REAL values.
 type teamsExactPriceBook struct {
 	native priceBook
@@ -22,11 +21,12 @@ type teamsExactPriceBook struct {
 }
 
 func (c *Catalog) teamsLoadExactPriceBook(ctx context.Context, tx *sql.Tx, pinnedDigest string) (*teamsExactPriceBook, error) {
-	if pinnedDigest == "" || pinnedDigest != hashBytes(pricing.CostChanges) {
-		return nil, nil
+	book, err := teamsFrozenPriceBook(pinnedDigest)
+	if err != nil || book == nil {
+		return book, err
 	}
 	var current string
-	err := tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='pricing_digest'`).Scan(&current)
+	err = tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='pricing_digest'`).Scan(&current)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -36,13 +36,35 @@ func (c *Catalog) teamsLoadExactPriceBook(ctx context.Context, tx *sql.Tx, pinne
 	if current != pinnedDigest {
 		return nil, nil
 	}
-	parsed, problems := parsePricing(pricing.CostChanges)
-	if len(problems) != 0 {
-		return nil, nil
-	}
 	native, err := c.loadPriceBookFrom(ctx, tx)
 	if err != nil {
 		return nil, err
+	}
+	for key, rows := range native.prices {
+		sort.Slice(rows, func(i, j int) bool { return rows[i].from < rows[j].from })
+		native.prices[key] = rows
+	}
+	for key, rows := range native.aliases {
+		sort.Slice(rows, func(i, j int) bool { return rows[i].from < rows[j].from })
+		native.aliases[key] = rows
+	}
+	if !reflect.DeepEqual(native, book.native) {
+		return nil, nil
+	}
+	return book, nil
+}
+
+// teamsFrozenPriceBook uses only the immutable v1 asset. It does not consult
+// mutable library pricing; usage_1 and the price-book ID pin its interpretation.
+// Shared parsePricing changes must preserve this asset’s v1 interpretation or
+// mint a new contract; parser rejection is unavailable, never repricing.
+func teamsFrozenPriceBook(pinnedDigest string) (*teamsExactPriceBook, error) {
+	if pinnedDigest != teamsPriceBookV1SHA256 || hashBytes(teamsPriceBookV1Bytes) != pinnedDigest {
+		return nil, nil
+	}
+	parsed, problems := parsePricing(teamsPriceBookV1Bytes)
+	if len(problems) != 0 {
+		return nil, nil
 	}
 	expected := priceBook{prices: map[string][]priceInterval{}, aliases: map[string][]aliasInterval{}}
 	seenPrices := map[string]bool{}
@@ -51,7 +73,7 @@ func (c *Catalog) teamsLoadExactPriceBook(ctx context.Context, tx *sql.Tx, pinne
 		if x.Status != "confirmed" {
 			continue
 		}
-		key := modelFamily(x.Model)
+		key := teamsPriceModelV1(x.Model)
 		identity := key + "\x00" + x.EffectiveFrom
 		if key == "" || seenPrices[identity] {
 			return nil, nil
@@ -63,13 +85,13 @@ func (c *Catalog) teamsLoadExactPriceBook(ctx context.Context, tx *sql.Tx, pinne
 		if x.Status != "confirmed" {
 			continue
 		}
-		key := modelFamily(x.Alias)
+		key := teamsPriceModelV1(x.Alias)
 		identity := key + "\x00" + x.EffectiveFrom
 		if key == "" || seenAliases[identity] {
 			return nil, nil
 		}
 		seenAliases[identity] = true
-		expected.aliases[key] = append(expected.aliases[key], aliasInterval{from: x.EffectiveFrom, modelKey: modelFamily(x.Model)})
+		expected.aliases[key] = append(expected.aliases[key], aliasInterval{from: x.EffectiveFrom, modelKey: teamsPriceModelV1(x.Model)})
 	}
 	for key, rows := range expected.prices {
 		sort.Slice(rows, func(i, j int) bool { return rows[i].from < rows[j].from })
@@ -85,19 +107,6 @@ func (c *Catalog) teamsLoadExactPriceBook(ctx context.Context, tx *sql.Tx, pinne
 		}
 		expected.aliases[key] = rows
 	}
-	for key, rows := range native.prices {
-		sort.Slice(rows, func(i, j int) bool { return rows[i].from < rows[j].from })
-		native.prices[key] = rows
-	}
-	for key, rows := range native.aliases {
-		sort.Slice(rows, func(i, j int) bool { return rows[i].from < rows[j].from })
-		native.aliases[key] = rows
-	}
-	// A manually edited library price or alias cannot silently inherit the
-	// embedded book's identity, even when its metadata digest was not changed.
-	if !reflect.DeepEqual(native, expected) {
-		return nil, nil
-	}
 	var raw struct {
 		Changes []struct {
 			Model  string       `json:"model"`
@@ -108,12 +117,12 @@ func (c *Catalog) teamsLoadExactPriceBook(ctx context.Context, tx *sql.Tx, pinne
 			Output *json.Number `json:"output"`
 		} `json:"changes"`
 	}
-	decoder := json.NewDecoder(bytes.NewReader(pricing.CostChanges))
+	decoder := json.NewDecoder(bytes.NewReader(teamsPriceBookV1Bytes))
 	decoder.UseNumber()
-	if err = decoder.Decode(&raw); err != nil {
+	if err := decoder.Decode(&raw); err != nil {
 		return nil, err
 	}
-	book := &teamsExactPriceBook{native: native, rates: map[string][3]*big.Rat{}}
+	book := &teamsExactPriceBook{native: expected, rates: map[string][3]*big.Rat{}}
 	for _, x := range raw.Changes {
 		if x.Status != "confirmed" {
 			continue
@@ -133,12 +142,12 @@ func (c *Catalog) teamsLoadExactPriceBook(ctx context.Context, tx *sql.Tx, pinne
 			}
 			rates[i] = r
 		}
-		key := modelFamily(x.Model)
+		key := teamsPriceModelV1(x.Model)
 		identity := key + "\x00" + x.From
 		if _, duplicate := book.rates[identity]; duplicate {
 			return nil, nil
 		}
-		interval := native.price(key, x.From)
+		interval := teamsPriceIntervalV1(expected, key, x.From)
 		if interval == nil || interval.from != x.From {
 			return nil, nil
 		}
@@ -171,8 +180,8 @@ func (b *teamsExactPriceBook) priceFact(f teamsCodexRequestFact) (*int64, bool) 
 		return nil, false
 	}
 	day := instant.Format("2006-01-02")
-	key := b.native.resolve(f.Model, day)
-	interval := b.native.price(key, day)
+	key := teamsPriceResolveV1(b.native, f.Model, day)
+	interval := teamsPriceIntervalV1(b.native, key, day)
 	if interval == nil {
 		return nil, false
 	}
@@ -202,4 +211,39 @@ func (b *teamsExactPriceBook) priceFact(f teamsCodexRequestFact) (*int64, bool) 
 	}
 	value := q.Int64()
 	return &value, interval.assumption
+}
+
+// These rules are part of usage_1/pharos_prices_v1 and do not follow later
+// changes to the ordinary dashboard's mutable model/price interpretation.
+var teamsPriceDateV1 = regexp.MustCompile(`-\d{8}$`)
+var teamsPriceContextV1 = regexp.MustCompile(`(-1m|\[1m\])$`)
+
+func teamsPriceModelV1(model string) string {
+	key := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "claude-")
+	return teamsPriceDateV1.ReplaceAllString(teamsPriceContextV1.ReplaceAllString(key, ""), "")
+}
+func teamsPriceResolveV1(book priceBook, model, day string) string {
+	key := teamsPriceModelV1(model)
+	for hops := 0; hops < 4; hops++ {
+		next := ""
+		for _, alias := range book.aliases[key] {
+			if day >= alias.from && (alias.to == "" || day < alias.to) {
+				next = alias.modelKey
+			}
+		}
+		if next == "" || next == key {
+			break
+		}
+		key = next
+	}
+	return key
+}
+func teamsPriceIntervalV1(book priceBook, key, day string) *priceInterval {
+	for i := range book.prices[key] {
+		p := &book.prices[key][i]
+		if day >= p.from && (p.to == "" || day < p.to) {
+			return p
+		}
+	}
+	return nil
 }

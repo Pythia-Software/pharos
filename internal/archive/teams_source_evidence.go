@@ -16,7 +16,7 @@ import (
 // the same writer transaction as the indexed record. It does not attest an
 // account or authorize reporting. Until the scoped source resolver and send
 // barrier consume this revision, no production work may use these proofs.
-func teamsRecordNativeEvidence(tx *sql.Tx, host string, config SourceConfig, view *captureView, record WorkspaceRecord, digest string, observing bool) error {
+func teamsRecordNativeEvidence(tx *sql.Tx, host string, config SourceConfig, view *captureView, record WorkspaceRecord, digest string, observing bool, captures map[string]*capturedFile) error {
 	if !observing || !isCodexSource(config.Kind) || record.SourceKind != "codex" || host == "" || config.Name == "" {
 		return nil
 	}
@@ -125,6 +125,11 @@ func teamsRecordNativeEvidence(tx *sql.Tx, host string, config SourceConfig, vie
 			return e
 		}
 		changed = changed || profileChanged
+		custodyChanged, e := teamsPersistCodexCaptureCustody(tx, view, record, captures[conversation.Origin], binding, conversationID, conversation.Origin, digest, fingerprint)
+		if e != nil {
+			return e
+		}
+		changed = changed || custodyChanged
 	}
 	if changed {
 		_, err = tx.Exec(`UPDATE teams_source_revision SET revision=revision+1 WHERE id=1`)

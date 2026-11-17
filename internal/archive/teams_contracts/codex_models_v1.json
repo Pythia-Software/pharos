@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "id": "pharos_codex_models_v1",
+  "unknown": "unknown",
+  "models": {
+    "codex-auto-review": "codex-auto-review",
+    "gpt-5.3-codex": "gpt-5.3-codex",
+    "gpt-5.3-codex-spark": "gpt-5.3-codex-spark",
+    "gpt-5.5": "gpt-5.5",
+    "gpt-5.6-luna": "gpt-5.6-luna",
+    "gpt-5.6-sol": "gpt-5.6-sol",
+    "gpt-5.6-terra": "gpt-5.6-terra",
+    "gpt-6-astra": "gpt-6-astra",
+    "gpt-6-cyber": "gpt-6-cyber",
+    "gpt-6-luna": "gpt-6-luna",
+    "gpt-6-rosalind": "gpt-6-rosalind",
+    "gpt-6-sol": "gpt-6-sol",
+    "gpt-6.1-sol": "gpt-6.1-sol",
+    "gpt-6.1-terra": "gpt-6.1-terra",
+    "gpt-image-2.6-flare": "gpt-image-2.6-flare",
+    "gpt-image-2.6-sunburst": "gpt-image-2.6-sunburst",
+    "gpt-rosalind-discovery": "gpt-rosalind-discovery",
+    "gpt-rosalind-research": "gpt-rosalind-research"
+  }
+}
