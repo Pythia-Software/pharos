@@ -235,13 +235,15 @@ func (s *recordStore) pinRevision(owner string, ref recordObject) error {
 	for _, table := range v.Tables {
 		references = append(references, table.Chunks...)
 	}
-	for _, tableRef := range v.ParserInputs {
-		var table recordTable
-		if e = s.readJSON(tableRef, &table); e != nil {
-			return e
+	for _, inputs := range []map[string]recordObject{v.ParserInputs, v.EventInputs} {
+		for _, tableRef := range inputs {
+			var table recordTable
+			if e = s.readJSON(tableRef, &table); e != nil {
+				return e
+			}
+			references = append(references, tableRef)
+			references = append(references, table.Chunks...)
 		}
-		references = append(references, tableRef)
-		references = append(references, table.Chunks...)
 	}
 	for _, dependency := range v.Dependencies {
 		if dependency.Object != nil {
@@ -473,13 +475,19 @@ func (a *sqliteReplayAdapter) replay(r retainedSQLiteRevision, emit func(Workspa
 				return errors.New("bounded historical replay needs retained session parser inputs")
 			}
 			for _, id := range ids {
-				var table recordTable
-				if err := a.store.readJSON(v.ParserInputs[id], &table); err != nil {
-					return err
-				}
 				var bytes int64
-				for _, chunk := range table.Chunks {
-					bytes += chunk.Length
+				for _, inputs := range []map[string]recordObject{v.ParserInputs, v.EventInputs} {
+					ref, ok := inputs[id]
+					if !ok {
+						continue
+					}
+					var table recordTable
+					if err := a.store.readJSON(ref, &table); err != nil {
+						return err
+					}
+					for _, chunk := range table.Chunks {
+						bytes += chunk.Length
+					}
 				}
 				if bytes > a.maxEntityBytes {
 					if a.entityGap != nil {

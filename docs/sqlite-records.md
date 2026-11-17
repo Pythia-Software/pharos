@@ -113,6 +113,15 @@ sequence read with the **exact parser query** in the same transaction. It uses
 when ties/duplicates or missing order columns exist. The parser and locator
 resolver consume that sequence instead of guessing SQLite row-key semantics.
 
+Conductor `event_inputs` does the same for Conductor's raw event log,
+`session_events` (Conductor's migration 151, October 2026): each session's
+events in their own `session_index` order, whether the session was acquired
+alone or with the whole database, and part of its entity identity. Revisions
+from before it have none, keep the identity they were published with, and
+replay without events exactly as they parsed when they were taken. How the
+parser combines the log with `session_messages` is described in
+[the Conductor event log](technical-overview.md#conductor-event-log).
+
 ## Coverage and source boundaries
 
 Every full export enumerates every actual table, including internal/shadow and
@@ -127,6 +136,7 @@ that future app versions cannot introduce other relevant records.
 | Source/table or dependency | Preservation/discovery |
 | --- | --- |
 | Conductor `sessions`/`workspaces`/`threads`, `messages`/`session_messages` | All fields, including alternate raw payloads, model/effort/sender/timing, aliases and cancellation. Incremental selection uses session ID; message parser order is retained separately. |
+| Conductor `session_events` | All columns, including reverted events and events Conductor never shows. Session acquisitions select the session's events; each session's log order is retained separately. `conductorSignals` adds each session's indexed event count and last position. |
 | Conductor linked `workspaces`, `repos` | All columns; shared metadata included in session acquisitions. Existing `conductorSignals` invalidates sessions on session/workspace/repository rows and indexed message statistics. Unknown/shared changes are discovered by full reconciliation. |
 | Other Conductor tables, orphan rows | Fully retained opaquely on full reconciliation. Excluded explicitly from session-only acquisitions. |
 | Antigravity `conversation_summaries`, all tables in `conversations/*.db` | All original values, including protobuf BLOBs/unknown fields. DB discovery is independent of surviving transcripts; DB-only and metadata-only sources are retained. |

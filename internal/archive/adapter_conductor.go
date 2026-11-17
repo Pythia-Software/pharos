@@ -31,7 +31,9 @@ const conductorExtractor = "conductor-v15-execution-model"
 // every Conductor conversation also stores as its extractor, so a parser change
 // that must reach sessions already indexed need not rewrite them all.
 // +sender: user messages record who sent them.
-const conductorPartExtractor = conductorExtractor + "+sender+reasoning-v1"
+// +events: events in Conductor's session_events log that no stored row
+// projects become messages (adapter_conductor_events.go).
+const conductorPartExtractor = conductorExtractor + "+sender+reasoning-v1+events-v1"
 
 func (a *conductorAdapter) ExtractorVersion() string { return conductorExtractor }
 func (a *conductorAdapter) partExtractor() string    { return conductorPartExtractor }
@@ -388,6 +390,35 @@ func conductorSignals(ctx context.Context, tx queryer, sessionTable, messageTabl
 			latest[sid] = append(latest[sid], row["cancelled"])
 		}
 	}
+	// The event log's count and last position per session, from its
+	// (session_id, session_index) index. Events Conductor does not project
+	// change no message statistic. Databases without an event log keep the
+	// signal they always had. Like an in-place message edit, an event changed
+	// in place (reverted, or a queued message sent) changes neither, so a
+	// message only the log holds stays as read until the session next
+	// changes; reading reverted_at would read every event's row. Reverting a
+	// projected event deletes its rows, which the message statistics see.
+	var events map[string]any
+	if columns, err := conductorEventColumns(tx, tables); err != nil {
+		return nil, err
+	} else if columns != nil {
+		last := "MAX(rowid)"
+		if columns["session_index"] {
+			last = "MAX(session_index)"
+		}
+		eventWhere := ""
+		if where != "" {
+			eventWhere = " WHERE session_id IN (" + placeholders(len(args)) + ")"
+		}
+		rows, err := queryMapsContext(ctx, tx, "SELECT session_id sid,COUNT(*) events,"+last+" last FROM "+conductorEventTable+eventWhere+" GROUP BY session_id", args...)
+		if err != nil {
+			return nil, err
+		}
+		events = map[string]any{}
+		for _, row := range rows {
+			events[firstString(row["sid"])] = []any{row["events"], row["last"]}
+		}
+	}
 	// A planned read opens a fresh snapshot for one session. Read only its
 	// dependencies, so N session reads do not reload N metadata rows each.
 	lookup := func(table, foreignKey string, parents []map[string]any) (map[string]map[string]any, error) {
@@ -446,7 +477,11 @@ func conductorSignals(ctx context.Context, tx queryer, sessionTable, messageTabl
 			workspace = workspaces[firstString(session["workspace_id"])]
 			repository = repositories[firstString(workspace["repository_id"])]
 		}
-		part.signal = hashBytes([]byte(jsonText([]any{session, workspace, repository, latest[sid]})))
+		inputs := []any{session, workspace, repository, latest[sid]}
+		if events != nil {
+			inputs = append(inputs, events[sid])
+		}
+		part.signal = hashBytes([]byte(jsonText(inputs)))
 		signals[sid] = part
 	}
 	return signals, nil
@@ -543,12 +578,23 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 	if err != nil {
 		return WorkspaceRecord{}, err
 	}
+	inputs := mergeConductorInputs(rows, messageTable, nil, false)
+	if mcols["id"] && mcols["role"] && mcols["content"] {
+		events, err := a.unprojectedConductorEvents(tx, sid, firstString(session["agent_type"]), rows, tables)
+		if err != nil {
+			return WorkspaceRecord{}, err
+		}
+		if len(events) > 0 {
+			inputs = mergeConductorInputs(rows, messageTable, events, order != "")
+		}
+	}
 	messages := []MessageRecord{}
 	delegated := map[string]bool{}
 	currentModel := firstString(session["model"])
 	currentEffort := conductorSessionEffort(session)
 	currentInference, _ := inferenceSetting(session)
-	for index, message := range rows {
+	for _, input := range inputs {
+		message, index := input.row, input.ordinal
 		if config, found := inferenceSetting(message); found {
 			currentInference = config
 		}
@@ -575,7 +621,7 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 		if mcols["created_at"] {
 			createdAt = iso(message["created_at"])
 		}
-		locator := fmt.Sprintf("sqlite:%s:%s:%s:%s:%d", path, messageTable, sid, field, index)
+		locator := fmt.Sprintf("sqlite:%s:%s:%s:%s:%d", path, input.table, sid, field, index)
 		reportedModel := firstString(message["model"])
 		var envelope map[string]any
 		if json.Unmarshal([]byte(text), &envelope) == nil {

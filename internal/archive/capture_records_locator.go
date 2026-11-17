@@ -88,7 +88,13 @@ func (s *recordStore) resolveLocator(revision, locator string) (sqliteResolvedFi
 	if variant != "" {
 		field = variant
 	}
-	tableRef, ok := v.ParserInputs[sid]
+	inputs := v.ParserInputs
+	if tableName == conductorEventTable {
+		// A message rebuilt from Conductor's event log names its event's
+		// place in the session's retained log.
+		inputs = v.EventInputs
+	}
+	tableRef, ok := inputs[sid]
 	if !ok {
 		return out, errors.New("unresolved session in retained observation")
 	}

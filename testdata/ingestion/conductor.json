@@ -1,5 +1,5 @@
 {
-  "index_version": "conductor-v15-execution-model+sender+reasoning-v1",
+  "index_version": "conductor-v15-execution-model+sender+reasoning-v1+events-v1",
   "records": [
     {
       "SourceID": "session-1",
@@ -7,7 +7,7 @@
       "Title": "Contextual time",
       "Account": "local",
       "Purpose": "Please update timestamps",
-      "Outcome": "Checking.",
+      "Outcome": "Timestamps now show their context.",
       "ActivityAt": "2026-09-20T10:00:00.000Z",
       "Location": "$ROOT/002/repo/.conductor/kiev",
       "Repository": {
@@ -188,6 +188,24 @@
               "PreviousNativeID": "",
               "CallID": "",
               "EvidenceLocator": "sqlite:$ROOT/002/conductor.db:session_messages:session-1:content:6",
+              "Speed": "standard",
+              "SpeedSource": "assumed_standard",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "cloud-feed:session-1:event-3:0:block:0",
+              "Role": "assistant",
+              "Kind": "message",
+              "Text": "Timestamps now show their context.",
+              "Model": "opus",
+              "Effort": "high",
+              "CreatedAt": "2026-09-20T10:01:00.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "sqlite:$ROOT/002/conductor.db:session_events:session-1:content:2",
               "Speed": "standard",
               "SpeedSource": "assumed_standard",
               "RawText": "",

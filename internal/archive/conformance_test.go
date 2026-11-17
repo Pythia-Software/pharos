@@ -873,6 +873,14 @@ func conformanceConductor(t *testing.T) SourceConfig {
 	if _, err := db.Exec("INSERT INTO session_messages VALUES ('m6','session-1','assistant',?,'2026-09-20T10:00:50Z',NULL,NULL,NULL)", thought); err != nil {
 		t.Fatal(err)
 	}
+	// Conductor's event log: the first user message's event, which its row
+	// projects; a rate limit Conductor never shows; and a reply whose row is
+	// missing, which only the log holds.
+	execSQL(t, db, conductorEventLogDDL...)
+	insertConductorEvents(t, db, "session-1", 0,
+		conductorUserEvent("event-1", "m1", "Please update timestamps", "sent", "2026-09-20T10:00:00Z"),
+		conductorAgentEvent("event-2", "2026-09-20T10:00:55Z", map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "allowed"}}),
+		conductorAgentEvent("event-3", "2026-09-20T10:01:00Z", claudeAssistant("uuid-final", "Timestamps now show their context.")))
 	db.Close()
 	return conformanceSource("conductor", root)
 }
