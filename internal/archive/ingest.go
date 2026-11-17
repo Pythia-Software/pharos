@@ -430,6 +430,13 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			result.SkippedCurrent++
 			return tracker.hold(c, parts)
 		}
+		var teamsCaptures map[string]*capturedFile
+		if proofObservation {
+			teamsCaptures = make(map[string]*capturedFile)
+			for _, conversation := range record.Conversations {
+				teamsCaptures[conversation.Origin] = teamsVerifiedCodexCapture(captureViewOf(adapter), *record, conversation.Origin)
+			}
+		}
 		copied, older, conversations, messages := false, false, 0, 0
 		workspaceID := ""
 		operation := fmt.Sprintf("ingest source=%s task=%s", config.Name, record.SourceID)
@@ -471,7 +478,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 				}
 			}
 			nativeAdapter, observing := adapter.(*jsonlAdapter)
-			if err = teamsRecordNativeEvidence(tx, host, config, captureViewOf(adapter), *record, digest, observing && nativeAdapter.teamsProofEnabled); err != nil {
+			if err = teamsRecordNativeEvidence(tx, host, config, captureViewOf(adapter), *record, digest, observing && nativeAdapter.teamsProofEnabled, teamsCaptures); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(`INSERT INTO source_record_states(host_id,source_name,source_kind,source_account,source_id,digest,updated_at)

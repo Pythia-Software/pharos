@@ -219,12 +219,55 @@ func TestTeamsCodexRequestProfileRetainedCaptureParity(t *testing.T) {
 	if err = c.DB.QueryRow(`SELECT facts_json,evidence_sha256 FROM teams_codex_request_profiles`).Scan(&capturedFacts, &capturedDigest); err != nil {
 		t.Fatal(err)
 	}
+	var custodyHash, capturedAt, custodyEvidence string
+	if err = c.DB.QueryRow(`SELECT capture_sha256,captured_at,evidence_sha256 FROM teams_codex_capture_custody`).Scan(&custodyHash, &capturedAt, &custodyEvidence); err != nil || custodyHash != teamsPayloadHash([]byte(data)) || capturedAt == "" || custodyEvidence != capturedDigest {
+		t.Fatalf("capture custody mismatch: hash=%q time=%q evidence=%q err=%v", custodyHash, capturedAt, custodyEvidence, err)
+	}
+	var binding, conversation, origin, indexed, provenance string
+	if err = c.DB.QueryRow(`SELECT binding_id,conversation_id,origin,indexed_digest,provenance_sha256 FROM teams_codex_capture_custody`).Scan(&binding, &conversation, &origin, &indexed, &provenance); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := c.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	custody, err := teamsReadCodexCaptureCustody(tx, binding, conversation, origin)
+	if err != nil || custody.CaptureSHA256 != custodyHash || custody.EvidenceSHA256 != capturedDigest {
+		t.Fatalf("current metadata preflight: %+v %v", custody, err)
+	}
+	if _, err = teamsReadCodexCaptureCustody(tx, binding, conversation, origin+"-other"); err != errTeamsSourceUnavailable {
+		t.Fatalf("foreign origin admitted: %v", err)
+	}
+	changed, err := teamsPersistCodexCaptureCustody(tx, nil, WorkspaceRecord{}, nil, binding, conversation, origin, indexed, provenance)
+	if err != nil || !changed {
+		t.Fatalf("missing capture did not invalidate custody: %v %v", changed, err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, c, `SELECT count(*) FROM teams_codex_capture_custody`); n != 0 {
+		t.Fatalf("stale custody remains: %d", n)
+	}
+	// A new trusted capture of the same parsed facts gets a new custody
+	// commitment even when the profile's fact digest is unchanged.
+	writeSourceFile(t, file, data+"\n")
+	runCapture(t, cfg)
+	indexCaptures(t, c, cfg.CaptureRoot, "synthetic-host")
+	if err = c.DB.QueryRow(`SELECT capture_sha256,evidence_sha256 FROM teams_codex_capture_custody`).Scan(&custodyHash, &custodyEvidence); err != nil || custodyHash != teamsPayloadHash([]byte(data+"\n")) || custodyEvidence != capturedDigest {
+		t.Fatalf("rewritten capture custody mismatch: hash=%q evidence=%q err=%v", custodyHash, custodyEvidence, err)
+	}
 	// Index the same native source: its proof must be the same irrespective of
 	// whether the adapter consumed retained capture bytes or the live source.
 	ingestSource(t, c, source)
 	var same int
 	if err = c.DB.QueryRow(`SELECT count(*) FROM teams_codex_request_profiles WHERE facts_json=? AND evidence_sha256=?`, capturedFacts, capturedDigest).Scan(&same); err != nil || same != 1 {
 		t.Fatalf("capture/live proof mismatch: %d %v", same, err)
+	}
+	if _, err = c.DB.Exec(`DELETE FROM teams_codex_request_profiles`); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, c, `SELECT count(*) FROM teams_codex_capture_custody`); n != 0 {
+		t.Fatalf("profile deletion retained custody: %d", n)
 	}
 }
 
@@ -247,7 +290,7 @@ func TestTeamsCodexRequestProfileUpgradeSchedulesOptedInSourcesOnce(t *testing.T
 	if err = c.DB.QueryRow(`SELECT generation FROM sync_generations WHERE host_id='synthetic-host' AND source_name='codex'`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = c.DB.Exec(`DELETE FROM meta WHERE key='teams_codex_request_profile_reindex'`); err != nil {
+	if _, err = c.DB.Exec(`DELETE FROM meta WHERE key IN ('teams_codex_request_profile_reindex','teams_codex_capture_custody_reindex')`); err != nil {
 		t.Fatal(err)
 	}
 	if err = c.ensureTeamsCodexRequestSchema(); err != nil {
@@ -261,5 +304,33 @@ func TestTeamsCodexRequestProfileUpgradeSchedulesOptedInSourcesOnce(t *testing.T
 	}
 	if err = c.DB.QueryRow(`SELECT generation FROM sync_generations WHERE host_id='synthetic-host' AND source_name='codex'`).Scan(&again); err != nil || again != after {
 		t.Fatalf("upgrade reindex repeated %d/%d %v", after, again, err)
+	}
+}
+
+func TestTeamsCodexCaptureRequiresMatchingBytes(t *testing.T) {
+	dir := t.TempDir()
+	const origin = "/synthetic/rollout.jsonl"
+	const data = "synthetic capture"
+	writeSourceFile(t, filepath.Join(dir, "files", "rollout.jsonl"), data)
+	f := &capturedFile{Path: origin, Captured: "files/rollout.jsonl", Size: int64(len(data)), SHA256: teamsPayloadHash([]byte(data)), CapturedAt: "2026-11-09T00:00:00Z"}
+	manifest := &captureManifest{Files: []*capturedFile{f}, PathMap: []capturePathMapping{{Original: "/synthetic", Captured: "files"}}}
+	view := newCaptureView(Host{}, dir, manifest)
+	view.evidenceRevision = strings.Repeat("a", 64)
+	record := WorkspaceRecord{EvidenceIdentity: strings.Repeat("b", 64)}
+	if teamsVerifiedCodexCapture(view, record, origin) == nil {
+		t.Fatal("matching capture rejected")
+	}
+	f.MissingSince = "2026-11-10T00:00:00Z"
+	if teamsVerifiedCodexCapture(view, record, origin) == nil {
+		t.Fatal("verified retained capture rejected after source disappeared")
+	}
+	f.SHA256 = strings.Repeat("c", 64)
+	if teamsVerifiedCodexCapture(view, record, origin) != nil {
+		t.Fatal("mismatched captured bytes admitted")
+	}
+	f.SHA256 = teamsPayloadHash([]byte(data))
+	manifest.Files = append(manifest.Files, f)
+	if teamsVerifiedCodexCapture(view, record, origin) != nil {
+		t.Fatal("ambiguous capture admitted")
 	}
 }

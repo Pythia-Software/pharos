@@ -217,6 +217,15 @@ CREATE TABLE IF NOT EXISTS teams_codex_request_profiles (
   FOREIGN KEY(binding_id,conversation_id,origin) REFERENCES teams_native_source_proofs(binding_id,conversation_id,origin) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS teams_codex_request_profiles_conversation ON teams_codex_request_profiles(conversation_id);
+CREATE TABLE IF NOT EXISTS teams_codex_capture_custody (
+  binding_id TEXT NOT NULL, conversation_id TEXT NOT NULL, origin TEXT NOT NULL,
+  indexed_digest TEXT NOT NULL, evidence_sha256 TEXT NOT NULL,
+  capture_sha256 TEXT NOT NULL, captured_at TEXT NOT NULL, capture_path TEXT NOT NULL,
+  provenance_sha256 TEXT NOT NULL, evidence_identity TEXT NOT NULL, capture_revision TEXT NOT NULL,
+  PRIMARY KEY(binding_id,conversation_id,origin),
+  FOREIGN KEY(binding_id,conversation_id,origin) REFERENCES teams_codex_request_profiles(binding_id,conversation_id,origin) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS teams_source_revision (
   id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL DEFAULT 0 CHECK(revision>=0),
   proof_requested INTEGER NOT NULL DEFAULT 0 CHECK(proof_requested IN (0,1))

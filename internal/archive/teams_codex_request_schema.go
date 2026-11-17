@@ -42,7 +42,7 @@ func (c *Catalog) ensureTeamsCodexRequestSchema() error {
 	if _, err = tx.Exec(teamsCodexRequestTriggerSQL); err != nil {
 		return err
 	}
-	result, err := tx.Exec(`INSERT OR IGNORE INTO meta(key,value) VALUES('teams_codex_request_profile_reindex','1')`)
+	result, err := tx.Exec(`INSERT OR IGNORE INTO meta(key,value) VALUES('teams_codex_request_profile_reindex','1'),('teams_codex_capture_custody_reindex','1')`)
 	if err != nil {
 		return err
 	}

@@ -181,6 +181,17 @@ func TestTeamsUsageV2ExactPinnedPricing(t *testing.T) {
 	if changed, err := c.teamsLoadExactPriceBook(t.Context(), tx, hashBytes(pricing.CostChanges)); err != nil || changed != nil {
 		t.Fatal("edited library price book trusted as embedded")
 	}
+	frozen, err := teamsFrozenPriceBook(teamsPriceBookV1SHA256)
+	fact.Cached = teamsOptionalTokens{Known: true, Value: 2}
+	if err != nil || frozen == nil {
+		t.Fatalf("frozen book unavailable: %v", err)
+	}
+	if value, _ := frozen.priceFact(fact); value == nil || *value != 32 {
+		t.Fatalf("local price edit changed frozen result: %v", value)
+	}
+	if wrong, err := teamsFrozenPriceBook(strings.Repeat("0", 64)); err != nil || wrong != nil {
+		t.Fatal("unrecognized price identity admitted")
+	}
 }
 
 func TestTeamsUsageV2CalculationBinding(t *testing.T) {
