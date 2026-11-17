@@ -62,28 +62,31 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			next, checking, problem := s.teamsWorker.next, s.teamsWorker.checking, s.teamsWorker.problem
 			s.teamsWorker.mu.Unlock()
 			type row struct {
-				WorkID       string                   `json:"workId"`
-				Question     string                   `json:"question"`
-				Requester    string                   `json:"requester"`
-				State        string                   `json:"state"`
-				PayloadHash  string                   `json:"payloadHash"`
-				Readers      []string                 `json:"readers"`
-				Payload      json.RawMessage          `json:"payload"`
-				Prompt       string                   `json:"prompt"`
-				Retention    json.RawMessage          `json:"retention"`
-				Schedule     json.RawMessage          `json:"schedule"`
-				Period       json.RawMessage          `json:"period"`
-				Exports      []teamsFeedExport        `json:"exports"`
-				Publications []teamsReportPublication `json:"publications"`
+				WorkID        string                   `json:"workId"`
+				Question      string                   `json:"question"`
+				Requester     string                   `json:"requester"`
+				State         string                   `json:"state"`
+				PayloadHash   string                   `json:"payloadHash"`
+				ConfigHash    string                   `json:"configHash,omitempty"`
+				PublicationV2 *teamsReportSeries       `json:"publicationV2,omitempty"`
+				Readers       []string                 `json:"readers"`
+				Payload       json.RawMessage          `json:"payload"`
+				Prompt        string                   `json:"prompt"`
+				Retention     json.RawMessage          `json:"retention"`
+				Schedule      json.RawMessage          `json:"schedule"`
+				Period        json.RawMessage          `json:"period"`
+				Exports       []teamsFeedExport        `json:"exports"`
+				Publications  []teamsReportPublication `json:"publications"`
 			}
 			out := make([]row, 0, len(items))
 			for _, item := range items {
 				var config struct {
-					Question  string          `json:"question"`
-					Prompt    string          `json:"prompt"`
-					Retention json.RawMessage `json:"retention_policy"`
-					Schedule  json.RawMessage `json:"schedule"`
-					Requester struct {
+					PublicationV2 *teamsReportSeries `json:"publication_v2"`
+					Question      string             `json:"question"`
+					Prompt        string             `json:"prompt"`
+					Retention     json.RawMessage    `json:"retention_policy"`
+					Schedule      json.RawMessage    `json:"schedule"`
+					Requester     struct {
 						DisplayName string `json:"display_name"`
 					} `json:"requester"`
 					Audiences struct {
@@ -106,7 +109,11 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 				for _, reader := range config.Audiences.ResponseReaders {
 					readers = append(readers, reader.ID)
 				}
-				out = append(out, row{WorkID: item.Work.ID, Question: config.Question, Prompt: config.Prompt, Retention: config.Retention, Requester: config.Requester.DisplayName, State: item.State, PayloadHash: item.PayloadHash, Readers: readers, Payload: json.RawMessage(item.Payload), Schedule: config.Schedule, Period: item.Work.Period, Exports: config.Audiences.Exports, Publications: config.Audiences.Publications})
+				var configHash string
+				if config.PublicationV2 != nil {
+					configHash = item.Work.ConfigSHA256
+				}
+				out = append(out, row{WorkID: item.Work.ID, Question: config.Question, Prompt: config.Prompt, Retention: config.Retention, Requester: config.Requester.DisplayName, State: item.State, PayloadHash: item.PayloadHash, ConfigHash: configHash, PublicationV2: config.PublicationV2, Readers: readers, Payload: json.RawMessage(item.Payload), Schedule: config.Schedule, Period: item.Work.Period, Exports: config.Audiences.Exports, Publications: config.Audiences.Publications})
 			}
 			var modelApproved bool
 			if e = s.Catalog.reader().QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM teams_model_permission WHERE id=1 AND library_id=? AND instance_id=? AND org_id=? AND installation_id=? AND host_id=? AND settings_revision=?)`, d.ID, d.Instance, credential.OrgID, credential.InstallationID, currentHost().ID, settings.SettingsRevision).Scan(&modelApproved); e != nil {
@@ -266,14 +273,18 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			var body struct {
 				WorkID           string `json:"workId"`
 				SettingsRevision *int64 `json:"settingsRevision"`
+				ConfigHash       string `json:"configHash,omitempty"`
 			}
-			if e = teamsLocalAction(w, r, &body, map[string]bool{"workId": true, "settingsRevision": true}); e != nil || body.SettingsRevision == nil {
+			if e = teamsLocalAction(w, r, &body, map[string]bool{"workId": true, "settingsRevision": true, "configHash": true}); e != nil || body.SettingsRevision == nil {
 				return errTeamsConsentStale
 			}
 			s.teamsWorker.mu.Lock()
 			item, ok := s.teamsWorker.items[body.WorkID]
 			s.teamsWorker.mu.Unlock()
 			if !ok || item.State != "awaiting_source_consent" {
+				return errTeamsConsentStale
+			}
+			if !validTeamsSeriesReview(item.Work.Config, item.Work.ConfigSHA256, body.ConfigHash) {
 				return errTeamsConsentStale
 			}
 			if e = s.Catalog.grantTeamsQuestion(r.Context(), item.Work, d, *body.SettingsRevision); e != nil {
@@ -286,14 +297,15 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			var body struct {
 				WorkID      string `json:"workId"`
 				PayloadHash string `json:"payloadHash"`
+				ConfigHash  string `json:"configHash,omitempty"`
 			}
-			if e = teamsLocalAction(w, r, &body, map[string]bool{"workId": true, "payloadHash": true}); e != nil {
+			if e = teamsLocalAction(w, r, &body, map[string]bool{"workId": true, "payloadHash": true, "configHash": true}); e != nil {
 				return errTeamsConsentStale
 			}
 			if _, contentErr := readTeamsContentRun(r.Context(), s.Catalog.reader(), body.WorkID); contentErr == nil {
 				e = s.Catalog.approveTeamsContent(r.Context(), d, credential, body.WorkID, body.PayloadHash)
 			} else if errors.Is(contentErr, sql.ErrNoRows) {
-				e = s.Catalog.reviewTeamsV2Draft(r.Context(), d, body.WorkID, body.PayloadHash)
+				e = s.Catalog.reviewTeamsV2DraftWithConfig(r.Context(), d, body.WorkID, body.PayloadHash, body.ConfigHash)
 			} else {
 				e = contentErr
 			}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/gbdubs/pharos/internal/teams"
@@ -155,6 +156,9 @@ func mustTeamsInteger(n int64) json.RawMessage { b, _ := json.Marshal(n); return
 // reviewTeamsV2Draft approves exactly the local payload shown, not future
 // computations or a standing permission. A fresh send still rechecks gates.
 func (c *Catalog) reviewTeamsV2Draft(ctx context.Context, d LibraryDescriptor, workID, payloadHash string) error {
+	return c.reviewTeamsV2DraftWithConfig(ctx, d, workID, payloadHash, "")
+}
+func (c *Catalog) reviewTeamsV2DraftWithConfig(ctx context.Context, d LibraryDescriptor, workID, payloadHash, configHash string) error {
 	lease, err := c.teamsSharingLease()
 	if err != nil {
 		return err
@@ -184,10 +188,45 @@ func (c *Catalog) reviewTeamsV2Draft(ctx context.Context, d LibraryDescriptor, w
 		if e != nil {
 			return e
 		}
+		if !validTeamsSeriesReview(draft.Config, u.ConfigHash, configHash) {
+			return errTeamsConsentStale
+		}
 		if u.LibraryID != d.ID || u.InstanceID != d.Instance || !s.Enabled || s.SettingsRevision != u.SettingsRevision || s.OrgID != u.OrgID || s.InstallationID != u.InstallationID || sourceRev != u.SourceRevision || privacyRev != u.PrivacyRevision || g.all != u.Generation || draft.State != "awaiting_review" || draft.PayloadHash != payloadHash || teamsPayloadHash(draft.Payload) != payloadHash {
 			return errTeamsConsentStale
 		}
 		_, e = tx.ExecContext(ctx, `UPDATE teams_v2_results SET state='approved',approved_at=?,decision_id=? WHERE work_id=? AND state='awaiting_review'`, time.Now().UTC().Format(time.RFC3339Nano), randomUUID(), workID)
 		return e
 	})
+}
+
+// A series approval must match both the displayed config and the stored
+// source binding, in addition to the existing exact payload review.
+func validTeamsSeriesReview(config []byte, boundHash, displayedHash string) bool {
+	if !teams.ValidUniqueJSON(config) {
+		return false
+	}
+	var arms map[string]json.RawMessage
+	if json.Unmarshal(config, &arms) != nil || arms == nil {
+		return false
+	}
+	for key := range arms {
+		if strings.EqualFold(key, "publication_v2") && key != "publication_v2" {
+			return false
+		}
+	}
+	raw, series := arms["publication_v2"]
+	if series && !teamsConfigExactKeys(config) {
+		return false
+	}
+	if displayedHash != "" && (displayedHash != boundHash || teamsPayloadHash(config) != displayedHash) {
+		return false
+	}
+	if !series {
+		return true
+	}
+	if displayedHash == "" {
+		return false
+	}
+	_, err := parseTeamsReportSeries(raw)
+	return err == nil
 }

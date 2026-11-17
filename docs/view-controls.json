@@ -9100,15 +9100,6 @@
       "reason": "Local Teams privacy or model permission review; it changes local consent or closes the review, not query view state."
     },
     {
-      "key": "203788fdcc47c70e:0",
-      "file": "web/src/teams-settings.tsx",
-      "owner": "TeamsWork",
-      "tag": "button",
-      "control": "onClick={() => void act(\"/allow-source\", { workId: item.workId, settingsRevision: status.settingsRevision })}",
-      "contract": "settings",
-      "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
-    },
-    {
       "key": "26527d224e0831ce:0",
       "file": "web/src/teams-settings.tsx",
       "owner": "TeamsWork",
@@ -9163,6 +9154,15 @@
       "reason": "Local Teams privacy or model permission review; it changes local consent or closes the review, not query view state."
     },
     {
+      "key": "710d1b2901f64d0a:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "button",
+      "control": "onClick={() => void act(\"/allow-source\", { workId: item.workId, settingsRevision: status.settingsRevision, ...(item.publicationV2 ? {configHash: item.configHash} : {}) })}",
+      "contract": "settings",
+      "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
+    },
+    {
       "key": "7328dffa328bbaa0:0",
       "file": "web/src/teams-settings.tsx",
       "owner": "TeamsWork",
@@ -9172,15 +9172,6 @@
       "sharedDisclosure": true,
       "contract": "view.disclosures",
       "reason": "Bound directly to the registered view field."
-    },
-    {
-      "key": "8b2573051f619382:0",
-      "file": "web/src/teams-settings.tsx",
-      "owner": "TeamsWork",
-      "tag": "button",
-      "control": "onClick={() => void act(\"/approve-result\", { workId: item.workId, payloadHash: item.payloadHash })}",
-      "contract": "settings",
-      "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
     },
     {
       "key": "ab52d868831f9932:0",
@@ -9206,6 +9197,15 @@
       "owner": "TeamsWork",
       "tag": "button",
       "control": "onClick={() => void act(\"/decline\", { workId: item.workId })}",
+      "contract": "settings",
+      "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
+    },
+    {
+      "key": "fa4ff4f6f8068873:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "button",
+      "control": "onClick={() => void act(\"/approve-result\", { workId: item.workId, payloadHash: item.payloadHash, ...(item.publicationV2 ? {configHash: item.configHash} : {}) })}",
       "contract": "settings",
       "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
     },
