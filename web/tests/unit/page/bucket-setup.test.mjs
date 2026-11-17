@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadClassicScript, plain } from '../helpers/classic-script.mjs';
+import { assets, loadClassicScript, plain } from '../helpers/classic-script.mjs';
 // What the guide writes for these names. Go checks the same two
 // configurations against the command that reads them (bucket setup test).
 import fixture from '../../../../testdata/bucket-setup.json';
@@ -35,6 +35,15 @@ test('every name reaches the commands, and the shell accepts them', () => {
   } finally {
     rmSync(directory, {recursive: true, force: true});
   }
+});
+
+// This repository pushes its own Niteshift tasks with the files the guide
+// writes, so what a client is told to commit is what is run here.
+test('the repository runs the script the guide writes', () => {
+  const repository = join(assets, '..', '..', '..', '.niteshift');
+  const made = setup.guide(fixture.input);
+  assert.equal(readFileSync(join(repository, 'pharos-push.sh'), 'utf8'), file(made, '.niteshift/pharos-push.sh'));
+  assert.equal(readFileSync(join(repository, 'services.yaml'), 'utf8').replace(/^#.*\n/gm, ''), file(made, '.niteshift/services.yaml').replace(/^#.*\n/gm, ''));
 });
 
 test('missing and unsafe names hold their steps back', () => {
