@@ -194,11 +194,12 @@ INSERT OR IGNORE INTO teams_privacy_revision(id,revision) VALUES(1,0);
 -- Adapter-origin proofs are local observations, never account attestations or
 -- sharing grants. A changed source configuration creates a fresh binding.
 CREATE TABLE IF NOT EXISTS teams_source_bindings (
-  binding_id TEXT PRIMARY KEY, provenance_sha256 TEXT NOT NULL UNIQUE,
+  binding_id TEXT PRIMARY KEY, provenance_sha256 TEXT NOT NULL,
   host_id TEXT NOT NULL, source_name TEXT NOT NULL, source_kind TEXT NOT NULL,
   provider TEXT NOT NULL, account_label TEXT NOT NULL, source_root TEXT NOT NULL,
   created_at TEXT NOT NULL, superseded_at TEXT NOT NULL DEFAULT ''
 );
+CREATE UNIQUE INDEX IF NOT EXISTS teams_source_binding_active_provenance ON teams_source_bindings(provenance_sha256) WHERE superseded_at='';
 CREATE TABLE IF NOT EXISTS teams_native_source_proofs (
   binding_id TEXT NOT NULL REFERENCES teams_source_bindings(binding_id),
   conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,

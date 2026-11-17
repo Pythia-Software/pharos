@@ -16,8 +16,8 @@ import (
 // the same writer transaction as the indexed record. It does not attest an
 // account or authorize reporting. Until the scoped source resolver and send
 // barrier consume this revision, no production work may use these proofs.
-func teamsRecordNativeEvidence(tx *sql.Tx, host string, config SourceConfig, view *captureView, record WorkspaceRecord, digest string) error {
-	if !isCodexSource(config.Kind) || record.SourceKind != "codex" || host == "" || config.Name == "" {
+func teamsRecordNativeEvidence(tx *sql.Tx, host string, config SourceConfig, view *captureView, record WorkspaceRecord, digest string, observing bool) error {
+	if !observing || !isCodexSource(config.Kind) || record.SourceKind != "codex" || host == "" || config.Name == "" {
 		return nil
 	}
 	hasProof := false
@@ -28,7 +28,8 @@ func teamsRecordNativeEvidence(tx *sql.Tx, host string, config SourceConfig, vie
 		}
 	}
 	if !hasProof {
-		return nil
+		_, err := tx.Exec(`DELETE FROM teams_native_source_proofs WHERE binding_id IN (SELECT binding_id FROM teams_source_bindings WHERE host_id=? AND lower(source_kind)=lower(?) AND source_name=? AND superseded_at='')`, host, config.Kind, config.Name)
+		return err
 	}
 	root := config.Path
 	optionsFingerprint, err := teamsSourceOptionsFingerprint(config.Options)
@@ -77,7 +78,7 @@ func teamsRecordNativeEvidence(tx *sql.Tx, host string, config SourceConfig, vie
 		return err
 	}
 	binding := base64.RawURLEncoding.EncodeToString(random[:])
-	result, err := tx.Exec(`INSERT INTO teams_source_bindings(binding_id,provenance_sha256,host_id,source_name,source_kind,provider,account_label,source_root,created_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(provenance_sha256) DO NOTHING`, binding, fingerprint, host, config.Name, config.Kind, "codex", config.Account, root, time.Now().UTC().Format(time.RFC3339Nano))
+	result, err := tx.Exec(`INSERT INTO teams_source_bindings(binding_id,provenance_sha256,host_id,source_name,source_kind,provider,account_label,source_root,created_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(provenance_sha256) WHERE superseded_at='' DO NOTHING`, binding, fingerprint, host, config.Name, config.Kind, "codex", config.Account, root, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return err
 	}
@@ -85,7 +86,7 @@ func teamsRecordNativeEvidence(tx *sql.Tx, host string, config SourceConfig, vie
 	if err != nil {
 		return err
 	}
-	if err = tx.QueryRow(`SELECT binding_id FROM teams_source_bindings WHERE provenance_sha256=?`, fingerprint).Scan(&binding); err != nil {
+	if err = tx.QueryRow(`SELECT binding_id FROM teams_source_bindings WHERE provenance_sha256=? AND superseded_at=''`, fingerprint).Scan(&binding); err != nil {
 		return err
 	}
 	if inserted > 0 {
@@ -94,14 +95,6 @@ func teamsRecordNativeEvidence(tx *sql.Tx, host string, config SourceConfig, vie
 		}
 		if _, err = tx.Exec(`UPDATE teams_source_bindings SET superseded_at=? WHERE binding_id<>? AND host_id=? AND lower(source_kind)=lower(?) AND (source_name=? OR source_root=?) AND superseded_at=''`, time.Now().UTC().Format(time.RFC3339Nano), binding, host, config.Kind, config.Name, root); err != nil {
 			return err
-		}
-	} else {
-		var superseded string
-		if err = tx.QueryRow(`SELECT superseded_at FROM teams_source_bindings WHERE binding_id=?`, binding).Scan(&superseded); err != nil {
-			return err
-		}
-		if superseded != "" {
-			return nil
 		}
 	}
 	changed := inserted > 0

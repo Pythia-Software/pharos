@@ -213,12 +213,37 @@ func TestTeamsSourceProofRetainsDistinctOriginsAndFencesChangedSource(t *testing
 	if err = c.reviewTeamsSourceMapping(ctx, d, credential, next, "work", revision, true); !errors.Is(err, errTeamsSourceRemapRequired) {
 		t.Fatalf("changed source bypassed exposure: %v", err)
 	}
+	lease, err = c.teamsSharingLease()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.writeTransaction(ctx, "stale-exposure", func(tx *sql.Tx) error { return reserveTeamsSourceExposure(ctx, tx, d, credential, binding, mapping) })
+	lease.Close()
+	if !errors.Is(err, errTeamsConsentStale) {
+		t.Fatalf("superseded mapping reserved: %v", err)
+	}
 	if _, err = c.DB.Exec(`DELETE FROM teams_native_source_proofs WHERE binding_id=?`, next); err != nil {
 		t.Fatal(err)
 	}
 	var after int64
 	if err = c.DB.QueryRow(`SELECT revision FROM teams_source_revision WHERE id=1`).Scan(&after); err != nil || after <= revision {
 		t.Fatalf("deletion did not advance revision: %d -> %d, %v", revision, after, err)
+	}
+	source.Path = root
+	appendSourceFile(t, filepath.Join(root, "sessions", "one.jsonl"), `{"type":"event_msg","payload":{"type":"agent_message","message":"back"}}`+"\n")
+	ingestSource(t, c, source)
+	var restored string
+	if err = c.DB.QueryRow(`SELECT binding_id FROM teams_source_bindings WHERE superseded_at=''`).Scan(&restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored == binding || restored == next {
+		t.Fatal("reverted source revived an older mapping")
+	}
+	if err = c.DB.QueryRow(`SELECT revision FROM teams_source_revision WHERE id=1`).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.reviewTeamsSourceMapping(ctx, d, credential, restored, "work", revision, true); !errors.Is(err, errTeamsSourceRemapRequired) {
+		t.Fatalf("reverted source bypassed prior exposure: %v", err)
 	}
 }
 
