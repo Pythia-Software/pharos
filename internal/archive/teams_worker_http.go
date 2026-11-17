@@ -215,12 +215,14 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			if e = s.Catalog.grantTeamsModel(r.Context(), d, credential, current); e != nil {
 				return e
 			}
+			s.wakeTeams()
 			writeJSON(w, map[string]bool{"approved": true}, 200)
 			return nil
 		case r.URL.Path == "/api/teams/worker/model/revoke" && r.Method == http.MethodPost:
 			if e = s.Catalog.revokeTeamsModel(r.Context(), d, credential); e != nil {
 				return e
 			}
+			s.wakeTeams()
 			writeJSON(w, map[string]bool{"revoked": true}, 200)
 			return nil
 		case r.URL.Path == "/api/teams/worker/allow-source" && r.Method == http.MethodPost:
