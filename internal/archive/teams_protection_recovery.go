@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strconv"
+	"strings"
 )
 
 // prepareTeamsRecoveredCopy operates only on the isolated, unpublished
@@ -35,7 +36,7 @@ func prepareTeamsRecoveredCopy(ctx context.Context, path string) error {
 	} else if err != nil {
 		return err
 	}
-	numeric, e := strconv.Atoi(version)
+	numeric, e := strconv.Atoi(strings.TrimSpace(version))
 	if e != nil {
 		return errTeamsProtectionContinuity
 	}

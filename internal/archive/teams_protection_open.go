@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"strconv"
+	"strings"
 )
 
 // Bump when Initialize or a migration changes semantics without changing the
@@ -123,6 +124,11 @@ func teamsRecoveryStructureSupported(ctx context.Context, tx *sql.Tx) error {
 		if err = tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&got); err != nil || got != expected {
 			return errTeamsProtectionContinuity
 		}
+		// Recovery writes these tables after removing the fences. An extra
+		// trigger could otherwise run arbitrary mutations during the transition.
+		if err = teamsRecoveryTriggersSupported(ctx, tx, reference, name); err != nil {
+			return err
+		}
 	}
 	for _, spec := range teamsProtectionProjectionQueries {
 		rows, e := tx.QueryContext(ctx, spec.query+` LIMIT 0`)
@@ -132,6 +138,48 @@ func teamsRecoveryStructureSupported(ctx context.Context, tx *sql.Tx) error {
 		if e = rows.Close(); e != nil {
 			return e
 		}
+	}
+	return nil
+}
+
+func teamsRecoveryTriggersSupported(ctx context.Context, tx *sql.Tx, reference *sql.DB, table string) error {
+	expected := map[string]string{}
+	rows, err := reference.QueryContext(ctx, `SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name=?`, table)
+	if err != nil {
+		return errTeamsProtectionContinuity
+	}
+	for rows.Next() {
+		var name, definition string
+		if rows.Scan(&name, &definition) != nil {
+			rows.Close()
+			return errTeamsProtectionContinuity
+		}
+		expected[name] = definition
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return errTeamsProtectionContinuity
+	}
+	rows.Close()
+	for _, fence := range teamsProtectionFenceStatements() {
+		if strings.HasPrefix(fence.name, "teams_fence_"+table+"_") {
+			expected[fence.name] = fence.sql
+		}
+	}
+	rows, err = tx.QueryContext(ctx, `SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name=?`, table)
+	if err != nil {
+		return errTeamsProtectionContinuity
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name, definition string
+		if rows.Scan(&name, &definition) != nil || expected[name] != definition {
+			return errTeamsProtectionContinuity
+		}
+		delete(expected, name)
+	}
+	if rows.Err() != nil || len(expected) != 0 {
+		return errTeamsProtectionContinuity
 	}
 	return nil
 }

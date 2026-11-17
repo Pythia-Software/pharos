@@ -539,6 +539,26 @@ func TestTeamsCheckpointRecoverCopyRetainsUnknown(t *testing.T) {
 	if _, err = c.DB.Exec(`DROP TABLE synthetic_recovery_schema_drift`); err != nil {
 		t.Fatal(err)
 	}
+	check, err = teamsBeginProtectedWrite(t.Context(), w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = check.Exec(`CREATE TRIGGER synthetic_recovery_trigger AFTER INSERT ON teams_protection_assertions BEGIN SELECT 1; END`); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := teamsActualSchemaDigest(t.Context(), check)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.authorized.Store(true)
+	if _, err = check.Exec(`UPDATE teams_protection_open_contract SET actual_schema_sha256=? WHERE id=1`, digest); err != nil {
+		t.Fatal(err)
+	}
+	w.authorized.Store(false)
+	if err = teamsRecoveryStructureSupported(t.Context(), check); !errors.Is(err, errTeamsProtectionContinuity) {
+		t.Fatalf("recovery accepted extra trigger with matching digest: %v", err)
+	}
+	_ = check.Rollback()
 	original := bytes.Clone(store.raw)
 	if err = w.db.Close(); err != nil {
 		t.Fatal(err)
@@ -572,11 +592,18 @@ func TestTeamsCheckpointRecoverCopyRetainsUnknown(t *testing.T) {
 
 func TestTeamsRecoveryLegacyCopyHeld(t *testing.T) {
 	source, _ := lifecycleLibraries(t)
+	c := reopenCatalog(t, source.CatalogPath)
+	if _, err := c.DB.Exec(`UPDATE meta SET value=' 33 ' WHERE key='schema_version'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
 	recovered, err := RecoverLibrary(t.Context(), filepath.Dir(source.Path), filepath.Join(t.TempDir(), "recovered"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := reopenCatalog(t, recovered.CatalogPath)
+	c = reopenCatalog(t, recovered.CatalogPath)
 	defer c.Close()
 	if n := countRows(t, c, `SELECT count(*) FROM teams_protection_assertions WHERE conversation_id='' AND kind='legacy_hold' AND evidence='unproved_recovery' AND active=1`); n != 1 {
 		t.Fatal("pre-checkpoint recovery lacks unproved hold")
