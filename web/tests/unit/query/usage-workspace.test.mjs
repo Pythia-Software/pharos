@@ -6,7 +6,7 @@ import messageLabels from "../../../../schemas/message_labels.schema.json";
 import peopleMessageLabels from "../../../../schemas/people_message_labels.schema.json";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EMPTY_QUERY, applyQuery, applyAggregations, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, toQueryRequestV3 } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, aggOpsForField, applyQuery, applyAggregations, compileMetric, createGroupingModel, decodeQueryStrict, encodeQuery, isMeasurable, loadSchema, normalizeQueryState, toFieldStatsRequestV3, toQueryRequestV3 } from "@pythia-software/query-table-core";
 import { queryCases, dashboardCases, dashboardControlCases } from "../../../../tools/usage-audit-cases.ts";
 import compactions from "../../../../schemas/compactions.schema.json";
 import modelRequests from "../../../../schemas/model_requests.schema.json";
@@ -44,6 +44,21 @@ const trendClause = (catalog, state) => trendQuery(catalog, state, [], { now: Da
 import { timeBounds, usageTime, withTimeRange, smoothingWhere } from "../../../src/usage-chart.tsx";
 import { dashboardQueryDetails, dashboardQueryLinks, dashboardQuerySentence } from "../../../src/dashboard-query-links.ts";
 import { dashboardChartURL } from "../../../src/dashboard-chart-links.ts";
+
+test("Messages aggregate choices compile and text statistics stay bounded", () => {
+  const schema = loadSchema(messagesSchema), grouping = createGroupingModel(schema);
+  // Both Basic metrics and grouped summaries consume these public policies.
+  // Internal scatter authorization must not expose an invalid text SUM here.
+  for (const field of schema.fields.filter(isMeasurable)) {
+    for (const op of aggOpsForField(field)) {
+      assert.doesNotThrow(() => compileMetric(`${op.toUpperCase()}([${field.name}])`, schema), `${field.name}: ${op}`);
+    }
+  }
+  const text = schema.fields.find(field => field.name === "text");
+  assert.equal(isMeasurable(text), false);
+  assert.equal(grouping.allowedOps(text.name).includes("sum"), false);
+  assert.deepEqual(toFieldStatsRequestV3(schema, [text.name], queryCapabilities).metrics, []);
+});
 
 test("generated classified-message links use the complete user authorship population on Messages", t => {
   const originalLocation = globalThis.location;

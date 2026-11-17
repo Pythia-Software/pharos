@@ -3,7 +3,9 @@ package archive
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -70,6 +72,34 @@ func TestScatterMatchesIndependentSources(t *testing.T) {
 		}
 	}
 
+	// Raw text measures read each message's stored text across every role,
+	// so the assistant reply counts too, but only for message identities.
+	textFields := fieldSet("messages_text_words", "messages_text_chars", "human_typed")
+	whole, err := server.scatterRows(t.Context(), textFields, window)
+	if err != nil || len(whole) != 2 {
+		t.Fatal(whole, err)
+	}
+	if a, b := whole[0], whole[1]; integer(a["messages_text_words"]) != 11 || integer(a["messages_text_chars"]) != 54 || integer(b["messages_text_words"]) != 7 || integer(b["messages_text_chars"]) != 33 {
+		t.Fatalf("raw text totals: %#v", whole)
+	}
+	messages, err := server.scatterRows(t.Context(), textFields, append(window, querytable.WhereTerm{Field: "point_kind", Op: "=", Value: "message"}))
+	if err != nil || len(messages) != 4 {
+		t.Fatal(messages, err)
+	}
+	for _, row := range messages {
+		if row["entity_id"] == "reply" && (integer(row["messages_text_words"]) != 3 || row["human_typed"] != nil) {
+			t.Fatalf("assistant text measured as typed or lost: %#v", row)
+		}
+	}
+	// A population larger than one source page is read page by page and
+	// joins to exactly the same points, including a single-row page.
+	messageWindow := append(slices.Clone(window), querytable.WhereTerm{Field: "point_kind", Op: "=", Value: "message"})
+	override(t, &scatterPageSize, 1)
+	paged, err := server.scatterRows(t.Context(), textFields, messageWindow)
+	if err != nil || !reflect.DeepEqual(paged, messages) {
+		t.Fatalf("paged points differ:\n%#v\n%#v\n%v", paged, messages, err)
+	}
+
 	// Exercise the real application source hook and grouped Query Table path,
 	// including the independent source fields needed by each axis.
 	schema, _ := sqliteQuerySchema("scatter")
@@ -134,6 +164,44 @@ func TestScatterMatchesIndependentSources(t *testing.T) {
 			t.Fatal("ambiguous ownership was guessed", row)
 		}
 	}
+	// Each page is its own snapshot. Removing a message on the first page
+	// shifts every later position; no surviving message may be skipped.
+	execTx(t, catalog.DB, `INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('aa-early','a','aa-early','assistant','message','Soon gone','aa-early','2026-10-15T14:00:00.000Z')`)
+	before, err := server.scatterRows(t.Context(), fieldSet("messages_text_words"), messageWindow)
+	if err != nil || len(before) < 4 || before[0]["entity_id"] != "aa-early" {
+		t.Fatal(before, err)
+	}
+	removed := false
+	override(t, &afterScatterPage, func() {
+		if !removed {
+			removed = true
+			execTx(t, catalog.DB, `DELETE FROM messages WHERE id='aa-early'`)
+		}
+	})
+	shifted, err := server.scatterRows(t.Context(), fieldSet("messages_text_words"), messageWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{}
+	for _, row := range shifted {
+		ids = append(ids, firstString(row["entity_id"]))
+	}
+	if !removed || len(ids) != len(before)-1 || slices.Contains(ids, "aa-early") {
+		t.Fatalf("a write between pages lost or kept points: %v", ids)
+	}
+	// A library that changes between every page is reported, not half read.
+	added := 0
+	override(t, &afterScatterPage, func() {
+		added++
+		execTx(t, catalog.DB, fmt.Sprintf(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('a%[1]d','a','a%[1]d','assistant','message','New','a%[1]d','2026-10-15T14:00:00.000Z')`, added))
+	})
+	_, err = server.scatterRows(t.Context(), fieldSet("messages_text_words"), messageWindow)
+	var changing *qt.PlanDiagnostic
+	if !errors.As(err, &changing) || changing.Code != qt.ErrorCodeUnavailable {
+		t.Fatal(err)
+	}
+	override(t, &afterScatterPage, func() {})
+
 	// Incomplete results must fail instead of joining two different truncated
 	// populations. Lower the limit to keep the fixture tiny.
 	override(t, &scatterMaxEntities, 1)
@@ -144,11 +212,69 @@ func TestScatterMatchesIndependentSources(t *testing.T) {
 	if !errors.As(err, &limit) || limit.Code != qt.ErrorCodeResourceLimit || !strings.Contains(limit.Message, "shorter range") {
 		t.Fatal(err)
 	}
+	// In production the source executor enforces the same group cap first,
+	// before scatter can inspect Total. Its diagnostic also needs guidance.
+	override(t, &queryV3MaxGroups, scatterMaxEntities)
+	_, err = server.scatterRows(t.Context(), fieldSet("messages_text_words"), messageWindow)
+	if !errors.As(err, &limit) || limit.Code != qt.ErrorCodeResourceLimit || !strings.Contains(limit.Message, "shorter range") {
+		t.Fatalf("source group budget lost scatter guidance: %v", err)
+	}
+	// A source-byte/population limit needs the same guidance, but must not
+	// claim that the number of points exceeded the cap.
+	override(t, &queryV3MaxGroups, 100_000)
+	override(t, &scatterMaxEntities, 100_000)
+	override(t, &queryV3MaxPopulation, 1)
+	_, err = server.scatterRows(t.Context(), fieldSet("messages_text_words"), window)
+	if !errors.As(err, &limit) || limit.Code != qt.ErrorCodeResourceLimit || !strings.Contains(limit.Message, "shorter range") || strings.Contains(limit.Message, "points to plot") {
+		t.Fatalf("source population budget misreported as point count: %v", err)
+	}
+}
+
+func TestScatterReadsOneCatalogGeneration(t *testing.T) {
+	for _, when := range []string{"between pages", "between metrics"} {
+		t.Run(when, func(t *testing.T) {
+			catalog, config := seedMessagesTable(t)
+			server := testServer(t, config, catalog)
+			override(t, &scatterPageSize, 1)
+			changed := false
+			change := func() {
+				if !changed {
+					changed = true
+					// Membership, ordering and the overlap identity stay the same.
+					// Only restarting all values avoids mixing two generations.
+					execTx(t, catalog.DB, `UPDATE messages SET text='Updated text' WHERE id IN ('m-assistant','m-user')`)
+				}
+			}
+			fields := fieldSet("messages_text_chars", "messages_text_words")
+			if when == "between pages" {
+				override(t, &afterScatterPage, change)
+			} else {
+				execTx(t, catalog.DB, `INSERT INTO model_requests(id,conversation_id,sequence,requested_at,model,input_tokens) VALUES('request','messages-conv',1,'2026-10-01T09:00:00.000Z','gpt-recorded',100)`)
+				fields["model_requests_input_tokens"] = true
+				override(t, &afterThinkingSourceChoice, change)
+			}
+			// Message points exercise page boundaries. The source-choice hook
+			// exercises a later metric after both message metrics were read.
+			unit := "message"
+			if when == "between metrics" {
+				unit = "conversation"
+			}
+			where := []querytable.WhereTerm{{Field: "point_kind", Op: "=", Value: unit}}
+			got, err := server.scatterRows(t.Context(), fields, where)
+			if err != nil || !changed {
+				t.Fatalf("changed=%v, rows=%#v, error=%v", changed, got, err)
+			}
+			want, err := server.scatterRows(t.Context(), fields, where)
+			if err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("mixed source generations:\ngot %#v\nwant %#v\n%v", got, want, err)
+			}
+		})
+	}
 }
 
 func TestScatterDefinitionsUsePublishedSourceFields(t *testing.T) {
 	for id, definition := range scatterDefinitions {
-		schema, err := sqliteQuerySchema(definition.Dataset)
+		schema, err := scatterSourceSchema(definition.Dataset)
 		if err != nil {
 			t.Fatal(id, err)
 		}

@@ -2,6 +2,14 @@
 
 **Resolved in Query Table 1.0.5**: the Go SQLite profile runs `LENGTH`, `WORD_COUNT`, `ARRAY_LENGTH(SPLIT(...))` and the other text functions inside aggregates, and counting functions read text in full.
 
+**Integrated in Pharos**: Scatter Plots offer Message words
+(`SUM(WORD_COUNT([text]))`) and Message characters (`SUM(LENGTH([text]))`) from
+the Messages dataset. Only trusted internal scatter queries authorize `sum`
+on text through `scatterSourceSchema`; the public Messages schema continues
+to disallow text aggregates. Both the grouped-column and basic-metric pickers
+therefore avoid an invalid raw-text SUM, and field statistics never scan full
+message bodies. No Query Table package or planner changes are required.
+
 Pharos Scatter Plots can pair metrics attributed to individual messages. The
 message source already exposes classified user-word and character counts, but
 raw text length and word count across all message roles need aggregate formula

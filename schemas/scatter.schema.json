@@ -2061,6 +2061,38 @@
       }
     },
     {
+      "name": "messages_text_chars",
+      "label": "Message characters",
+      "type": "number",
+      "group": "Messages",
+      "description": "Characters of stored message text across every role and kind, including assistant replies, thinking and tool output.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"messages_text_chars\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "messages_text_words",
+      "label": "Message words",
+      "type": "number",
+      "group": "Messages",
+      "description": "Words of stored message text across every role and kind, including assistant replies, thinking and tool output. Classified user words are measured separately in Human Words.",
+      "bindings": {
+        "sqlite": {
+          "expr": "r.\"messages_text_words\"",
+          "expressionNumeric": true
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
       "name": "session_shape_wall_seconds",
       "label": "Wall time",
       "type": "number",

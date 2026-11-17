@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -40,9 +41,70 @@ var scatterDefinitions = func() map[string]scatterMetricDefinition {
 	}
 	return definitions
 }()
-var scatterMaxEntities = querytable.MaxLimit
+
+// A source grouping returns at most one page of entities per query, so each
+// metric reads its entities a page at a time. The joined points must still
+// fit the outer grouping over the scatter dataset; beyond that the request
+// asks for a narrower range. Tests lower both to keep fixtures tiny.
+var scatterPageSize = querytable.MaxLimit
+var scatterMaxEntities = queryV3MaxGroups
+
+// afterScatterPage runs between two pages of one metric; tests change the
+// catalog there.
+var afterScatterPage = func() {}
+
+// scatterReadAttempts bounds restarts of the complete join when its source
+// generation changes. Partial pages and values from earlier metrics are discarded.
+const scatterReadAttempts = 3
+
+var errScatterSourceChanged = errors.New("scatter source changed")
+
+func scatterTooManyPoints() error {
+	// A diagnostic reaches the page as its message; a plain error would read
+	// as the query failing.
+	return &qt.PlanDiagnostic{Code: qt.ErrorCodeResourceLimit, Message: fmt.Sprintf("This range has more than %s points to plot; choose a shorter range", formatCount(scatterMaxEntities))}
+}
 
 func (s *Server) scatterRows(ctx context.Context, fields libraryFields, filters ...[]querytable.WhereTerm) ([]map[string]any, error) {
+	// Each source owns its preparation and transaction lifetimes. Accept their
+	// independent reads only if the whole catalog generation stayed unchanged;
+	// an overlap key alone cannot detect changed values or balanced edits.
+	now := time.Now().UnixMilli()
+	for range scatterReadAttempts {
+		before, err := readCacheGenerations(ctx, s.Catalog.reader())
+		if err != nil {
+			return nil, err
+		}
+		rows, readErr := s.scatterRowsAt(ctx, fields, now, before.all, filters...)
+		if errors.Is(readErr, errScatterSourceChanged) {
+			continue
+		}
+		after, err := readCacheGenerations(ctx, s.Catalog.reader())
+		if err != nil {
+			return nil, err
+		}
+		if before.all == after.all {
+			return rows, readErr
+		}
+	}
+	return nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeUnavailable, Message: "The library kept changing while this plot was read; try again in a moment"}
+}
+
+// scatterSourceSchema authorizes only our trusted, fixed scatter formulas to
+// measure complete message text. The public Messages schema still disallows
+// text aggregates, so neither the basic metric picker nor grouped columns
+// offer an invalid SUM(text), and field statistics never scan full bodies.
+func scatterSourceSchema(dataset string) (qt.Schema, error) {
+	schema, err := sqliteQuerySchema(dataset)
+	if err == nil && dataset == "messages" {
+		text := schema.Fields["text"]
+		text.AggregateOps = []string{"sum"}
+		schema.Fields["text"] = text
+	}
+	return schema, err
+}
+
+func (s *Server) scatterRowsAt(ctx context.Context, fields libraryFields, now, generation int64, filters ...[]querytable.WhereTerm) ([]map[string]any, error) {
 	unit := "conversation"
 	entity := ""
 	var window []querytable.WhereTerm
@@ -90,7 +152,7 @@ func (s *Server) scatterRows(ctx context.Context, fields libraryFields, filters 
 		if key == "" {
 			continue
 		}
-		schema, err := sqliteQuerySchema(definition.Dataset)
+		schema, err := scatterSourceSchema(definition.Dataset)
 		if err != nil {
 			return nil, err
 		}
@@ -122,9 +184,9 @@ func (s *Server) scatterRows(ctx context.Context, fields libraryFields, filters 
 				selected = append(selected, "distinct_"+field)
 			}
 		}
-		request := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true,
+		request := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: now, Rows: true,
 			Source: qt.WireQuery{Where: where}, Grouping: &qt.GroupingDefinition{Keys: []string{key}, Summaries: summaries, Representative: &qt.RepresentativeRow{OrderBy: []qt.OrderBy{{Field: schema.IDField, Dir: "asc"}}}},
-			Result: qt.WireQuery{Select: selected, OrderBy: []qt.OrderBy{{Field: key, Dir: "asc"}}, Limit: scatterMaxEntities}}
+			Result: qt.WireQuery{Select: selected, OrderBy: []qt.OrderBy{{Field: key, Dir: "asc"}}, Limit: scatterPageSize}}
 		params := url.Values{}
 		for name, value := range definition.Params {
 			params.Set(name, value)
@@ -134,54 +196,15 @@ func (s *Server) scatterRows(ctx context.Context, fields libraryFields, filters 
 			// saved activity gap instead of inventing a separate estimate.
 			params.Set("parallelism_settings", fmt.Sprintf(`{"counting":"agent","gap":%d}`, s.Catalog.parallelismSettings(ctx).gap))
 		}
-		result, _, err := s.executeQueryV3(ctx, definition.Dataset, params, schema, request)
+		rows, err := s.scatterSourceRows(ctx, id, definition.Dataset, params, schema, request, generation)
 		if err != nil {
-			return nil, fmt.Errorf("scatter metric %s: %w", id, err)
+			return nil, err
 		}
-		if result.Total > int64(len(result.Rows)) {
-			// A diagnostic reaches the page as its message; a plain error
-			// would read as the query failing.
-			return nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeResourceLimit, Message: fmt.Sprintf("This range has more than %d points to plot; choose a shorter range", scatterMaxEntities)}
+		if err := scatterMerge(points, unit, id, key, rows); err != nil {
+			return nil, err
 		}
-		for _, row := range result.Rows {
-			entity := firstString(row[key])
-			if entity == "" {
-				continue
-			}
-			point := points[entity]
-			if point == nil {
-				point = map[string]any{"id": unit + ":" + entity, "entity_id": entity, "point_kind": unit}
-				points[entity] = point
-			}
-			if value := row["value"]; value != nil {
-				if _, bad := value.(map[string]any); bad {
-					return nil, fmt.Errorf("scatter metric %s could not be computed", id)
-				}
-				point[id] = value
-			}
-			for _, field := range []string{"title", "provider", "repository_name", "project_name", "model"} {
-				text := firstString(row["meta_"+field])
-				if text == "" {
-					continue
-				}
-				distinct, _ := number(row["distinct_"+field])
-				if field != "title" && (distinct > 1 || point[field] != nil && point[field] != text) {
-					text = "Multiple"
-				}
-				if point[field] == nil || field != "title" {
-					point[field] = text
-				}
-			}
-			for _, field := range []string{"first_at", "last_at"} {
-				text := firstString(row[field])
-				if text == "" {
-					continue
-				}
-				previous := firstString(point[field])
-				if previous == "" || field == "first_at" && text < previous || field == "last_at" && text > previous {
-					point[field] = text
-				}
-			}
+		if len(points) > scatterMaxEntities {
+			return nil, scatterTooManyPoints()
 		}
 	}
 	rows := make([]map[string]any, 0, len(points))
@@ -195,4 +218,91 @@ func (s *Server) scatterRows(ctx context.Context, fields libraryFields, filters 
 		return strings.Compare(firstString(a["entity_id"]), firstString(b["entity_id"]))
 	})
 	return rows, nil
+}
+
+// scatterMerge adds one page of a metric's grouped rows to the points, keyed
+// by recorded identity, with each point's representative display metadata.
+func scatterMerge(points map[string]map[string]any, unit, id, key string, rows []map[string]any) error {
+	for _, row := range rows {
+		entity := firstString(row[key])
+		if entity == "" {
+			continue
+		}
+		point := points[entity]
+		if point == nil {
+			point = map[string]any{"id": unit + ":" + entity, "entity_id": entity, "point_kind": unit}
+			points[entity] = point
+		}
+		if value := row["value"]; value != nil {
+			if _, bad := value.(map[string]any); bad {
+				return fmt.Errorf("scatter metric %s could not be computed", id)
+			}
+			point[id] = value
+		}
+		for _, field := range []string{"title", "provider", "repository_name", "project_name", "model"} {
+			text := firstString(row["meta_"+field])
+			if text == "" {
+				continue
+			}
+			distinct, _ := number(row["distinct_"+field])
+			if field != "title" && (distinct > 1 || point[field] != nil && point[field] != text) {
+				text = "Multiple"
+			}
+			if point[field] == nil || field != "title" {
+				point[field] = text
+			}
+		}
+		for _, field := range []string{"first_at", "last_at"} {
+			text := firstString(row[field])
+			if text == "" {
+				continue
+			}
+			previous := firstString(point[field])
+			if previous == "" || field == "first_at" && text < previous || field == "last_at" && text > previous {
+				point[field] = text
+			}
+		}
+	}
+	return nil
+}
+
+// scatterSourceRows pages one metric within the complete join's generation.
+// A changed generation stops immediately, before shifted offsets can be joined.
+func (s *Server) scatterSourceRows(ctx context.Context, id, dataset string, params url.Values, schema qt.Schema, request qt.QueryRequestV3, generation int64) ([]map[string]any, error) {
+	var rows []map[string]any
+	for page := 0; ; page++ {
+		request.Result.Offset = len(rows)
+		if page > 0 {
+			afterScatterPage()
+		}
+		result, _, err := s.executeQueryV3(ctx, dataset, params, schema, request)
+		after, generationErr := readCacheGenerations(ctx, s.Catalog.reader())
+		if generationErr != nil {
+			return nil, generationErr
+		}
+		if after.all != generation {
+			return nil, errScatterSourceChanged
+		}
+		if err != nil {
+			var diagnostic *qt.PlanDiagnostic
+			if errors.As(err, &diagnostic) && diagnostic.Code == qt.ErrorCodeResourceLimit {
+				// A source can exceed its budget before it returns Total. Preserve
+				// the reason without calling a byte/population limit a point count.
+				issue := *diagnostic
+				issue.Message += "; choose a shorter range"
+				return nil, &issue
+			}
+			return nil, fmt.Errorf("scatter metric %s: %w", id, err)
+		}
+		if result.Total > int64(scatterMaxEntities) {
+			return nil, scatterTooManyPoints()
+		}
+		rows = append(rows, result.Rows...)
+		if int64(len(rows)) >= result.Total {
+			return rows, nil
+		}
+		if len(result.Rows) == 0 {
+			return nil, &qt.PlanDiagnostic{Code: qt.ErrorCodeUnavailable, Message: "Scatter points could not be read completely; try again"}
+		}
+	}
 }

@@ -33,7 +33,7 @@ have one home; genuinely different counts retain their qualifiers.
 | Carbon Impact | Estimated electricity and CO₂e, using saved Carbon settings |
 | Parallelism and Work Hours | Conversation activity hours, overlap and turn counts; human engaged hours and agent hours stay separate because they can overlap. Parallelism explicitly counts conversations with the saved activity gap |
 | Waiting and Thinking | Mean recorded response wait and per-request input/output |
-| Messages | Classified user-message word and character measurements, plus message-attributed labels, compactions, tool and agent-event evidence. Raw text word/character totals for all roles are blocked by the upstream aggregate-expression capability described in [the handoff](handoffs/query-table-scatter-text-metrics.md) |
+| Messages | Classified user-message word and character measurements, plus message-attributed labels, compactions, tool and agent-event evidence. Message words and characters total the stored text of every role and kind, measured per message before summing; they have no agent session identity |
 | Habits | The entity-level activity measurements above are reused; library-wide streaks and day-calendar summaries have no value for one message or conversation |
 | Pharos MCP | Server requests have no recorded conversation, workspace or message identity, so they cannot be matched to these points |
 
@@ -66,6 +66,10 @@ Message points include only measurements attributed to the exact message.
 Daily usage costs, session duration and hourly activity are not distributed
 across messages. Missing measurements remain missing, while measured zeroes
 remain zero. Points require values on both axes. A logarithmic axis cannot draw
-zero. The chart draws at most 2,000 points, ordered by X; source grouping must be
-complete within 10,000 entities, otherwise the request asks for a narrower range.
+zero. The chart draws at most 2,000 points, ordered by X. Each source grouping
+is read in pages of 10,000 entities ordered by identity, so a page boundary
+never splits or repeats an entity. A range with more than 100,000 points, the
+grouped-query budget, asks for a narrower range rather than joining a truncated
+population. Source writes during pagination discard and retry the complete
+join; repeated changes return a retry diagnostic instead of partial points.
 Requests select only the metric fields they need, up to sixteen per population query; inspecting one entity can request its full set of measurements.

@@ -81,6 +81,15 @@ extra("Tool Calls and Time", "tool_calls", "started_at", { ...sessionKeys, messa
   ["lines_added", "Lines added", "Recorded lines added by tool calls."], ["lines_removed", "Lines removed", "Recorded lines removed by tool calls."],
   ["result_bytes", "Tool result bytes", "Recorded result size in bytes."], ["input_bytes", "Tool input bytes", "Recorded tool input size in bytes."],
 ]);
+// Raw stored text of every retained message, whatever its role or kind.
+// Each message's text is measured before summing, so a point totals its own
+// messages; messages without text stay missing, and empty text counts zero.
+// Agent sessions are absent: messages record no session of their own here.
+for (const [id, label, expression, note] of [
+  ["text_chars", "Message characters", "SUM(LENGTH([text]))", "Characters of stored message text across every role and kind, including assistant replies, thinking and tool output."],
+  ["text_words", "Message words", "SUM(WORD_COUNT([text]))", "Words of stored message text across every role and kind, including assistant replies, thinking and tool output. Classified user words are measured separately in Human Words."],
+] as const) scatterMetrics.push({ id: `messages_${id}`, group: "Messages", dataset: "messages", keys: { ...own, message: "id" }, time: { first: "sent_at", last: "sent_at" },
+  measure: { label, unit: "", format: number, op: "sum", expression, additive: true, note } });
 // Numeric session diagnostics are already maintained in the session schema.
 // Offer the ones the guided dashboard has not yet put in its metric menu.
 const sessionExtras: Array<[string, string, AnalysisMeasure["op"]?]> = [

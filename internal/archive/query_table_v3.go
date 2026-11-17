@@ -482,6 +482,9 @@ func (s *Server) executeQueryV3Once(ctx context.Context, dataset string, params 
 		return qt.QueryResultV3{}, nil, err
 	}
 	finish()
+	if dataset == "messages" && q.Grouping != nil {
+		boundRepresentativeText(q.Grouping.Summaries, result.Rows)
+	}
 	// Group rows have their own identity. Source-record enrichment is only valid
 	// for the ordinary row projection and must never target a synthetic group ID.
 	if q.Grouping == nil && q.Rows {

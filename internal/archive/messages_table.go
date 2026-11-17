@@ -3,6 +3,8 @@ package archive
 import (
 	"context"
 	"unicode/utf8"
+
+	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
 // messagesDataset is one row per retained canonical message. Authorship is
@@ -132,11 +134,9 @@ func (c *Catalog) attachMessageText(ctx context.Context, rows []map[string]any) 
 		}
 		if raw, ok := row["text"]; ok {
 			body, _ := raw.(string)
-			end := min(len(body), authoredTextLimit)
-			for end > 0 && end < len(body) && !utf8.RuneStart(body[end]) {
-				end--
-			}
-			row["text"] = body[:end]
+			bounded := boundedMessageText(body)
+			end := len(bounded)
+			row["text"] = bounded
 			row["text_truncated"] = end < len(body)
 			segments := []map[string]any{}
 			if end > 0 {
@@ -190,3 +190,30 @@ func messageBool(value any) bool {
 // authorshipProjectJoin finds the project of the workspace a message counts
 // toward in Writing, as projectJoin does for its own workspace.
 const authorshipProjectJoin = " LEFT JOIN repositories apj ON apj.id=COALESCE(aw.repository_id,aw.folder_repository_id)"
+
+// boundedMessageText cuts a stored body to the byte budget of row and item
+// responses, on a character boundary.
+func boundedMessageText(body string) string {
+	end := min(len(body), authoredTextLimit)
+	for end > 0 && end < len(body) && !utf8.RuneStart(body[end]) {
+		end--
+	}
+	return body[:end]
+}
+
+// boundRepresentativeText applies the same budget to a group's representative
+// message text. The grouped editor offers "Representative" for every shown
+// field, so the value is bounded rather than the choice refused; a full tool
+// output or transcript body never reaches a grouped response.
+func boundRepresentativeText(summaries []qt.SummaryColumn, rows []map[string]any) {
+	for _, summary := range summaries {
+		if summary.Op != "row" || summary.Field != "text" {
+			continue
+		}
+		for _, row := range rows {
+			if body, ok := row[summary.ID].(string); ok {
+				row[summary.ID] = boundedMessageText(body)
+			}
+		}
+	}
+}
