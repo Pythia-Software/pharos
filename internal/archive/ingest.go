@@ -458,7 +458,8 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 					return err
 				}
 			}
-			if err = teamsRecordNativeEvidence(tx, host, config, captureViewOf(adapter), *record, digest); err != nil {
+			nativeAdapter, observing := adapter.(*jsonlAdapter)
+			if err = teamsRecordNativeEvidence(tx, host, config, captureViewOf(adapter), *record, digest, observing && nativeAdapter.teamsProofEnabled); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(`INSERT INTO source_record_states(host_id,source_name,source_kind,source_account,source_id,digest,updated_at)

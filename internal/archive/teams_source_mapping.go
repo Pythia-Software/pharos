@@ -89,7 +89,7 @@ func reserveTeamsSourceExposure(ctx context.Context, tx *sql.Tx, d LibraryDescri
 		return errTeamsNotEnrolled
 	}
 	var current int64
-	if err := tx.QueryRowContext(ctx, `SELECT revision FROM teams_source_mapping_current WHERE binding_id=?`, bindingID).Scan(&current); err != nil || current != revision {
+	if err := tx.QueryRowContext(ctx, `SELECT current.revision FROM teams_source_mapping_current current JOIN teams_source_bindings b ON b.binding_id=current.binding_id WHERE current.binding_id=? AND b.superseded_at=''`, bindingID).Scan(&current); err != nil || current != revision {
 		return errTeamsConsentStale
 	}
 	var mode string
