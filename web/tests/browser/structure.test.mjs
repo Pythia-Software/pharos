@@ -2436,6 +2436,8 @@ test('Teams checking requires a displayed policy choice', { skip }, async t => {
   await app.page.getByLabel('Allow automatic eligible statistics when the organization enables them.').check();
   await app.page.getByRole('button',{name:'Start checking requests'}).click();
   await app.page.getByRole('button',{name:'Check now'}).waitFor();
+  await app.page.getByText('Connected.', {exact:true}).waitFor();
+  assert.equal(await app.page.getByText(/Requests are paused until setup/).count(), 0);
   assert.deepEqual(settings,{enabled:true,optOut:false,settingsRevision:4,policyVersion:2});
 });
 

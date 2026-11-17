@@ -154,7 +154,7 @@ export function TeamsSettings() {
     <p>Your organization’s visible defaults can share attributed statistics. You can opt out. Conversation content and answers derived from it require your permission; private conversations are excluded from Teams text analysis and AI answers while eligible statistics can still include them.</p>
     <p>Pharos will open your browser to sign in. Compare the code shown here with the one requested there before approving the connection.</p>
     {waiting && status?.fingerprint ? <p role="status">Connection code: <strong><code>{status.fingerprint}</code></strong></p> : null}
-    {status?.state === "connected_paused" ? <p role="status">Connected. Requests are paused until setup and privacy checks are ready.</p> : null}
+    {status?.state === "connected_paused" ? <p role="status">Connected.</p> : null}
     {status?.problem ? <p role="status">{status.problem}</p> : null}
     {error ? <p role="alert">{error}</p> : null}
     {waiting ? <button type="button" disabled={busy} onClick={() => void act(true)}>Cancel connection</button>

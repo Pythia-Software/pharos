@@ -230,6 +230,6 @@ func (s *Server) finishTeamsEnrollment(ctx context.Context, cfg Config, d Librar
 		return errors.New("Teams connection needs local reconciliation")
 	}
 	s.teams.state = "connected_paused"
-	s.teams.problem = "Connection saved. Teams requests remain paused until setup and privacy checks are ready."
+	s.teams.problem = ""
 	return nil
 }
