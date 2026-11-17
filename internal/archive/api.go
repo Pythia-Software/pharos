@@ -1265,6 +1265,8 @@ func (s *Server) configuredSource(name string) (SourceConfig, error) {
 // requests. hostFileMu keeps a probe accept's read-modify-write of the host
 // file from dropping it.
 func (s *Server) setSourceEnabled(name string, enabled bool) error {
+	teamsSourceMutationMu.Lock()
+	defer teamsSourceMutationMu.Unlock()
 	lease, err := s.Catalog.beginTeamsSourceMutation(context.Background())
 	if err != nil {
 		return err
@@ -1297,6 +1299,8 @@ func (s *Server) setSourceEnabled(name string, enabled bool) error {
 // replaced applies again. What was captured and indexed from it stays in
 // the library.
 func (s *Server) removeSource(name string) error {
+	teamsSourceMutationMu.Lock()
+	defer teamsSourceMutationMu.Unlock()
 	lease, err := s.Catalog.beginTeamsSourceMutation(context.Background())
 	if err != nil {
 		return err

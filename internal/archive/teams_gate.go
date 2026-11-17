@@ -5,11 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"sync"
 
 	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 var errTeamsSharingBusy = errors.New("A Teams send is being reconciled. Try the change again shortly.")
+
+// Serialize same-process settings mutations before attempting the cross-process
+// sharing lease; concurrent source toggles should not fail one another.
+var teamsSourceMutationMu sync.Mutex
 
 // teamsSharingLease is a cross-process ordering barrier for the same library.
 // The winner of this lease linearizes first: a privacy, classifier, settings,
