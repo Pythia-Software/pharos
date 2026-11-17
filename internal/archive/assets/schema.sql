@@ -341,6 +341,23 @@ CREATE TABLE IF NOT EXISTS message_authorship_spans (
   PRIMARY KEY(message_id, position)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS message_authorship_spans_rule_idx ON message_authorship_spans(rule, category);
+-- Derived with message_authorship (dictation.go): whether a user message's
+-- typed words were dictated by speech-to-text or typed on a keyboard.
+-- p_dictated is the estimated probability, NULL when the typed text is too short
+-- to tell; input_method is dictation, keyboard, uncertain or unknown; marks
+-- is a JSON array of the typed marks found (typo, lowercase_start, code, ...); evidence is
+-- text, or source when the source recorded a voice transcript.
+CREATE TABLE IF NOT EXISTS message_dictation (
+  message_id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  typed_words INTEGER NOT NULL,
+  p_dictated REAL,
+  input_method TEXT NOT NULL,
+  marks TEXT,
+  evidence TEXT NOT NULL,
+  version TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS message_dictation_version_idx ON message_dictation(version);
 -- Derived with message_authorship: a headless agent run (claude -p, agy -p,
 -- codex exec) and the conversation whose shell command launched it.
 CREATE TABLE IF NOT EXISTS conversation_launches (

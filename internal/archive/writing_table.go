@@ -139,8 +139,9 @@ func (c *Catalog) writingPeriods(ctx context.Context, parents map[string]string,
 	if hourly {
 		period = "strftime('%Y-%m-%dT%H:00:00Z',sent_at)"
 	}
+	columns := writingCountColumns()
 	sums := []string{"workspace_id", period + " AS day", "COUNT(*) messages", "SUM(typed_words>0) typed_messages", "MAX(typed_words) longest_typed", "MIN(sent_at) first_sent", "MAX(sent_at) last_sent"}
-	for _, column := range authorshipColumns() {
+	for _, column := range columns {
 		sums = append(sums, "SUM("+column+") "+column)
 	}
 	predicate := ""
@@ -158,12 +159,11 @@ func (c *Catalog) writingPeriods(ctx context.Context, parents map[string]string,
 		predicate += "sent_at<?"
 		arguments = append(arguments, formatTime(end))
 	}
-	result, err := c.reader().QueryContext(ctx, "SELECT "+strings.Join(sums, ",")+" FROM message_authorship"+predicate+" GROUP BY workspace_id,"+period, arguments...)
+	result, err := c.reader().QueryContext(ctx, "SELECT "+strings.Join(sums, ",")+" FROM "+writingMessagesSource+predicate+" GROUP BY workspace_id,"+period, arguments...)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer result.Close()
-	columns := authorshipColumns()
 	daily := map[string]map[string]*writingDay{}
 	members := map[string][]string{}
 	for result.Next() {
@@ -198,6 +198,17 @@ func (c *Catalog) writingPeriods(ctx context.Context, parents map[string]string,
 	return daily, members, nil
 }
 
+// writingMessagesSource is message_authorship with each message's dictated
+// words: its typed words when they are estimated dictated (dictation.go).
+const writingMessagesSource = `(SELECT a.*,CASE WHEN d.input_method='` + inputDictation + `' THEN a.typed_words ELSE 0 END dictated_words
+	FROM message_authorship a LEFT JOIN message_dictation d ON d.message_id=a.message_id) message_authorship`
+
+// writingCountColumns are the per-day sums of a writing row: each category's
+// characters and words, and the dictated part of typed words.
+func writingCountColumns() []string {
+	return append(authorshipColumns(), "dictated_words")
+}
+
 func writingRow(work map[string]any, total *writingDay, spent *workspaceUsageTotal, subagents, launched int) map[string]any {
 	row := map[string]any{
 		"id": work["id"], "workspace_id": work["id"], "title": work["title"], "repository_name": work["repository_name"], "project_name": work["project_name"],
@@ -222,6 +233,7 @@ func writingRow(work map[string]any, total *writingDay, spent *workspaceUsageTot
 	}
 	typed := total.counts[spanTyped+"_words"]
 	row["user_words"] = words
+	row["dictated_words"] = total.counts["dictated_words"]
 	row["typed_share"], row["avg_typed_words"], row["typed_per_mtok"] = nil, nil, nil
 	if words > 0 {
 		row["typed_share"] = roundTenth(float64(typed) / float64(words) * 100)
@@ -436,7 +448,7 @@ func (c *Catalog) writingSeries(ctx context.Context, request writingSeriesReques
 
 func writingCounts(entry *writingDay, into map[string]any) map[string]any {
 	into["messages"], into["typed_messages"] = entry.messages, entry.typedMessages
-	for _, column := range authorshipColumns() {
+	for _, column := range writingCountColumns() {
 		into[column] = entry.counts[column]
 	}
 	return into

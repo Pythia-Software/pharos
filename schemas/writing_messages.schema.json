@@ -419,6 +419,8 @@
         }
       }
     },
+    {"name": "input_method", "label": "Entered by", "type": "enum", "group": "Message", "select": {"default": false}, "filter": {"editor": "set", "values": {"source": "static", "options": [{"value": "dictation", "label": "Dictation"}, {"value": "keyboard", "label": "Keyboard"}, {"value": "uncertain", "label": "Can't tell"}, {"value": "unknown", "label": "Too short to tell"}]}}, "bindings": {"postgres": {"expr": "input_method", "synthetic": true}, "sqlite": {"expr": "r.\"input_method\""}}, "description": "How the message's typed words were most likely entered. Dictation: a 50% or higher chance of speech-to-text, or the source recorded a voice transcript. Keyboard: the text shows a sign of typing. Can't tell: no sign of typing, but too short for the estimate to reach 50%. Too short to tell: under 8 typed words."},
+    {"name": "typing_marks", "label": "Signs of typing", "type": "textarray", "group": "Message", "select": {"default": false}, "filter": {"editor": "set", "values": {"source": "static", "options": [{"value": "typo", "label": "Typo"}, {"value": "lowercase_start", "label": "Lowercase sentence start"}, {"value": "lowercase_i", "label": "Lowercase i"}, {"value": "code", "label": "Code, path or file name"}, {"value": "slash", "label": "Slash between words"}, {"value": "abbreviation", "label": "Typed abbreviation"}, {"value": "interjection", "label": "Typed interjection (hmm, lol)"}, {"value": "caps", "label": "Word in capitals"}, {"value": "no_apostrophe", "label": "Missing apostrophe"}, {"value": "symbol", "label": "Typed symbol (->, &, #)"}, {"value": "inline_list", "label": "Inline list marker"}, {"value": "no_end_punctuation", "label": "No final punctuation"}]}}, "bindings": {"postgres": {"expr": "typing_marks", "synthetic": true}, "sqlite": {"expr": "r.\"typing_marks\""}}, "description": "What in the message's typed words a dictation tool would not have written."},
     {
       "name": "correction_cue",
       "label": "Authored correction cue",
@@ -505,6 +507,8 @@
         }
       }
     },
+    {"name": "dictated_words", "label": "Dictated words", "type": "number", "group": "Your writing", "render": "number", "select": {"default": false, "align": "right"}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "dictated_words", "synthetic": true}, "sqlite": {"expr": "r.\"dictated_words\"", "expressionNumeric": true}}, "description": "Typed words of messages estimated dictated through speech-to-text rather than typed on a keyboard (a chance of dictation of 50% or more). Typed words count your own words however you entered them; this is the dictated part."},
+    {"name": "dictated_percent", "label": "Dictated chance", "type": "number", "group": "Your writing", "render": "number", "select": {"default": false, "align": "right"}, "aggregate": {"measure": false, "groupable": true}, "bindings": {"postgres": {"expr": "dictated_percent", "synthetic": true}, "sqlite": {"expr": "r.\"dictated_percent\"", "expressionNumeric": true}}, "description": "Estimated chance, in percent, that the message's typed words were dictated. Dictation tools never leave typos, lowercase sentence starts, code-like words, slashes or abbreviations, so a message with any of these was almost certainly typed on a keyboard, and a long message without any was probably dictated. Empty when the typed text is under 8 words."},
     {
       "name": "other_words",
       "label": "Words from elsewhere",

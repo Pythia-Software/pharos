@@ -32,6 +32,8 @@ const cue = (field: string, label: string) => ({ op: "sum" as const, expression:
 const conversationWords = (label: string) => ({ unit: "conversation", bins: { field: "conversation_id", scheme: { scale: "count" as const }, label, format: count } });
 const measures: Record<string, AnalysisMeasure> = {
   typed: { label: "Typed words", unit: "words", format: count, op: "sum", field: "typed_words", value: "typed_words", additive: true, heatmapUnit: conversationWords("Typed words per conversation"), note: "Typed words are text you typed or dictated; pastes, copied agent output, templates, attachments, app instructions and automated prompts are counted separately." },
+  dictated: { label: "Dictated words", unit: "words", format: count, op: "sum", field: "dictated_words", value: "dictated_words", additive: true, heatmapUnit: conversationWords("Dictated words per conversation"), note: "Typed words of messages estimated dictated: speech-to-text writes no typos, lowercase sentences, code or shorthand, so a long message without any is likely dictated. Messages under 8 typed words are not estimated." },
+  dictated_share: { label: "Dictated share of typed words", unit: "percent", format: percent, op: "sum", ratio: ["dictated_words", "typed_words"], additive: false, note: "Dictated words divided by typed words, pooled over each group's messages." },
   words: { label: "All user words", unit: "words", format: count, op: "sum", field: "words", value: "words", additive: true, heatmapUnit: conversationWords("User words per conversation"), note: "All user words count every word of each classified user message, whatever its source; Text source splits them." },
   typed_messages: { label: "Messages with typed text", unit: "messages", format: count, op: "count", additive: true, where: typed, note: "Messages holding at least one typed or dictated word." },
   messages: { label: "User messages", unit: "messages", format: count, op: "count", additive: true, note: "Every classified user message, including those holding only supplied text." },
@@ -65,6 +67,8 @@ export const humanAnalysisCatalog: AnalysisCatalog = {
     ...peopleLabelBreakdowns("writing_messages"),
     project_name: projectBreakdown(),
     ...single([["source_kind", "Source"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["main_category", "Main text source"]]),
+    input_method: { label: "Entered by", fields: ["input_method"], order: ["dictation", "keyboard", "uncertain", "unknown"], values: { dictation: "Dictation", keyboard: "Keyboard", uncertain: "Can't tell", unknown: "Too short to tell" },
+      note: "How a message's typed words were entered, estimated from the text: a typo, lowercase sentence, code, shorthand or similar mark means the keyboard; a long message without one is likely dictated. ChatGPT and Claude voice messages are dictation by their source. Messages without typed words have no value." },
     estimate: { label: "Estimate", fields: ["estimate"], order: ["refined", "provisional"], values: { refined: "Refined", provisional: "Provisional" },
       note: "Provisional words come from the frequent Update writing estimates pass and can change when the daily Refine writing history pass resolves copied text, templates and launches. Refined words have had the complete rules applied." },
   },

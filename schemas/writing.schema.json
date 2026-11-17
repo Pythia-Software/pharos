@@ -337,6 +337,7 @@
         "groupable": true
       }
     },
+    {"name": "dictated_words", "label": "Dictated words", "type": "number", "group": "Your writing", "render": "number", "select": {"default": false, "align": "right"}, "bindings": {"postgres": {"expr": "dictated_words", "synthetic": true}, "sqlite": {"expr": "r.\"dictated_words\"", "expressionNumeric": true}}, "aggregate": {"groupable": true}, "description": "Typed words of messages estimated dictated through speech-to-text rather than typed on a keyboard (a chance of dictation of 50% or more). Typed words count your own words however you entered them; this is the dictated part."},
     {
       "name": "avg_typed_words",
       "label": "Words per typed turn",

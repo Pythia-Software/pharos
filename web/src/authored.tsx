@@ -187,6 +187,20 @@ function CategoryBar({ row }: { row: Row }) {
 // Messages longer than this start collapsed.
 const collapsedChars = 1800;
 
+// How the typed words were entered (docs/human-authorship.md#dictated-or-typed).
+const typingMarkLabels: Record<string, string> = { typo: "a typo", lowercase_start: "a lowercase sentence", lowercase_i: "a lowercase “i”", code: "code", slash: "a slash", abbreviation: "shorthand", interjection: "an interjection", caps: "capitals for emphasis", no_apostrophe: "a missing apostrophe", symbol: "a symbol", inline_list: "an inline list", no_end_punctuation: "no closing punctuation" };
+function InputMethodFact({ row }: { row: Row }) {
+  const percent = row.dictated_percent === null || row.dictated_percent === undefined ? null : Number(row.dictated_percent);
+  const marks: string[] = Array.isArray(row.typing_marks) ? row.typing_marks : [];
+  const typedBy = marks.length ? `Typed: ${marks.map(mark => typingMarkLabels[mark] ?? mark).join(", ")}` : "";
+  switch (row.input_method) {
+    case "dictation": return <span className="authored-fact">Likely dictated{percent !== null && percent < 100 ? ` (${percent}%)` : ""}</span>;
+    case "keyboard": return <span className="authored-fact muted" title={typedBy}>Typed on a keyboard</span>;
+    case "uncertain": return percent === null ? null : <span className="authored-fact muted">{percent}% chance dictated</span>;
+    default: return null;
+  }
+}
+
 function AuthoredMessageCard({ row }: { row: Row }) {
   const segments = segmentsOf(row);
   const length = segments.reduce((sum, segment) => sum + (segment.text.length > foldAt(segment) ? foldedChars(segment) : segment.text.length), 0);
@@ -208,6 +222,7 @@ function AuthoredMessageCard({ row }: { row: Row }) {
       {other ? <span className="authored-fact">{wordCount(other)} from elsewhere</span> : null}
       {row.main_category && row.main_category !== "typed" ? <span className="authored-fact"><i className="authored-swatch" data-category={row.main_category} />Mostly {categoryLabel(row.main_category).toLowerCase()}</span> : null}
       {row.typed_share !== null && row.typed_share !== undefined ? <span className="authored-fact muted">{Number(row.typed_share).toLocaleString()}% typed</span> : null}
+      <InputMethodFact row={row} />
     </div>
     <CategoryBar row={row} />
     <div className={`authored-body${collapsible && !expanded ? " collapsed" : ""}`}>

@@ -517,7 +517,7 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 				if err != nil {
 					return err
 				}
-				if want != built || s.Catalog.authorshipQuickPending() {
+				if want != built || s.Catalog.authorshipQuickPending() || s.Catalog.dictationRefreshPending() {
 					return errors.New("writing estimates did not start; dirty generation retained")
 				}
 			}
@@ -527,7 +527,7 @@ func (s *Server) finishDeferredStages(ctx context.Context, findings findingsMode
 			if failure != "" {
 				return fmt.Errorf("writing estimates: %s", failure)
 			}
-			if s.Catalog.authorshipQuickPending() {
+			if s.Catalog.authorshipQuickPending() || s.Catalog.dictationRefreshPending() {
 				return errStageContinues
 			}
 			return nil

@@ -63,7 +63,7 @@ function usesLabels(value: unknown): boolean {
   return false;
 }
 function usesAuthorship(value: unknown): boolean {
-  if (typeof value === 'string') return /(?:^|\[)(?:authorship_[a-z_]+|has_authorship|(?:typed|pasted|copied|prompt|machine|other|quoted|resent|template|attachment|harness|automated)_words|typed_message|typed_share|main_category|categories|rules|has_source|correction_cue|positive_cue|work_id|words|chars)(?:$|\])/.test(value);
+  if (typeof value === 'string') return /(?:^|\[)(?:authorship_[a-z_]+|has_authorship|(?:typed|pasted|copied|prompt|machine|other|quoted|resent|template|attachment|harness|automated|dictated)_words|typed_message|typed_share|input_method|dictated_percent|typing_marks|main_category|categories|rules|has_source|correction_cue|positive_cue|work_id|words|chars)(?:$|\])/.test(value);
   if (Array.isArray(value)) return value.some(usesAuthorship);
   return Boolean(value && typeof value === 'object' && Object.values(value).some(usesAuthorship));
 }

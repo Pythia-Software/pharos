@@ -932,7 +932,7 @@ func (c *Catalog) readBackgroundInputs(ctx context.Context) backgroundInputs {
 	want, built, err := c.authorshipEstimateGenerations()
 	var backlogErr error
 	in.writingBacklog, backlogErr = c.authorshipBacklog(ctx)
-	in.writingPending = err != nil || backlogErr != nil || want != built || in.writingBacklog.Pending > 0
+	in.writingPending = err != nil || backlogErr != nil || want != built || in.writingBacklog.Pending > 0 || c.dictationRefreshPending()
 	in.writingRefinedAt, _ = c.metaValue(ctx, "authorship_refined_at")
 	in.writingRefinementPending, err = c.authorshipRefinementPending(ctx)
 	in.writingRefinementPending = in.writingRefinementPending || err != nil

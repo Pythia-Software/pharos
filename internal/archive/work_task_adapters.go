@@ -23,8 +23,8 @@ func (s *Server) workDefinitions(authority *workAuthority) ([]workDefinition, er
 			return want, err
 		},
 		prepare:     c.prepareAuthorshipEstimates,
-		tailPending: c.authorshipOrphansPending,
-		tail:        c.refreshAuthorshipOrphans,
+		tailPending: c.authorshipMaintenancePending,
+		tail:        c.refreshAuthorshipMaintenance,
 		selectSQL:   `SELECT m.conversation_id id,p.revision revision FROM authorship_pending p JOIN messages m ON m.id=p.message_id WHERE m.conversation_id NOT IN (SELECT value FROM json_each(?)) ORDER BY p.sent_at DESC,m.conversation_id LIMIT ?`,
 		step: func(ctx context.Context, ids []string, _ workAllocation) (workDomainStep, error) {
 			want, _, err := c.authorshipGenerationsContext(ctx)

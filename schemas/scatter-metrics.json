@@ -18,6 +18,44 @@
       "field": "typed_words"
     }
   },
+  "human_dictated": {
+    "dataset": "writing_messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "sum",
+      "field": "dictated_words"
+    }
+  },
+  "human_dictated_share": {
+    "dataset": "writing_messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "agent_session": "agent_session_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM([dictated_words])/NULLIF(SUM([typed_words]),0)"
+    }
+  },
   "human_words": {
     "dataset": "writing_messages",
     "keys": {

@@ -1043,7 +1043,9 @@ func (s *Server) routePopulationStage(ctx context.Context, name, kind string, ex
 		}
 	}
 	// Failed units stay pending in their domain, and so does the stage.
-	if generation == 0 {
+	// Dictation rule upgrades have no source generation to acknowledge, but
+	// still need admitted library work after the recent selection finishes.
+	if generation == 0 && (name != "authorship" || !c.dictationRefreshPending()) {
 		return nil
 	}
 	if !s.stageBackfillAllowed(ctx, name) {
@@ -1155,7 +1157,7 @@ func (s *Server) settleStageBackfill(ctx context.Context, routing *maintenanceRo
 		// The library's estimate generation is authorship's own global
 		// readiness; a drained queue alone does not establish it.
 		want, built, err := s.Catalog.authorshipEstimateGenerations()
-		if err != nil || want != built || s.Catalog.authorshipQuickPending() {
+		if err != nil || want != built || s.Catalog.authorshipQuickPending() || s.Catalog.dictationRefreshPending() {
 			return err
 		}
 	}
