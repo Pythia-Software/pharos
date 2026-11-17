@@ -337,9 +337,9 @@ the host's captures are indexed.
 - The Settings guide writes one setup: Niteshift with Google Cloud Storage.
   Other combinations are configured by hand and connected by pasting their
   read configuration.
-- The release download in `.niteshift/pharos-push.sh` has not been run in a
-  sandbox yet: no release has carried the Linux program. A sandbox keeps
-  the program it downloaded; a new task downloads the newest.
+- A sandbox keeps the program it downloaded; a new task downloads the
+  newest release. This repository's own `.niteshift/pharos-push.sh` is the
+  script the guide writes, and a test holds the two equal.
 - A read credential that needs `gcloud` stops working when that sign-in
   expires; the item then fails with the command's error until the person
   signs in again.
