@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -112,7 +113,8 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy := teams.MetricsDefault{Value: true, PolicyVersion: 1}
-	upload, err := c.prepareTeamsV2Upload(ctx, w, d, credential, merged, policy, teams.SourceWatermark{}, "0.10.0")
+	proofManifest := teams.CapabilityManifest{SchemaVersion: 1, AppVersion: "0.10.0", Capabilities: []string{"deterministic_query_v1", "source_snapshot_v2"}}
+	upload, err := c.prepareTeamsV2Upload(ctx, w, d, credential, merged, policy, teams.SourceWatermark{}, proofManifest)
 	if err != nil {
 		lease.Close()
 		t.Fatal(err)
@@ -121,12 +123,13 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 		lease.Close()
 		t.Fatal("source exposures were not reserved")
 	}
-	replay, err := c.prepareTeamsV2Upload(ctx, w, d, credential, merged, policy, teams.SourceWatermark{LocalRevision: upload.LocalRevision, ReservedInventoryRevision: upload.InventoryRevision, ReservedInventorySHA256: upload.InventoryHash, AcceptedInventoryRevision: upload.InventoryRevision, AcceptedInventorySHA256: upload.InventoryHash}, "0.10.0")
+	replay, err := c.prepareTeamsV2Upload(ctx, w, d, credential, merged, policy, teams.SourceWatermark{LocalRevision: upload.LocalRevision, ReservedInventoryRevision: upload.InventoryRevision, ReservedInventorySHA256: upload.InventoryHash, AcceptedInventoryRevision: upload.InventoryRevision, AcceptedInventorySHA256: upload.InventoryHash}, proofManifest)
 	lease.Close()
 	if err != nil || replay.SnapshotID != upload.SnapshotID || string(replay.Seal) != string(upload.Seal) {
 		t.Fatalf("uncertain upload changed bytes: %v", err)
 	}
 	sealedState := false
+	var accepted teams.Receipt
 	server := httptest.NewServer(http.HandlerFunc(func(wr http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		switch {
@@ -184,7 +187,15 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 				t.Error("submission")
 				return
 			}
-			json.NewEncoder(wr).Encode(teams.Receipt{ID: w.ID, WorkID: w.ID, PayloadSHA256: submitted.PayloadSHA256, SubmissionSHA256: teamsPayloadHash(body), IdempotencyKey: submitted.IdempotencyKey, InstallationID: credential.InstallationID, ResultRevision: 1, AcceptedAt: time.Now().UTC(), Outcome: "completed", SourceBindingID: submitted.SourceBindingID, AssignmentSHA256: submitted.AssignmentSHA256, InventoryRevision: submitted.InventoryRevision, CatalogRevision: submitted.CatalogRevision, ProjectionPending: true, PublicationState: "staged"})
+			accepted = teams.Receipt{ID: w.ID, WorkID: w.ID, PayloadSHA256: submitted.PayloadSHA256, SubmissionSHA256: teamsPayloadHash(body), IdempotencyKey: submitted.IdempotencyKey, InstallationID: credential.InstallationID, ResultRevision: 1, AcceptedAt: time.Now().UTC(), Outcome: "completed", SourceBindingID: submitted.SourceBindingID, AssignmentSHA256: submitted.AssignmentSHA256, InventoryRevision: submitted.InventoryRevision, CatalogRevision: submitted.CatalogRevision, ProjectionPending: true, PublicationState: "staged"}
+			json.NewEncoder(wr).Encode(accepted)
+		case strings.HasSuffix(r.URL.Path, "/receipt"):
+			if accepted.ID == "" {
+				http.NotFound(wr, r)
+				return
+			}
+			accepted.PublicationState = "published"
+			json.NewEncoder(wr).Encode(accepted)
 		default:
 			http.NotFound(wr, r)
 		}
@@ -200,6 +211,7 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 	override(t, &teamsDeviceClient, func(_ string, installation string, signing ed25519.PrivateKey, _ bool) (*teams.DeviceClient, error) {
 		return teams.NewDeviceClient(server.URL, installation, signing, true)
 	})
+	override(t, &teamsLoadSourceConfig, func(string) (Config, error) { return cfg, nil })
 	service := testServer(t, cfg, c)
 	if _, err = service.checkTeamsWork(ctx); err != nil {
 		t.Fatalf("lifecycle check: %v", err)
@@ -210,21 +222,23 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 	if workerItem.State != "staged" {
 		t.Fatalf("worker lost publication state: %q", workerItem.State)
 	}
-	registered, err := c.registerTeamsV2(ctx, client, d, credential, w, merged, manifest)
-	if err != nil || registered.Upload.State != "bound" || len(registered.Assignments) != 1 {
-		t.Fatalf("v2 registration: %+v %v", registered, err)
+	if _, err := c.registerTeamsV2(ctx, cfg, client, d, credential, w, merged, manifest); !errors.Is(err, errTeamsSnapshotChanged) {
+		t.Fatalf("registration replaced a persisted draft: %v", err)
 	}
-	draft, err := c.stageTeamsV2Result(ctx, cfg, d, credential, registered)
+	draft, err := readTeamsV2Draft(ctx, c.reader(), w.ID)
 	if err != nil || draft.State != "accepted" || !strings.Contains(string(draft.Payload), `"total_tokens":123`) {
-		t.Fatalf("stage partial result %s %v", draft.Payload, err)
+		t.Fatalf("draft: %v", err)
 	}
-	replayed, err := c.stageTeamsV2Result(ctx, cfg, d, credential, registered)
-	if err != nil || replayed.PayloadHash != draft.PayloadHash || string(replayed.Payload) != string(draft.Payload) {
-		t.Fatal("draft retry changed reviewed bytes", err)
+	// Simulate a crash after the server accepted but before the receipt was
+	// stored, followed by an unrelated source update and a damaged/replaced
+	// registration. Reconciliation uses the original signed submission.
+	execTx(t, c.DB, `UPDATE teams_v2_results SET state='needs_reconcile',receipt_json=''`, `DELETE FROM teams_send_log`, `UPDATE teams_v2_uploads SET state='sealed',binding_json='{}'`, `UPDATE teams_source_revision SET revision=revision+1 WHERE id=1`)
+	receipt, err := c.reconcileTeamsV2Receipt(ctx, client, d, credential, w.ID)
+	if err != nil || receipt.PublicationState != "published" {
+		t.Fatalf("receipt recovery: %+v %v", receipt, err)
 	}
-	receipt, err := c.sendTeamsV2Approved(ctx, cfg, client, d, credential, w.ID, manifest)
-	if err != nil || receipt.PublicationState != "staged" || !receipt.ProjectionPending {
-		t.Fatalf("synthetic v2 submit: %+v %v", receipt, err)
+	if _, err = c.reconcileTeamsV2Receipt(ctx, client, d, credential, w.ID); err != nil {
+		t.Fatalf("receipt refresh: %v", err)
 	}
 	if n := countRows(t, c, `SELECT COUNT(*) FROM teams_send_log WHERE work_id=?`, w.ID); n != 1 {
 		t.Fatal("accepted receipt not recorded")

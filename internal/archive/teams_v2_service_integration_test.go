@@ -102,7 +102,26 @@ func TestTeamsV2SyntheticPostgres(t *testing.T) {
 	}
 	defer client.Destroy()
 	c, cfg := testCatalog(t)
-	d := LibraryDescriptor{ID: library, Instance: "synthetic-instance"}
+	cfg.Application = filepath.Join(t.TempDir(), "application")
+	d, err := ensureLibraryDescriptor(cfg, "Synthetic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.ID = library
+	if err = durableJSON(descriptorPath(cfg), d); err != nil {
+		t.Fatal(err)
+	}
+	credentialBytes, err := credential.CredentialBytes(d.Instance, installationID(cfg.Application))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(credentialBytes)
+	override(t, &teamsLoadCredential, func(_ *Catalog, _ Config, desc LibraryDescriptor) (*teams.EnrollmentCredential, error) {
+		return teams.ParseCredential(credentialBytes, desc.ID, desc.Instance, installationID(cfg.Application), true)
+	})
+	override(t, &teamsDeviceClient, func(origin, installation string, key ed25519.PrivateKey, _ bool) (*teams.DeviceClient, error) {
+		return teams.NewDeviceClient(origin, installation, key, true)
+	})
 	settings, err := c.setTeamsLocalSettings(ctx, d.ID, d.Instance, credential.OrgID, credential.InstallationID, teamsPayloadHash(key.Public().(ed25519.PublicKey)), true, false, credential.MetricsDefault.PolicyVersion)
 	if err != nil {
 		t.Fatal(err)
@@ -152,29 +171,33 @@ func TestTeamsV2SyntheticPostgres(t *testing.T) {
 	if work == nil {
 		t.Fatalf("synthetic work missing: status %q", poll.CapabilityStatus)
 	}
-	snapshot, err := c.teamsObserveV2Codex(ctx, cfg, d, credential)
-	if err != nil || len(snapshot.Items) != 1 || snapshot.Items[0].Protection != "private" {
-		t.Fatalf("synthetic snapshot: %v", err)
+	override(t, &teamsWorkerCapabilities, func() teamsCapabilityManifest { return manifest })
+	override(t, &teamsLoadSourceConfig, func(string) (Config, error) { return cfg, nil })
+	service := testServer(t, cfg, c)
+	if _, err = service.checkTeamsWork(ctx); err != nil {
+		t.Fatalf("worker check: %v", err)
 	}
-	registration, err := c.registerTeamsV2(ctx, client, d, credential, *work, snapshot, manifest)
-	if err != nil {
-		t.Fatalf("v2 register: %v", err)
-	}
-	draft, err := c.stageTeamsV2Result(ctx, cfg, d, credential, registration)
-	if err != nil || draft.State != "approved" {
-		t.Fatalf("v2 draft: %v %s", err, draft.State)
-	}
-	receipt, err := c.sendTeamsV2Approved(ctx, cfg, client, d, credential, work.ID, manifest)
-	if err != nil {
-		t.Fatalf("v2 send: %v", err)
-	}
-	if receipt.PayloadSHA256 != draft.PayloadHash || (receipt.PublicationState != "staged" && receipt.PublicationState != "published") {
-		t.Fatalf("unexpected receipt: %s", receipt.PublicationState)
+	draft, err := readTeamsV2Draft(ctx, c.reader(), work.ID)
+	if err != nil || draft.State != "accepted" {
+		t.Fatalf("worker draft: %s %v", draft.State, err)
 	}
 	if !bytes.Contains(draft.Payload, []byte(`"total_tokens":123`)) {
 		t.Fatal("synthetic result was not 123")
 	}
-	var view struct { Rows []struct { Values map[string]json.RawMessage `json:"values"` } `json:"rows"`; Coverage []struct { SourceState string `json:"source_state"` } `json:"coverage"` }
-	control("/_test/read",map[string]string{"version_id":issued.VersionID},&view)
-	if len(view.Rows)!=1 || string(view.Rows[0].Values["total_tokens"])!="123" || len(view.Coverage)!=1 || view.Coverage[0].SourceState!="partial" { t.Fatalf("projection did not contain the partial synthetic total: %+v",view) }
+	var receipt teams.Receipt
+	if err = json.Unmarshal([]byte(draft.ReceiptJSON), &receipt); err != nil || (receipt.PublicationState != "staged" && receipt.PublicationState != "published") {
+		t.Fatalf("worker receipt: %v %s", err, receipt.PublicationState)
+	}
+	var view struct {
+		Rows []struct {
+			Values map[string]json.RawMessage `json:"values"`
+		} `json:"rows"`
+		Coverage []struct {
+			SourceState string `json:"source_state"`
+		} `json:"coverage"`
+	}
+	control("/_test/read", map[string]string{"version_id": issued.VersionID}, &view)
+	if len(view.Rows) != 1 || string(view.Rows[0].Values["total_tokens"]) != "123" || len(view.Coverage) != 1 || view.Coverage[0].SourceState != "partial" {
+		t.Fatalf("projection did not contain the partial synthetic total: %+v", view)
+	}
 }

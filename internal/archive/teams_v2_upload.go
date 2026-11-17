@@ -39,10 +39,10 @@ func readTeamsV2Upload(ctx context.Context, q interface {
 // prepareTeamsV2Upload must be called under the sharing lease after obtaining
 // a fresh signed watermark. It commits identity exposure and exact page bytes
 // before the first possible emission. It does not itself send anything.
-func (c *Catalog) prepareTeamsV2Upload(ctx context.Context, w teams.Work, d LibraryDescriptor, credential *teams.EnrollmentCredential, snapshot teamsV2Inventory, policy teams.MetricsDefault, watermark teams.SourceWatermark, appVersion string) (teamsV2Upload, error) {
+func (c *Catalog) prepareTeamsV2Upload(ctx context.Context, w teams.Work, d LibraryDescriptor, credential *teams.EnrollmentCredential, snapshot teamsV2Inventory, policy teams.MetricsDefault, watermark teams.SourceWatermark, manifest teams.CapabilityManifest) (teamsV2Upload, error) {
 	var out teamsV2Upload
 	plan, err := teamsPlanFromWork(w)
-	if err != nil || len(plan.Metrics) != 1 || plan.Metrics[0].Field != "total_tokens" || credential == nil || credential.LibraryID != d.ID || w.LibraryID != d.ID || !teamsVersionAtLeast(appVersion, teamsFeatureBuildMinimum) {
+	if err != nil || len(plan.Metrics) != 1 || plan.Metrics[0].Field != "total_tokens" || credential == nil || credential.LibraryID != d.ID || w.LibraryID != d.ID || !teamsNumericBuildEligible(manifest) {
 		return out, errTeamsQueryUnsupported
 	}
 	if _, err = teams.WorkPath(w.ID, "status"); err != nil {
@@ -58,7 +58,7 @@ func (c *Catalog) prepareTeamsV2Upload(ctx context.Context, w teams.Work, d Libr
 		ApprovalPolicy string `json:"approval_policy"`
 		MinAppVersion  string `json:"min_app_version"`
 	}
-	if json.Unmarshal(w.Config, &config) != nil || !teamsVersionAtLeast(appVersion, config.MinAppVersion) {
+	if json.Unmarshal(w.Config, &config) != nil || !teamsVersionAtLeast(manifest.AppVersion, config.MinAppVersion) {
 		return out, errTeamsQueryUnsupported
 	}
 	err = c.writeTransaction(ctx, "teams-v2-reserve-upload", func(tx *sql.Tx) error {

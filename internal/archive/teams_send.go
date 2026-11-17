@@ -188,6 +188,7 @@ func teamsSubmitFailure(err error) (string, string) {
 // instance and protected installation credential. No worker calls it until
 // recovery, capability declaration and the remaining consent UI are enabled.
 var teamsDeviceClient = teams.NewDeviceClient
+var teamsLoadCredential = (*Catalog).loadTeamsCredential
 
 func (s *Server) withTeamsLibraryClient(ctx context.Context, action func(*teams.DeviceClient, LibraryDescriptor, *teams.EnrollmentCredential) error) error {
 	cfg := s.Config()
@@ -203,7 +204,7 @@ func (s *Server) withTeamsLibraryClient(ctx context.Context, action func(*teams.
 	if err != nil {
 		return err
 	}
-	credential, err := s.Catalog.loadTeamsCredential(cfg, descriptor)
+	credential, err := teamsLoadCredential(s.Catalog, cfg, descriptor)
 	if err != nil {
 		return err
 	}

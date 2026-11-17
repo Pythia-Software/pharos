@@ -28,3 +28,7 @@ func teamsBuildEligible(m teamsCapabilityManifest, required string) bool {
 	}
 	return false
 }
+
+func teamsNumericBuildEligible(m teamsCapabilityManifest) bool {
+	return teamsBuildEligible(m, "source_snapshot_v2") && teamsBuildEligible(m, "deterministic_query_v1")
+}

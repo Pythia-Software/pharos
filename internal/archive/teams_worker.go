@@ -20,12 +20,13 @@ type teamsWorkerItem struct {
 	PayloadHash string
 }
 type teamsWorkerState struct {
-	mu       sync.Mutex
-	wake     chan struct{}
-	items    map[string]teamsWorkerItem
-	next     time.Time
-	checking bool
-	problem  string
+	mu             sync.Mutex
+	wake           chan struct{}
+	items          map[string]teamsWorkerItem
+	next           time.Time
+	checking       bool
+	problem        string
+	reconcileAfter string
 }
 
 var teamsWorkerCapabilities = teamsBuildCapabilities
@@ -66,8 +67,16 @@ func (s *Server) teamsLoop(ctx context.Context) {
 			}
 		case <-timer.C:
 		}
+		settings, settingsErr := readTeamsSettings(ctx, s.Catalog.reader())
+		if settingsErr == nil && (!settings.Enabled || settings.LibraryID == "" || settings.InstallationID == "") {
+			delay = teamsIdleDelay()
+			continue
+		}
 		pass := s.Catalog.beginPass(ctx, "teams.check", triggerSchedule)
 		active, err := s.checkTeamsWork(ctx)
+		if errors.Is(err, errTeamsNotEnrolled) {
+			err = nil
+		}
 		if active {
 			pass.worked(1, "check")
 		}
@@ -102,11 +111,46 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 			return nil
 		}
 		manifest := teamsWorkerCapabilities()
-		if manifest.AppVersion == "" {
+		if !teamsNumericBuildEligible(manifest) {
 			s.teamsWorker.mu.Lock()
 			s.teamsWorker.problem = "This Pharos build needs an update before it can process Teams requests."
 			s.teamsWorker.mu.Unlock()
 			return nil
+		}
+		// Reconcile persisted sends before any source observation or upload.
+		s.teamsWorker.mu.Lock()
+		after := s.teamsWorker.reconcileAfter
+		s.teamsWorker.mu.Unlock()
+		rows, e := s.Catalog.reader().QueryContext(ctx, `SELECT work_id FROM teams_v2_results WHERE work_id>? AND (state IN ('sending','needs_reconcile') OR (state='accepted' AND json_valid(receipt_json) AND json_extract(receipt_json,'$.publication_state')='staged')) ORDER BY work_id LIMIT 100`, after)
+		if e != nil {
+			return e
+		}
+		var toReconcile []string
+		for rows.Next() {
+			var id string
+			if e = rows.Scan(&id); e != nil {
+				rows.Close()
+				return e
+			}
+			toReconcile = append(toReconcile, id)
+		}
+		if e = rows.Err(); e != nil {
+			rows.Close()
+			return e
+		}
+		rows.Close()
+		s.teamsWorker.mu.Lock()
+		if len(toReconcile) == 0 {
+			s.teamsWorker.reconcileAfter = ""
+		} else {
+			s.teamsWorker.reconcileAfter = toReconcile[len(toReconcile)-1]
+		}
+		s.teamsWorker.mu.Unlock()
+		for _, id := range toReconcile {
+			_, reconcileErr := s.Catalog.reconcileTeamsV2Receipt(ctx, client, d, credential, id)
+			if errors.Is(reconcileErr, teams.ErrReceiptMismatch) {
+				s.Catalog.markTeamsV2Outcome(id, "unconfirmed")
+			}
 		}
 		poll, e := client.Poll(ctx, teams.PollRequest{AppVersion: manifest.AppVersion, LibraryIDs: []string{d.ID}, CapabilityManifest: &manifest})
 		if e != nil {
@@ -145,6 +189,37 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 				items[work.ID] = item
 				continue
 			}
+			prior, priorErr := readTeamsV2Draft(ctx, s.Catalog.reader(), work.ID)
+			if priorErr == nil && (prior.State == "approved" || prior.State == "awaiting_review") {
+				item.Payload = bytesClone(prior.Payload)
+				item.PayloadHash = prior.PayloadHash
+				item.State = prior.State
+				if prior.State == "approved" {
+					receipt, sendErr := s.Catalog.sendTeamsV2Approved(ctx, s.Config(), client, d, credential, work.ID, manifest)
+					if sendErr != nil {
+						item.State = "needs_refresh"
+					} else {
+						item.State = receipt.PublicationState
+					}
+				}
+				items[work.ID] = item
+				continue
+			}
+			if priorErr == nil && (prior.State == "sending" || prior.State == "needs_reconcile" || prior.State == "accepted") {
+				receipt, reconcileErr := s.Catalog.reconcileTeamsV2Receipt(ctx, client, d, credential, work.ID)
+				if teamsReceiptDefinitelyAbsent(reconcileErr) && prior.State != "accepted" {
+					receipt, reconcileErr = s.Catalog.sendTeamsV2Approved(ctx, s.Config(), client, d, credential, work.ID, manifest)
+				}
+				item.Payload = bytesClone(prior.Payload)
+				item.PayloadHash = prior.PayloadHash
+				if reconcileErr != nil {
+					item.State = "unconfirmed"
+				} else {
+					item.State = receipt.PublicationState
+				}
+				items[work.ID] = item
+				continue
+			}
 			if _, e = teamsPlanFromWork(work); e != nil {
 				item.State = "needs_update"
 				items[work.ID] = item
@@ -156,7 +231,7 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 				items[work.ID] = item
 				continue
 			}
-			registration, e := s.Catalog.registerTeamsV2(ctx, client, d, credential, work, snapshot, manifest)
+			registration, e := s.Catalog.registerTeamsV2(ctx, s.Config(), client, d, credential, work, snapshot, manifest)
 			if e != nil {
 				switch {
 				case errors.Is(e, errTeamsConsentStale):
@@ -202,6 +277,9 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 		s.teamsWorker.mu.Unlock()
 		return nil
 	})
+	if errors.Is(err, errTeamsNotEnrolled) {
+		return false, nil
+	}
 	if err != nil {
 		s.teamsWorker.mu.Lock()
 		s.teamsWorker.problem = "The Teams check could not complete. Try again."

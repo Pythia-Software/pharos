@@ -96,7 +96,7 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			return nil
 		case r.URL.Path == "/api/teams/worker/policy" && r.Method == http.MethodGet:
 			manifest := teamsWorkerCapabilities()
-			if manifest.AppVersion == "" {
+			if !teamsNumericBuildEligible(manifest) {
 				return errTeamsQueryUnsupported
 			}
 			poll, e := client.Poll(r.Context(), teams.PollRequest{AppVersion: manifest.AppVersion, LibraryIDs: []string{d.ID}, CapabilityManifest: &manifest})
@@ -121,7 +121,7 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			version := *body.PolicyVersion
 			if *body.Enabled {
 				manifest := teamsWorkerCapabilities()
-				if manifest.AppVersion == "" {
+				if !teamsNumericBuildEligible(manifest) {
 					return errTeamsQueryUnsupported
 				}
 				poll, e := client.Poll(r.Context(), teams.PollRequest{AppVersion: manifest.AppVersion, LibraryIDs: []string{d.ID}, CapabilityManifest: &manifest})
@@ -225,7 +225,7 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			s.teamsWorker.items[body.WorkID] = item
 			s.teamsWorker.mu.Unlock()
 			manifest := teamsWorkerCapabilities()
-			if manifest.AppVersion == "" {
+			if !teamsNumericBuildEligible(manifest) {
 				return errTeamsQueryUnsupported
 			}
 			bounded, cancel := context.WithTimeout(r.Context(), 15*time.Second)

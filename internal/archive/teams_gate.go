@@ -1,6 +1,8 @@
 package archive
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"os"
 
@@ -21,4 +23,24 @@ func (c *Catalog) teamsSharingLease() (*os.File, error) {
 		return nil, errTeamsSharingBusy
 	}
 	return lock, err
+}
+
+// Source settings can change which previously observed units are eligible.
+// Bump before touching files so a failed or interrupted mutation invalidates
+// an already prepared snapshot too. The caller holds the lease until the
+// in-memory settings have been reloaded.
+func (c *Catalog) beginTeamsSourceMutation(ctx context.Context) (*os.File, error) {
+	lease, err := c.teamsSharingLease()
+	if err != nil {
+		return nil, err
+	}
+	err = c.writeTransaction(ctx, "teams-source-settings", func(tx *sql.Tx) error {
+		_, e := tx.ExecContext(ctx, `UPDATE teams_source_revision SET revision=revision+1 WHERE id=1`)
+		return e
+	})
+	if err != nil {
+		lease.Close()
+		return nil, err
+	}
+	return lease, nil
 }

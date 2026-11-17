@@ -31,12 +31,8 @@ func teamsV2ReceiptMatches(receipt teams.Receipt, u teamsV2Upload, b teams.Sourc
 // retry reuses the exact persisted body and idempotency key.
 func (c *Catalog) sendTeamsV2Approved(ctx context.Context, cfg Config, client *teams.DeviceClient, d LibraryDescriptor, credential *teams.EnrollmentCredential, workID string, manifest teams.CapabilityManifest) (teams.Receipt, error) {
 	var empty teams.Receipt
-	if client == nil || credential == nil || !teamsVersionAtLeast(manifest.AppVersion, teamsFeatureBuildMinimum) {
+	if client == nil || credential == nil || !teamsNumericBuildEligible(manifest) {
 		return empty, errTeamsConsentStale
-	}
-	snapshot, err := c.teamsObserveV2Codex(ctx, cfg, d, credential)
-	if err != nil {
-		return empty, err
 	}
 	lease, err := c.teamsSharingLease()
 	if err != nil {
@@ -53,40 +49,35 @@ func (c *Catalog) sendTeamsV2Approved(ctx context.Context, cfg Config, client *t
 	if err != nil {
 		return empty, err
 	}
-	var savedBinding teams.SourceBinding
-	var savedAssignments []sourcewire.Assignment
-	if json.Unmarshal(u.BindingJSON, &savedBinding) != nil || json.Unmarshal(u.AssignmentsJSON, &savedAssignments) != nil || savedAssignments == nil || u.State != "bound" || u.LibraryID != d.ID || u.InstanceID != d.Instance || u.OrgID != credential.OrgID || u.InstallationID != credential.InstallationID {
+	if u.LibraryID != d.ID || u.InstanceID != d.Instance || u.OrgID != credential.OrgID || u.InstallationID != credential.InstallationID {
 		return empty, errTeamsConsentStale
 	}
-	if draft.State == "accepted" {
-		var receipt teams.Receipt
-		if json.Unmarshal([]byte(draft.ReceiptJSON), &receipt) != nil || !teamsV2ReceiptMatches(receipt, u, savedBinding, draft) {
-			return empty, errTeamsConsentStale
-		}
-		return receipt, nil
-	}
-	if draft.State == "sending" || draft.State == "needs_reconcile" {
-		if len(draft.Submission) == 0 || teamsPayloadHash(draft.Submission) != draft.SubmissionHash {
-			return empty, errTeamsConsentStale
-		}
-		receipt, e := client.Receipt(ctx, workID, draft.PayloadHash, draft.SubmissionHash, draft.IdempotencyKey)
+	if draft.State == "accepted" || draft.State == "sending" || draft.State == "needs_reconcile" {
+		receipt, e := c.reconcileTeamsV2Receipt(ctx, client, d, credential, workID)
 		if e == nil {
-			if !teamsV2ReceiptMatches(receipt, u, savedBinding, draft) {
-				c.markTeamsV2Outcome(workID, "unconfirmed")
-				return empty, teams.ErrReceiptMismatch
-			}
-			return c.recordTeamsV2Receipt(ctx, u, draft, receipt)
+			return receipt, nil
 		}
 		if errors.Is(e, teams.ErrReceiptMismatch) {
 			c.markTeamsV2Outcome(workID, "unconfirmed")
 			return empty, e
 		}
-		var response *teams.HTTPError
-		if !errors.As(e, &response) || response.Status != 404 || response.Code != "receipt_not_found" {
+		if draft.State == "accepted" || !teamsReceiptDefinitelyAbsent(e) {
 			return empty, e
 		}
 	} else if draft.State != "approved" {
 		return empty, errTeamsConsentStale
+	}
+	var savedBinding teams.SourceBinding
+	var savedAssignments []sourcewire.Assignment
+	if json.Unmarshal(u.BindingJSON, &savedBinding) != nil || json.Unmarshal(u.AssignmentsJSON, &savedAssignments) != nil || savedAssignments == nil || u.State != "bound" {
+		return empty, errTeamsConsentStale
+	}
+	if !teamsSourceConfigCurrent(cfg) {
+		return empty, errTeamsSnapshotChanged
+	}
+	snapshot, err := c.teamsObserveV2Codex(ctx, cfg, d, credential)
+	if err != nil {
+		return empty, err
 	}
 	poll, err := client.Poll(ctx, teams.PollRequest{AppVersion: manifest.AppVersion, LibraryIDs: []string{d.ID}, CapabilityManifest: &manifest})
 	if err != nil {
