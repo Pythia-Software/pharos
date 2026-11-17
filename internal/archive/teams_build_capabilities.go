@@ -10,7 +10,7 @@ type teamsCapabilityManifest = teams.CapabilityManifest
 const teamsFeatureBuildMinimum = "0.10.0"
 
 func teamsBuildCapabilities() teamsCapabilityManifest {
-	m := teamsCapabilityManifest{SchemaVersion: 1, AppVersion: pushVersion, Capabilities: []string{"deterministic_query_v1", "export_deterministic_v1", "recurring_deterministic_v1", "scoped_artifact_v1", "source_snapshot_v2"}}
+	m := teamsCapabilityManifest{SchemaVersion: 1, AppVersion: pushVersion, Capabilities: []string{"deterministic_query_v1", "export_deterministic_v1", "recurring_deterministic_v1", "report_deterministic_v1", "scoped_artifact_v1", "source_snapshot_v2"}}
 	return m
 }
 
