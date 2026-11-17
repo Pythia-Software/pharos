@@ -234,6 +234,32 @@ CREATE TABLE IF NOT EXISTS teams_source_mapping_exposure (
   mapping_revision INTEGER NOT NULL REFERENCES teams_source_mapping_revisions(revision),
   exposed_at TEXT NOT NULL
 );
+-- Immutable, locally scoped pre-send bytes. A restored instance remains
+-- disabled until it reconciles signed server watermarks and pending receipts.
+CREATE TABLE IF NOT EXISTS teams_v2_uploads (
+  work_id TEXT PRIMARY KEY, version_id TEXT NOT NULL, library_id TEXT NOT NULL,
+  instance_id TEXT NOT NULL, org_id TEXT NOT NULL, installation_id TEXT NOT NULL,
+  config_sha256 TEXT NOT NULL, snapshot_id TEXT NOT NULL, binding_id TEXT NOT NULL, inventory_revision INTEGER NOT NULL,
+  inventory_sha256 TEXT NOT NULL, local_revision INTEGER NOT NULL,
+  evaluation_revision INTEGER NOT NULL, settings_revision INTEGER NOT NULL,
+  source_revision INTEGER NOT NULL, privacy_revision INTEGER NOT NULL, generation INTEGER NOT NULL,
+  mode TEXT NOT NULL, policy_version INTEGER NOT NULL, authorization_json BLOB NOT NULL, pages_json BLOB NOT NULL, seal_json BLOB NOT NULL,
+  sealed_json BLOB, binding_json BLOB, assignments_json BLOB,
+  state TEXT NOT NULL CHECK(state IN ('prepared','sealed','bound','uncertain','abandoned'))
+);
+CREATE TABLE IF NOT EXISTS teams_v2_results (
+  work_id TEXT PRIMARY KEY REFERENCES teams_v2_uploads(work_id),
+  config BLOB NOT NULL, payload BLOB NOT NULL, payload_sha256 TEXT NOT NULL,
+  assignment_sha256 TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('awaiting_review','approved','sending','needs_reconcile','unconfirmed','accepted','rejected','withdrawn')),
+  approved_at TEXT NOT NULL DEFAULT '', decision_id TEXT NOT NULL DEFAULT '',
+  submission BLOB, submission_sha256 TEXT NOT NULL DEFAULT '', receipt_json TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS teams_v2_declines (
+  work_id TEXT PRIMARY KEY, library_id TEXT NOT NULL, instance_id TEXT NOT NULL,
+  org_id TEXT NOT NULL, installation_id TEXT NOT NULL, config_hash TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('pending','sent'))
+);
 
 -- Enrollment is disabled until its installation credential and library
 -- identity are confirmed. Outbox entries are local, never remote previews.

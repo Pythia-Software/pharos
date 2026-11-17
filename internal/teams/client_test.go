@@ -55,6 +55,20 @@ func TestDeviceClientSyntheticExchange(t *testing.T) {
 	if err != nil || len(poll.Work) != 1 {
 		t.Fatalf("poll: %+v %v", poll, err)
 	}
+	beforeCapabilities := calls
+	for _, manifest := range []CapabilityManifest{
+		{SchemaVersion: 1, AppVersion: "0.9.9", Capabilities: []string{}},
+		{SchemaVersion: 1, AppVersion: "1.0.0", Capabilities: []string{"source_snapshot_v2", "deterministic_query_v1"}},
+		{SchemaVersion: 1, AppVersion: "1.0.0", Capabilities: []string{"source_snapshot_v2", "source_snapshot_v2"}},
+		{SchemaVersion: 1, AppVersion: "1.0.0", Capabilities: []string{"unknown"}},
+	} {
+		if _, e := c.Poll(ctx, PollRequest{AppVersion: "1.0.0", LibraryIDs: []string{"synthetic-library"}, CapabilityManifest: &manifest}); e == nil {
+			t.Fatal("invalid capability manifest accepted")
+		}
+	}
+	if calls != beforeCapabilities {
+		t.Fatal("invalid capability manifest reached server")
+	}
 	m := Manifest{LocalRevision: 1, Complete: true, SourceManifest: []Source{}}
 	if _, err = c.RegisterSources(ctx, id, m); err != nil {
 		t.Fatal(err)

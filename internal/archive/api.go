@@ -89,6 +89,7 @@ type Server struct {
 	queryMetadata chan struct{}
 	ask           askState
 	teams         teamsEnrollmentState
+	teamsWorker   teamsWorkerState
 	// ops is the operation registry (operations.go); journal writes it to
 	// the catalog, and leases watches other Pharos processes' leases.
 	ops     *opRegistry
@@ -118,6 +119,7 @@ type Server struct {
 func NewServer(config Config, catalog *Catalog) *Server {
 	server := &Server{Catalog: catalog, config: config, runs: []*SyncRun{}, queryMetadata: make(chan struct{}, 1)}
 	server.background.wake = make(chan struct{}, 1)
+	server.teamsWorker.wake = make(chan struct{}, 1)
 	server.claudeWatchWake = make(chan struct{}, 1)
 	server.claudeSettingsWake = make(chan struct{}, 1)
 	server.claudeWatch = server.newClaudeDownloads()
@@ -221,6 +223,7 @@ func (s *Server) Serve() error {
 	s.daemon("keepWALSmall", func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.daemon("automaticLoop", s.automaticLoop)
 	s.daemon("backgroundLoop", s.backgroundLoop)
+	s.daemon("teamsLoop", s.teamsLoop)
 	s.daemon("cpuLedger", s.cpuLedgerLoop)
 	s.daemon("cloudScheduleLoop", s.cloudScheduleLoop)
 	s.daemon("watchFeatureFlags", s.Catalog.watchFeatureFlags)
@@ -306,6 +309,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/teams/source-accounts") {
 		s.teamsSourceAccountsHTTP(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/teams/worker") {
+		s.teamsWorkerHTTP(w, r)
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/feedback/") {

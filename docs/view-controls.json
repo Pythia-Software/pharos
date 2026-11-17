@@ -9028,6 +9028,78 @@
       "reason": "Starts or cancels an explicit local enrollment attempt; this is an action, not URL view state."
     },
     {
+      "key": "050eeddca16ffd4d:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "button",
+      "control": "onClick={() => void act(\"/check\", {})}",
+      "contract": "settings",
+      "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
+    },
+    {
+      "key": "06ce6df1382dee77:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "button",
+      "control": "onClick={() => void act(\"/settings\", { enabled: false, optOut: status.optOut, settingsRevision: status.settingsRevision, policyVersion: status.acknowledgedPolicy })}",
+      "contract": "settings",
+      "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
+    },
+    {
+      "key": "203788fdcc47c70e:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "button",
+      "control": "onClick={() => void act(\"/allow-source\", { workId: item.workId, settingsRevision: status.settingsRevision })}",
+      "contract": "settings",
+      "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
+    },
+    {
+      "key": "26527d224e0831ce:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "input",
+      "control": "checked={allowMetrics} onChange={e => setAllowMetrics(e.target.checked)}",
+      "contract": "settings",
+      "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
+    },
+    {
+      "key": "57c9884373426922:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "button",
+      "control": "onClick={() => void reviewPolicy()}",
+      "contract": "settings",
+      "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
+    },
+    {
+      "key": "8b2573051f619382:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "button",
+      "control": "onClick={() => void act(\"/approve-result\", { workId: item.workId, payloadHash: item.payloadHash })}",
+      "contract": "settings",
+      "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
+    },
+    {
+      "key": "dd6839c645db8876:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "button",
+      "control": "onClick={() => void act(\"/settings\", { enabled: true, optOut: !allowMetrics, settingsRevision: policy.settingsRevision, policyVersion: policy.policyVersion })}",
+      "contract": "settings",
+      "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
+    },
+    {
+      "key": "ef917d3e67d51efc:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "button",
+      "control": "onClick={() => void act(\"/decline\", { workId: item.workId })}",
+      "contract": "settings",
+      "reason": "Local Teams checking, policy and request approval controls are library settings and consent actions."
+    },
+    {
       "key": "7c0248af1a26259f:0",
       "file": "web/src/text-search-editor.tsx",
       "owner": "ConditionOptions",

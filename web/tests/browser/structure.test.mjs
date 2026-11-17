@@ -2408,6 +2408,7 @@ test('Teams source account review requires an explicit attestation', { skip }, a
   const source = { bindingId:'synthetic-binding', provider:'codex', sourceName:'Synthetic source', accountLabel:'local', host:'synthetic-host', root:'/synthetic', identifiable:2, ambiguous:1, mode:'unassigned', exposed:false };
   const app = await open(t, { url:'/settings/teams', ready:'#teamsSettingsPage .teams-settings', api: {
     'GET /api/teams/enrollment': { state:'connected_paused', available:true, library:'Synthetic', fingerprint:'', problem:'' },
+    'GET /api/teams/worker': { enabled:false, optOut:true, settingsRevision:4, acknowledgedPolicy:0, nextCheck:'', checking:false, problem:'', items:[] },
     'GET /api/teams/source-accounts': () => ({ sourceRevision:7, settingsRevision:4, proofRequested:true, sources:[source] }),
     'POST /api/teams/source-accounts/review': ({body}) => { review=body; source.mode=body.mode; return {reviewed:true}; },
   }});
@@ -2418,4 +2419,22 @@ test('Teams source account review requires an explicit attestation', { skip }, a
   await button.click();
   await app.page.getByText(/Status: Work account/).waitFor();
   assert.deepEqual(review, {sourceBindingId:'synthetic-binding', expectedRevision:7, mode:'work', attested:true});
+});
+
+test('Teams checking requires a displayed policy choice', { skip }, async t => {
+  let settings;
+  const state = { enabled:false, optOut:true, settingsRevision:4, acknowledgedPolicy:0, nextCheck:'', checking:false, problem:'', items:[] };
+  const app = await open(t, { url:'/settings/teams', ready:'#teamsSettingsPage .teams-settings', api: {
+    'GET /api/teams/enrollment': { state:'connected_paused', available:true, library:'Synthetic', fingerprint:'', problem:'' },
+    'GET /api/teams/worker': () => state,
+    'GET /api/teams/worker/policy': { value:true, policyVersion:2, settingsRevision:4 },
+    'POST /api/teams/worker/settings': ({body}) => { settings=body; state.enabled=body.enabled; state.optOut=body.optOut; state.acknowledgedPolicy=body.policyVersion; return {updated:true}; },
+    'GET /api/teams/source-accounts': { sourceRevision:0, settingsRevision:4, proofRequested:true, sources:[] },
+  }});
+  await app.page.getByRole('button',{name:'Review organization default'}).click();
+  await app.page.getByText(/Automatic attributed statistics are enabled/).waitFor();
+  await app.page.getByLabel('Allow automatic eligible statistics when the organization enables them.').check();
+  await app.page.getByRole('button',{name:'Start checking requests'}).click();
+  await app.page.getByRole('button',{name:'Check now'}).waitFor();
+  assert.deepEqual(settings,{enabled:true,optOut:false,settingsRevision:4,policyVersion:2});
 });

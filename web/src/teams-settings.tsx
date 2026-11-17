@@ -4,6 +4,58 @@ import "./teams-settings.css";
 type EnrollmentStatus = { state: string; available: boolean; library: string; fingerprint: string; problem: string; optedOut?: boolean };
 type SourceAccount = { bindingId: string; provider: string; sourceName: string; accountLabel: string; host: string; root: string; identifiable: number; ambiguous: number; mode: string; exposed: boolean; unindexed?: boolean };
 type SourceStatus = { sourceRevision: number; settingsRevision: number; proofRequested: boolean; sources: SourceAccount[] };
+type WorkItem = { workId: string; question: string; requester: string; readers: string[] | null; state: string; payloadHash: string; payload: unknown };
+type WorkerStatus = { enabled: boolean; optOut: boolean; settingsRevision: number; acknowledgedPolicy: number; nextCheck: string; checking: boolean; problem: string; items: WorkItem[] };
+type OrgPolicy = { value: boolean; policyVersion: number; settingsRevision: number };
+
+async function workerRequest<T>(path = "", body?: object): Promise<T> {
+  const response = await fetch(`/api/teams/worker${path}`, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : undefined);
+  const value = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(value.error || "Teams is unavailable.");
+  return value as T;
+}
+
+function TeamsWork() {
+  const [status, setStatus] = useState<WorkerStatus | null>(null);
+  const [policy, setPolicy] = useState<OrgPolicy | null>(null);
+  const [allowMetrics, setAllowMetrics] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const refresh = useCallback(async () => { try { setStatus(await workerRequest<WorkerStatus>()); } catch { setError("Could not read Teams requests."); } }, []);
+  useEffect(() => { void refresh(); const timer = window.setInterval(() => { void refresh(); }, 5000); return () => window.clearInterval(timer); }, [refresh]);
+  const act = async (path: string, body: object) => {
+    setBusy(true); setError("");
+    try { await workerRequest(path, body); await refresh(); }
+    catch (e) { await refresh(); setError(e instanceof Error ? e.message : "Could not update Teams."); }
+    finally { setBusy(false); }
+  };
+  const reviewPolicy = async () => { setBusy(true); setError(""); try { setPolicy(await workerRequest<OrgPolicy>("/policy")); } catch (e) { setError(e instanceof Error ? e.message : "Could not read the organization default."); } finally { setBusy(false); } };
+  return <section aria-label="Teams requests">
+    <h3>Teams requests</h3>
+    {!status?.enabled ? <>
+      <p>Checking is paused. Review the organization default before enabling this library.</p>
+      <button type="button" disabled={busy || !status} onClick={() => void reviewPolicy()}>Review organization default</button>
+      {policy ? <><p>Automatic attributed statistics are {policy.value ? "enabled" : "disabled"} by the organization. Private conversations can contribute eligible numeric statistics; content and AI answers have separate permissions.</p>
+        <label><input type="checkbox" checked={allowMetrics} onChange={e => setAllowMetrics(e.target.checked)} /> Allow automatic eligible statistics when the organization enables them.</label>
+        <div><button type="button" disabled={busy} onClick={() => void act("/settings", { enabled: true, optOut: !allowMetrics, settingsRevision: policy.settingsRevision, policyVersion: policy.policyVersion })}>Start checking requests</button></div></> : null}
+    </> : <>
+      <p>Checking is on. New remote requests can wait 10–15 minutes while this Mac is idle. Use Check now to look sooner.</p>
+      {status.nextCheck && !status.nextCheck.startsWith("0001") ? <p>Next check: {new Date(status.nextCheck).toLocaleTimeString()}.</p> : null}
+      <button type="button" disabled={busy || status.checking} onClick={() => void act("/check", {})}>Check now</button>{" "}
+      <button type="button" disabled={busy} onClick={() => void act("/settings", { enabled: false, optOut: status.optOut, settingsRevision: status.settingsRevision, policyVersion: status.acknowledgedPolicy })}>Pause checking</button>
+    </>}
+    {status?.problem ? <p role="status">{status.problem}</p> : null}
+    {status?.items.map(item => <div className="teams-source" key={item.workId}>
+      <h4>{item.question}</h4><p>Requested by {item.requester || "your organization"}. Readers: {item.readers?.join(", ") || "none listed"}.</p>
+      <p>Status: {item.state.replaceAll("_", " ")}.</p>
+      {item.state === "awaiting_source_consent" ? <><p>Allow this request to check opaque source membership. This does not approve sending an answer.</p><button type="button" disabled={busy || !status} onClick={() => void act("/allow-source", { workId: item.workId, settingsRevision: status.settingsRevision })}>Allow source checks</button></> : null}
+      {item.payload ? <pre>{JSON.stringify(item.payload, null, 2)}</pre> : null}
+      {item.state === "awaiting_review" ? <button type="button" disabled={busy} onClick={() => void act("/approve-result", { workId: item.workId, payloadHash: item.payloadHash })}>Approve and send this result</button> : null}{" "}
+      {["awaiting_source_consent", "awaiting_review", "decline_pending"].includes(item.state) ? <button type="button" disabled={busy} onClick={() => void act("/decline", { workId: item.workId })}>{item.state === "decline_pending" ? "Retry decline" : "Decline request"}</button> : null}
+    </div>)}
+    {error ? <p role="alert">{error}</p> : null}
+  </section>;
+}
 
 async function sourceRequest(path = "", body?: object): Promise<SourceStatus> {
   const response = await fetch(`/api/teams/source-accounts${path}`, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : undefined);
@@ -82,6 +134,6 @@ export function TeamsSettings() {
     {error ? <p role="alert">{error}</p> : null}
     {waiting ? <button type="button" disabled={busy} onClick={() => void act(true)}>Cancel connection</button>
       : <button type="button" disabled={busy || !status?.available || status.state === "connected_paused" || status.state === "reconcile"} onClick={() => void act()}>Connect Teams</button>}
-    {status?.state === "connected_paused" ? <SourceAccounts /> : null}
+    {status?.state === "connected_paused" ? <><TeamsWork /><SourceAccounts /></> : null}
   </div>;
 }

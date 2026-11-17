@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"time"
 )
 
 const maxDeviceBody = 2 << 20
 
 var ErrReceiptMismatch = errors.New("Teams receipt does not match submitted request")
+var capabilityVersionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 
 type HTTPError struct {
 	Status int
@@ -126,6 +128,19 @@ func (c *DeviceClient) Poll(ctx context.Context, in PollRequest) (PollResponse, 
 	if in.AppVersion == "" || in.LibraryIDs == nil || len(in.LibraryIDs) > 100 || in.WaitSeconds < 0 || in.WaitSeconds > 25 {
 		return out, errors.New("invalid poll")
 	}
+	if in.CapabilityManifest != nil {
+		m := in.CapabilityManifest
+		if m.SchemaVersion != 1 || m.AppVersion != in.AppVersion || !capabilityVersionPattern.MatchString(m.AppVersion) || m.Capabilities == nil {
+			return out, errors.New("invalid capability manifest")
+		}
+		previous := ""
+		for _, id := range m.Capabilities {
+			if (id != "deterministic_query_v1" && id != "scoped_artifact_v1" && id != "source_snapshot_v2") || id <= previous {
+				return out, errors.New("invalid capability manifest")
+			}
+			previous = id
+		}
+	}
 	seen := map[string]bool{}
 	for _, id := range in.LibraryIDs {
 		if _, err := LibraryPath(id, "privacy"); err != nil || seen[id] {
@@ -140,6 +155,9 @@ func (c *DeviceClient) Poll(ctx context.Context, in PollRequest) (PollResponse, 
 	err = c.exchange(ctx, http.MethodPost, "/v1/device/poll", b, &out)
 	if err != nil {
 		return out, err
+	}
+	if (out.CapabilityStatus != "" && out.CapabilityStatus != "needs_update") || (out.CapabilityStatus == "needs_update" && len(out.Work) != 0) {
+		return PollResponse{}, errors.New("invalid Teams capability status")
 	}
 	for _, w := range out.Work {
 		if err = w.VerifyConfig(); err != nil {
