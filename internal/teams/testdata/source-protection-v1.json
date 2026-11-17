@@ -1,0 +1,45 @@
+{
+  "observation": {
+    "version": 1,
+    "observation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "expected_revision": 0,
+    "revision": 1,
+    "token": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+    "witness": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+    "dependencies": [
+      "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM"
+    ],
+    "evidence_revision": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+    "protection": "flagged",
+    "classification": {
+      "state": "pending",
+      "required": true,
+      "evidence_revision": "",
+      "policy_sha256": ""
+    },
+    "reviewed_flag_revision": 0,
+    "manual_review_evidence": ""
+  },
+  "canonical_json": "{\"version\":1,\"observation_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"expected_revision\":0,\"revision\":1,\"token\":\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\",\"witness\":\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI\",\"dependencies\":[\"AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM\"],\"evidence_revision\":\"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ\",\"protection\":\"flagged\",\"classification\":{\"state\":\"pending\",\"required\":true,\"evidence_revision\":\"\",\"policy_sha256\":\"\"},\"reviewed_flag_revision\":0,\"manual_review_evidence\":\"\"}",
+  "sha256": "cb79df11e904863031a692265634828dab63c1f036654af64a7b578abc893c09",
+  "accepted_receipt": {
+    "status": "accepted",
+    "observation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "revision": 1,
+    "observation_sha256": "cb79df11e904863031a692265634828dab63c1f036654af64a7b578abc893c09",
+    "privacy_revision": 7,
+    "origin_protection": "flagged",
+    "safety_pending": true
+  },
+  "held_receipt": {
+    "status": "held",
+    "observation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "revision": 0,
+    "observation_sha256": "cb79df11e904863031a692265634828dab63c1f036654af64a7b578abc893c09",
+    "privacy_revision": 0,
+    "origin_protection": "",
+    "safety_pending": true
+  },
+  "accepted_receipt_json": "{\"status\":\"accepted\",\"observation_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"revision\":1,\"observation_sha256\":\"cb79df11e904863031a692265634828dab63c1f036654af64a7b578abc893c09\",\"privacy_revision\":7,\"origin_protection\":\"flagged\",\"safety_pending\":true}",
+  "held_receipt_json": "{\"status\":\"held\",\"observation_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"revision\":0,\"observation_sha256\":\"cb79df11e904863031a692265634828dab63c1f036654af64a7b578abc893c09\",\"privacy_revision\":0,\"origin_protection\":\"\",\"safety_pending\":true}"
+}
