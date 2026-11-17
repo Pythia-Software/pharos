@@ -30,7 +30,7 @@ test('chroma ladder rewards newer releases within a class and the strongest cont
   assert.ok(chroma('opus-5-5', ladder) > chroma('opus-4-1', ladder));
   assert.ok(chroma('gpt-6.1-sol', ladder) > chroma('gpt-5.6-sol', ladder));
   assert.ok(chroma('fable-5-2', ladder) > chroma('haiku-5-5', ladder));
-  assert.ok(chroma('gpt-6-astra', ladder) > chroma('gpt-6-luna', ladder));
+  assert.ok(chroma('gpt-6.2-astra', ladder) > chroma('gpt-6-luna', ladder));
 
 });
 
