@@ -695,6 +695,15 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	if err != nil {
 		return err
 	}
+	// Imported histories do not carry a proved complete local protection
+	// assertion ledger. Retain an explicit hold until that provenance is
+	// reconciled; an absent transferred privacy row is not positive evidence.
+	if _, err = tx.ExecContext(ctx, `INSERT INTO teams_protection_assertions(conversation_id,provider,account,native_id,kind,evidence,active,created_revision)
+ SELECT c.id,c.provider,c.account,c.native_id,'legacy_hold','unreconciled_import',1,r.revision FROM incoming_conversations c CROSS JOIN teams_privacy_revision r
+ WHERE r.id=1 AND NOT EXISTS(SELECT 1 FROM teams_protection_assertions a WHERE a.conversation_id=c.id AND a.provider=c.provider AND a.account=c.account AND a.native_id=c.native_id AND a.kind='legacy_hold' AND a.evidence='unreconciled_import' AND a.active=1);
+ UPDATE teams_protection_baseline SET state='held',generation=generation+1 WHERE id=1 AND EXISTS(SELECT 1 FROM incoming_conversations)`); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM messages WHERE conversation_id IN (SELECT id FROM delivered_conversations)
  AND NOT EXISTS(SELECT 1 FROM incoming_messages s WHERE s.conversation_id=messages.conversation_id AND s.native_id=messages.native_id)`); err != nil {
 		return err
@@ -1384,7 +1393,10 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 // query caches, free SQLite pages, or a retained WAL.
 var moveRetainedTables = []string{"ui_preferences", "query_table_query_snapshots", "query_table_computed_columns", "sync_settings", "background_settings", "background_temporary_cadences", "repository_checkouts", "automatic_source_states",
 	"cloud_destinations", "cloud_backup_runs", "cloud_backup_schedules", "library_size_history",
-	"ask_settings", "ask_sessions", "ask_visits", "ask_native_sessions", "teams_conversation_privacy", "teams_privacy_revision", "teams_local_settings", "teams_outbox", "teams_send_log", "finding_actions", "finding_cart", "finding_cart_clones", "finding_interventions", "finding_settings",
+	"ask_settings", "ask_sessions", "ask_visits", "ask_native_sessions",
+	// Copy the revision and retained ledger before privacy rows so their insert
+	// triggers see existing assertions and observe the source revision.
+	"teams_privacy_revision", "teams_protection_actions", "teams_protection_assertions", "teams_conversation_privacy", "teams_local_settings", "teams_outbox", "teams_send_log", "finding_actions", "finding_cart", "finding_cart_clones", "finding_interventions", "finding_settings",
 	// Keep the identity fence even when the delivered history itself is gone.
 	// Native proofs require conversation rows and must instead be re-observed.
 	"teams_source_bindings", "teams_source_revision", "teams_source_mapping_revisions", "teams_source_mapping_current", "teams_source_mapping_exposure",
