@@ -147,8 +147,9 @@ func (s *Server) generateTeamsContent(ctx context.Context, cfg Config, client *t
 		return func() { timer.Stop(); lease.Close() }, nil
 	}
 	runCtx, stopRun := context.WithCancel(ctx)
-	defer stopRun()
-	go func() {
+	monitorDone := make(chan struct{})
+	if !s.spawnRegistered(nil, func() {
+		defer close(monitorDone)
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		checks := 0
@@ -189,7 +190,11 @@ func (s *Server) generateTeamsContent(ctx context.Context, cfg Config, client *t
 				}
 			}
 		}
-	}()
+	}) {
+		stopRun()
+		return errServiceStopping
+	}
+	defer func() { stopRun(); <-monitorDone }()
 	answer, err := stream.turn(runCtx, prompt, begin)
 	if err != nil {
 		return fmt.Errorf("model turn (%s): %w", disclosureStage, err)

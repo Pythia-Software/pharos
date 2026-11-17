@@ -150,6 +150,7 @@ func teamsOpenClaudePreflight(ctx context.Context, provider askProvider, selecti
 	}
 	s := &teamsClaudeStream{events: make(chan []byte, 8), errors: make(chan error, 1), input: input, model: selection.Model, effort: effort, pid: cmd.Process.Pid, path: path, auth: auth, schema: append([]byte(nil), schema...)}
 	var once sync.Once
+	var scannerDone <-chan struct{}
 	s.stop = func() {
 		once.Do(func() {
 			s.closed.Store(true)
@@ -157,10 +158,13 @@ func teamsOpenClaudePreflight(ctx context.Context, provider askProvider, selecti
 			input.Close()
 			_ = cmd.Cancel()
 			_ = cmd.Wait()
+			if scannerDone != nil {
+				<-scannerDone
+			}
 			os.RemoveAll(dir)
 		})
 	}
-	go func() {
+	scannerDone = operationChild(func() {
 		scanner := bufio.NewScanner(io.LimitReader(stdout, 2<<20+1))
 		scanner.Buffer(make([]byte, 4096), 512<<10)
 		var n int
@@ -181,7 +185,7 @@ func teamsOpenClaudePreflight(ctx context.Context, provider askProvider, selecti
 		} else {
 			s.errors <- io.EOF
 		}
-	}()
+	})
 	preflight, cancelPreflight := context.WithTimeout(ctx, 15*time.Second)
 	defer cancelPreflight()
 	defer context.AfterFunc(preflight, s.stop)()
