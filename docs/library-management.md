@@ -216,7 +216,7 @@ UI, scheduled and CLI captures too. Pausing automatic delivery leaves that
 protection in place, so undelivered snapshots cannot become eligible for normal
 generation pruning.
 
-Use **Eject** in the library drive panel or menu bar to release the libraries
+Use **Eject** in the Background Processing panel or the menu bar to release the libraries
 on that volume and eject it. An app installed on the Mac stays open with its
 local libraries available. If the app runs from that SSD, Eject also closes its
 broker and bundled MCP processes, then quits before ejecting. **Release for

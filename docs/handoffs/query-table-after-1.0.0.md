@@ -62,8 +62,8 @@ predicates and returns the same distinct values as an unprojected source.
 
 ## Wrapping host links in screen fitting
 
-The existing [wrapping-link fitting report](query-table-fit-wrapping-links.md)
-remains reproducible with 1.0.0. Pharos's structural browser sweep marks
+The wrapping-link fitting report (resolved in 1.0.5)
+remained reproducible with 1.0.0. Pharos's structural browser sweep marks
 `Analyze workspace query usage @ 1440` as a known TODO: an ordinary host anchor
 whose title allows wrapping still sets an unshrinkable one-line control floor.
 Fresh views now clear explicit widths as the native Fit All to Screen action

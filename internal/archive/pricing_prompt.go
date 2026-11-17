@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// pricingStatus backs the Usage page's "Copy refresh prices prompt" button:
+// pricingStatus backs Tokens and Cost's "Copy pricing prompt" button:
 // coverage, the models that need research, and a ready-to-paste prompt.
 func (c *Catalog) pricingStatus() map[string]any {
 	health := c.pricingHealth()

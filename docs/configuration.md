@@ -923,8 +923,8 @@ All require macOS and Xcode Command Line Tools (`xcode-select --install`).
 
 | Command | Coverage and when to run | Other requirements |
 |---|---|---|
-| `macos/test/run-light.sh` | Native menu state, preferences, reopen/index/eject actions and update preference migration, skip/dismiss behavior, startup shutdown/recovery, process coordination and installation leases; after changing `MenuBar.swift`, `UpdateNotice.swift`, `PharosApp.swift` or `UpdateLifecycle.swift`. |
-| `macos/test/dictation.sh` | Dictation session lifecycle (start, stop, cancel, replacement, time limit, denied microphone) with fake recorders, then a spoken file from `say` transcribed through the microphone's conversion and SpeechAnalyzer path; after changing `Dictation.swift`. | No microphone or GUI. Transcription needs macOS 26; the first run may download the speech model for the current language. | A logged-in GUI session for AppKit. Disposable child processes and stubbed HTTP; no app build, production service, disk images or release keys. Downloads pinned Sparkle if uncached. |
+| `macos/test/run-light.sh` | Native menu state, preferences, reopen/index/eject actions and update preference migration, skip/dismiss behavior, startup shutdown/recovery, process coordination and installation leases; after changing `MenuBar.swift`, `UpdateNotice.swift`, `PharosApp.swift` or `UpdateLifecycle.swift`. | A logged-in GUI session for AppKit. Disposable child processes and stubbed HTTP; no app build, production service, disk images or release keys. Downloads pinned Sparkle if uncached. |
+| `macos/test/dictation.sh` | Dictation session lifecycle (start, stop, cancel, replacement, time limit, denied microphone) with fake recorders, then a spoken file from `say` transcribed through the microphone's conversion and SpeechAnalyzer path; after changing `Dictation.swift`. | No microphone or GUI. Transcription needs macOS 26; the first run may download the speech model for the current language. |
 | `macos/test/menu-bar.sh` | Just the native menu checks. | Same GUI requirement; optionally pass an output PNG path to save the menu icon. |
 | `macos/test/swift-harness.sh [PORT]` | App DiskArbitration handling, service logs, release, Quit/MCP cleanup, real update leases/reconnect refusal and the Eject flow; after changing `LibraryVolume.swift`, `Launch.swift` or eject behavior. | Go, Node.js/npm, Python 3 and rsync; dependency downloads for the app build. Builds from a temporary checkout copy, then creates a 300 MB APFS image. Default port: 18768. |
 | `macos/test/eject-release.sh [PORT]` | Service release during sync, forced detach, catalog integrity and sync recovery; after changing service shutdown or drive handling. | Go, Python 3, curl and sqlite3. Creates a 2 GB sparse APFS image. Default port: 18767. |
@@ -988,25 +988,22 @@ and pulsing while work runs, and red and pulsing when something needs
 attention (a failed or interrupted index, or an index verification mismatch;
 an index that left sources to the next run because a capture was using them
 is not a failure). The header
-shows no other alert; its panel lists what needs attention, each with a
-button to deal with it, then every current activity and the latest index
-result this session. Each activity shows an **Overall** line, a time
-fraction of its whole-operation forecast when one exists (else
-"Calculating…"), and a **Step N/M** line with the measured fraction of the
-current stage and its own time left; **Details** shows elapsed time and how
-each estimate was made. Stage estimates blend the live pace with past runs
+shows no other alert. The chip opens the Background Processing panel: what
+needs attention, each with a button to deal with it, then each running
+operation with its step ("step N of M"), measured amount, time range when one
+is known, who started it and elapsed time. Stage estimates blend the live pace with past runs
 of the same stage on this Mac; the whole-operation forecast predicts each
 remaining step from that step's history and is withheld until every
 remaining step has some. See [Progress and time estimates](progress-estimates.md).
 
 **Stopping Search view indexing.** `POST /api/library/refresh/stop`
-(the **Stop** beside "Indexing the Search view" in the Background Processing panel) stops
+(reached through the Background Processing panel's **Stop**) stops
 recomputing Search view rows and answers `{"stopped": true}`, or `false` if
 it was already stopped. The batch in progress is abandoned, not committed, so
 its workspaces stay pending with the rest. Nothing is lost: the Library works
 out a pending workspace's row as it shows it, which is slower on a large
 backlog. It stays stopped, and off the list of running work, until
-`POST /api/library/refresh/resume` (the panel's **Resume**), a Capture & index
+`POST /api/library/refresh/resume`, a Capture & index
 (`POST /api/library/update`), or the next start of Pharos.
 
 In the app, the Background Processing panel's title has **⏏ Eject** at its right when the
@@ -1270,8 +1267,10 @@ the next run resumes it.
 
 **Stopping an index.** `POST /api/index/cancel` stops the running index, or the
 running Index changes (they share one lock), and answers `{"stopped": true}`, or
-`false` when nothing was running. The **Stop** button beside a running index in
-Settings → Background Processing and in the drive panel calls it. It stops the same way a
+`false` when nothing was running. In the app, Settings → Background
+Processing's **Stop** beside a running index, and the **Stop** in the
+Background Processing panel's title (which stops everything running), stop it
+the same way through `POST /api/operations/stop`. It stops the same way a
 release does, between records: the record being written finishes and commits, so
 everything already indexed stays. Unlike a release, the service carries on, so
 what the run did write is still linked across Macs, checkpointed and looked up
@@ -1294,8 +1293,8 @@ that wrote records, make `safe_to_unplug` false. An index records the
 capturing Mac's source state only when it completes: a capture failing to
 index, perhaps
 on another Mac, leaves that Mac's own sync state as it was. In the app,
-onboarding offers **Index now** after its capture, and Settings → Capture &
-index indexes captured files from every Mac (see [Adding a Mac](#adding-a-mac)).
+onboarding offers **Index now** after its capture, and Settings → Background
+Processing indexes captured files from every Mac (see [Adding a Mac](#adding-a-mac)).
 
 **Attribution.** Everything an index writes belongs to the Mac that captured the
 data (the capture directory's host ID), not the Mac running it: the source's sync
@@ -1421,7 +1420,7 @@ its WAL, captures, preserved), `free_bytes`, and `last_backup`.
 
 `GET /api/health/drive` returns just this report, from the same cache, without
 the catalog-wide counts of `/api/health`, so it is cheap to poll. Settings →
-Health shows it under **Library drive**: each check's status, summary,
+Library health shows it under **Library drive**: each check's status, summary,
 recommendation, and Finder or System Settings route, and its command with a
 **Copy** button. Pharos still runs none of them.
 
@@ -1563,7 +1562,7 @@ answers `202`; `GET /api/backup` reports `active`, the latest `run` with its
 `~/Pharos Backup` on this Mac; otherwise empty); `POST /api/backup/cancel` stops
 it.
 
-Settings → Health → **Backups** does the same: it shows the last backup, a
+Settings → Backups does the same: it shows the last backup, a
 destination field filled with the suggestion, **Back up now**, the running
 backup's phase and progress with **Cancel backup**, and the result, with its
 warnings (such as an unencrypted destination). A refused destination, such as
@@ -1938,15 +1937,15 @@ so a new workspace never creates a row for a repository that already has one.
 A new remoteless row gets an ID from its name and its Conductor directory or
 clone, not from each worktree it was seen in.
 
-Pharos always asks GitHub, through the `gh` command-line tool, for the numeric
-ID and current name of each github.com repository, which is how a rename such
-as `gbdubs/alexandria` to `Pythia-Software/pharos` is recognized. The lookup
-runs in the library upgrade's repository step and in the merge dry run. The
-manual Index changes and Capture & index also look up repositories it has
-not resolved yet (new rows from indexing), and merge the rows that turn out
-to be one repository. Scheduled indexing does not start GitHub lookups, and
-there is no separate periodic forge refresh timer. Ingest
-itself makes no network requests. Requests are paused between calls, cached,
+When the `gh` command-line tool is signed in, Pharos asks GitHub for the
+numeric ID and current name of github.com repositories, which is how a rename
+such as `gbdubs/alexandria` to `Pythia-Software/pharos` is recognized. The
+library upgrade's repository step and `pharos repositories --merge` (dry run
+or `--apply`) ask about every github.com repository. The **Repositories &
+merges** background item asks only about repositories not resolved yet (new
+rows from indexing), whether it runs on its schedule, from Index changes or
+from Capture & index, and merges the rows that turn out to be one repository.
+Ingest itself makes no network requests. Requests are paused between calls, cached,
 and stop when the service stops; a repository GitHub cannot resolve (private,
 deleted) is not asked about again for six hours. `gh` is found on `PATH` and in
 `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`, `/usr/bin`, and

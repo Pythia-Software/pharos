@@ -33,7 +33,7 @@ have one home; genuinely different counts retain their qualifiers.
 | Carbon Impact | Estimated electricity and CO₂e, using saved Carbon settings |
 | Parallelism and Work Hours | Conversation activity hours, overlap and turn counts; human engaged hours and agent hours stay separate because they can overlap. Parallelism explicitly counts conversations with the saved activity gap |
 | Waiting and Thinking | Mean recorded response wait and per-request input/output |
-| Messages | Classified user-message word and character measurements, plus message-attributed labels, compactions, tool and agent-event evidence. Raw text word/character totals for all roles are blocked by the upstream aggregate-expression capability described in [the handoff](handoffs/query-table-scatter-text-metrics.md) |
+| Messages | Classified user-message word and character measurements, plus message-attributed labels, compactions, tool and agent-event evidence. Raw text word and character totals for all roles are not offered yet: Query Table 1.0.5 added the text functions inside aggregates they need, and the measures remain to be added in `web/src/scatter-metrics.ts` |
 | Habits | The entity-level activity measurements above are reused; library-wide streaks and day-calendar summaries have no value for one message or conversation |
 | Pharos MCP | Server requests have no recorded conversation, workspace or message identity, so they cannot be matched to these points |
 

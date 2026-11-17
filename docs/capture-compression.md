@@ -80,7 +80,7 @@ handoffs cite file and line for each.
 
 Each phase ships as one PR.
 
-1. **Snapshot generations** ([handoff](handoffs/capture-compression-1-generations.md)).
+1. **Snapshot generations** (#271).
    This adds the encoding field, a shared decode and verify helper, and
    decode-on-lease. It compresses superseded SQLite snapshot generations once
    they are indexed. Generations are only read by full reindexes, salvage,
@@ -101,7 +101,7 @@ Each phase ships as one PR.
    Follow-up: on a volume without hard links (exFAT), verify-all's lease of
    a generation falls back to copying it, and does so while holding the
    host's capture lock; move that copy out from under the lock.
-2. **Cold files** ([handoff](handoffs/capture-compression-2-cold-files.md)).
+2. **Cold files** (#272).
    Compress superseded plain-file versions, which no index reads again, and
    latest files whose source has not changed for
    `capture_compress_after_days` (default 14; 0 turns it off), that the last
@@ -122,7 +122,7 @@ Each phase ships as one PR.
    and a rewritten one keeps its encoded copy in `history/`. On a sample of
    the production captures this saves about 9 GB now (Codex 3.7×, Claude
    3.3×), rising as files go cold.
-3. **Idle latest snapshots** ([handoff](handoffs/capture-compression-3-idle-snapshots.md)).
+3. **Idle latest snapshots** (#273).
    Compress latest SQLite snapshots whose recorded source state (database
    and WAL mtimes) is older than `capture_compress_after_days`, that the
    last capture found unchanged, that the index marker covers, and that the

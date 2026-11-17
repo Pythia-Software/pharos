@@ -1,7 +1,7 @@
 # Query Table: log axes that draw the smallest value, round ticks, log-spaced histogram bins
 
 Status: blocked on an upstream published release. Pharos pins the four Query
-Table npm packages and the Go module to 1.0.4. Pharos's dashboards choose a log
+Table npm packages and the Go module to 1.0.9. Pharos's dashboards choose a log
 axis by default for long-tailed values ([Default views](../dashboard-analysis.md#default-views));
 these three changes make that axis read correctly in Query Table's native
 charts. Pharos must not patch around them locally.

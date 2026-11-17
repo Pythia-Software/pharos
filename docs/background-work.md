@@ -227,7 +227,7 @@ cancellation, so locks and ordering do not change.
 Three levels, and only three:
 
 1. **Run**: a top-level operation the user can name ("Capture & index",
-   "Index changes"). It has the plan the drive panel counts as "step N of M".
+   "Index changes"). It has the plan the Background Processing panel counts as "step N of M".
 2. **Stage**: a child operation for work that has its own kind, holds or
    history and can also run on its own: each analysis-chain stage
    (`analysis.git`, `analysis.findings`…), a capture inside Capture &
@@ -860,7 +860,7 @@ additive index, `operation_journal_kind (host_id, kind, started_at DESC)`.
 | `an.authorship` | `authorship_complete_at` | both visible and exact generations lag inputs, or queued messages remain | `running`, `failed` / `blocked`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `never-built`, `changed` | `analysis.authorship` |
 | `an.authorship.refined` | `authorship_refined_at` | exact `authorship_generation` lags inputs | scheduled daily / late / running | `analysis.authorship.refine` |
 | `an.ledger` (tool ledger) | when it was last counted | the upgrade's `tools` step count, from the last `UpgradeSteps` | `running`, `not-counted` (unknown: not counted by this build), `version` | `tools.ledger.build`, `library.upgrade` |
-| `findings` | `findings_built_at` | count unknown | `running`, `failed` / `blocked`, `never-built`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `scheduled-daily` (today's full pass waits for the daily time, or ran less than 12 h past it), `daily-pass-due` (`findings_generation` ≠ `findingsVersion/<today>`), `no-record` (unknown: today's pass ran on an older build), `changed` (`scheduled`: new data since today's full pass). Both say what runs the next full pass: "updates with Refresh findings now, or the first index tomorrow", or with scheduled indexing on (which defers findings) "…, or the next manual index", and the muted short "updates tomorrow" / "updates with manual index" | `analysis.findings`, `analysis.chain` |
+| `findings` | `findings_built_at` | count unknown | `running`, `failed` / `blocked`, `never-built`, `scheduled-*` / `late` / `deferred-by-schedule` (as above), `scheduled-daily` (today's full pass waits for the daily time, or ran less than 12 h past it), `daily-pass-due` (`findings_generation` ≠ `findingsVersion/<today>`), `no-record` (unknown: today's pass ran on an older build), `changed` (`scheduled`: new data since today's full pass). Both say what runs the next full pass: "updates with Run now for Findings, or the first index tomorrow", or with scheduled indexing on (which defers findings) "updates with Run now for Findings, or the next manual index", and the muted short "updates tomorrow" / "updates with manual index" | `analysis.findings`, `analysis.chain` |
 | `upgrade` | when it was last counted | steps with pending units, from the last `UpgradeSteps` | `running`, `not-counted` (unknown), `upgrade-available` | `library.upgrade` |
 | `backup.local` | the newest non-partial backup in `backups.json` | age only | `running`, `failed` (this process's latest backup failed after `as_of`), `never` (unknown), `no-schedule` (unknown, with `as_of`) | `backup.local` |
 | `backup.cloud:<destination>` | the destination's newest complete, verified full run | against an enabled schedule: older than its cadence + 12 h | `running`, `retrying` (enabled, `failures > 0`), `failed`, `unverified`, `never`, `overdue`, `no-schedule` (unknown, with `as_of`); `paused` replaces any but `failed` when the schedule exists and is off | `cloud.upload`, `cloud.verify` |
@@ -1410,7 +1410,7 @@ positives fixed in phase 0:
 | # | Rule | Severity | Action |
 |---|---|---|---|
 | 1 | The latest attempt for an enabled source on this Mac (across `source_states` and `automatic_source_states`) has an error other than `interrupted:` | error | Open Background Processing |
-| 2 | Index verification has open mismatches (`sync_integrity_issues`, state `open`) | error | Review… |
+| 2 | Index verification has open mismatches (`sync_integrity_issues`, state `open`) | error | Review mismatches |
 | 3 | The latest finished index on this Mac failed, was not stopped by the user, and covered an enabled source (or failed before choosing sources). A run that only deferred sources to a capture is not a failure. | error | Open Background Processing |
 | 4 | The latest finished index was interrupted (not by the user) and nothing has run since | warning | Open Background Processing |
 | 5 | The latest capture failed for an enabled source, or failed as a whole | error | Open Background Processing |
@@ -1771,7 +1771,7 @@ backups, adoption) keep doing so: they are not
 moved to the default tier even where their kind is foreground. A
 read-started rebuild that a request or page waits on is registered
 foreground and keeps the default tier: `analysis.tools` from a read,
-`analysis.findings` from Refresh findings and from `GET /api/findings`
+`analysis.findings` from `POST /api/findings/refresh` and from `GET /api/findings`
 before findings exist, and `analysis.authorship` from a page. A background body holding the catalog writer
 at utility can make a foreground writer wait a little longer; the utility
 tier, unlike background, is not throttled hard.
@@ -1780,7 +1780,7 @@ tier, unlike background, is not throttled hard.
 
 Every domain a page shows has an automatic owner. `backgroundLoop`
 (`background.go`) runs the work the scheduled index does not, on one of
-three cadences, and Settings → Background Processing and the drive panel show
+three cadences, and Settings → Background Processing and the Background Processing panel show
 the same schedule from one declaration (`backgroundItems`):
 
 | Item | Runs | Cadence before measurements | Journal kinds (cost before it has runs of its own) |
