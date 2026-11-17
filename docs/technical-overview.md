@@ -248,6 +248,12 @@ A source whose last read was not in place says so on its Settings card (`sqlite_
 
 Deduplication uses account-scoped native IDs. Conductor aliases are retained as evidence-backed identity links after all adapters run; repeated identical prompts are never merged by content hash. The Conductor extractor inspects each row and selects the materially populated `content`, `full_message`, or `text` field, recording that decision in its evidence locator.
 
+### Conductor event log
+
+Since October 2026 Conductor keeps two records of each session in `conductor.db`. `session_events` is the raw log: user messages as sent, agent events wrapping the harness's payload (`rawPayload`), checkpoints and other app events, each with a `session_index`, and `reverted_at` once the user rewinds past it. `session_messages` is the display projection Conductor's client writes from it: the user row under the message's ID, and agent rows under `cloud-feed:<session>:<event>:<index>`. Older databases have only `session_messages`; both layouts are read.
+
+The stored rows stay the parser's input for every event they project, so message IDs, text and evidence are the same with or without the log. An event becomes a message only when Conductor projects that kind of event but no row exists for it: a sent user message, or, for Claude-family agents (`claude`, `cursor`, `muse`, `acp`), the assistant, result, system (except `task_progress`), error, tool-result and local-command payloads Conductor's client keeps. It takes the ID the row would have, so a row stored later is the same message, and a payload `uuid` already stored under another ID is skipped. Reverted events, queued messages and kinds Conductor never shows (rate limits, tool progress, command lifecycle, checkpoints) add nothing. Codex events are not rebuilt: Conductor translates Codex app-server items with its own client-side mapping, and the Codex source reads those threads from Codex's rollouts. In the 16 November 2026 library every projected event but one had its row.
+
 ChatGPT managed ZIP collection, media/reference presentation, source omissions and raw-only data are documented in [remaining export gaps](chatgpt-export-gaps.md) and [unmodeled export data](chatgpt-export-unmodeled-data.md).
 
 No claim is made that ChatGPT desktop’s local cache is complete. ChatGPT is indexed from a user-provided supported export, and its health row makes that acquisition boundary visible.

@@ -151,26 +151,29 @@ type sqliteRevision struct {
 	NativeCapturedAt string                  `json:"native_captured_at,omitempty"`
 	Acquisition      string                  `json:"acquisition"`
 	ParserInputs     map[string]recordObject `json:"parser_inputs,omitempty"`
-	Mappings         []capturePathMapping    `json:"path_map"`
-	Installations    []capturedInstallation  `json:"installations,omitempty"`
-	Version          int                     `json:"version"`
-	Writer           string                  `json:"writer"`
-	Encoding         string                  `json:"encoding"`
-	Host             Host                    `json:"host"`
-	Source           captureSourceInfo       `json:"source"`
-	Database         string                  `json:"database"`
-	Entity           string                  `json:"entity"`
-	Input            string                  `json:"retained_input,omitempty"`
-	InputHash        string                  `json:"input_sha256,omitempty"`
-	Observed         recordSourceState       `json:"source_version"`
-	AcquiredAt       string                  `json:"acquired_at"`
-	Parent           *recordObject           `json:"parent,omitempty"`
-	Schema           recordObject            `json:"schema"`
-	Tables           []recordTable           `json:"tables"`
-	Dependencies     []recordDependency      `json:"dependencies"`
-	Complete         bool                    `json:"complete"`
-	Full             bool                    `json:"full_reconciliation"`
-	Gaps             []string                `json:"gaps,omitempty"`
+	// EventInputs are Conductor's session_events rows per session, in the
+	// log's own order. Revisions from before the event log have none.
+	EventInputs   map[string]recordObject `json:"event_inputs,omitempty"`
+	Mappings      []capturePathMapping    `json:"path_map"`
+	Installations []capturedInstallation  `json:"installations,omitempty"`
+	Version       int                     `json:"version"`
+	Writer        string                  `json:"writer"`
+	Encoding      string                  `json:"encoding"`
+	Host          Host                    `json:"host"`
+	Source        captureSourceInfo       `json:"source"`
+	Database      string                  `json:"database"`
+	Entity        string                  `json:"entity"`
+	Input         string                  `json:"retained_input,omitempty"`
+	InputHash     string                  `json:"input_sha256,omitempty"`
+	Observed      recordSourceState       `json:"source_version"`
+	AcquiredAt    string                  `json:"acquired_at"`
+	Parent        *recordObject           `json:"parent,omitempty"`
+	Schema        recordObject            `json:"schema"`
+	Tables        []recordTable           `json:"tables"`
+	Dependencies  []recordDependency      `json:"dependencies"`
+	Complete      bool                    `json:"complete"`
+	Full          bool                    `json:"full_reconciliation"`
+	Gaps          []string                `json:"gaps,omitempty"`
 	// Identity excludes exporter observation timestamps, parent, and database
 	// mtimes. Dependency versions remain part of the raw input closure.
 	Identity string `json:"identity"`
@@ -444,13 +447,15 @@ func (s *recordStore) verify(ref recordObject) error {
 		}
 		refs = append(refs, t.Chunks...)
 	}
-	for _, ref := range v.ParserInputs {
-		var t recordTable
-		if e = s.readJSON(ref, &t); e != nil {
-			return e
+	for _, inputs := range []map[string]recordObject{v.ParserInputs, v.EventInputs} {
+		for _, ref := range inputs {
+			var t recordTable
+			if e = s.readJSON(ref, &t); e != nil {
+				return e
+			}
+			refs = append(refs, ref)
+			refs = append(refs, t.Chunks...)
 		}
-		refs = append(refs, ref)
-		refs = append(refs, t.Chunks...)
 	}
 	for _, d := range v.Dependencies {
 		if d.State != "retained" || d.Object == nil {
@@ -871,6 +876,15 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 				if colset["created_at"] && colset["id"] {
 					order = " ORDER BY created_at,id"
 				}
+			case conductorEventTable:
+				if !isConductorSource(s.c.source.Kind) || !colset["session_id"] {
+					v.Tables = append(v.Tables, recordTable{Name: name, Columns: cols, Coverage: "excluded", Order: "not-selected; full reconciliation covers opaque rows"})
+					continue
+				}
+				// The session's events beside its messages: the raw form
+				// Conductor projects its message rows from.
+				where, args = " WHERE session_id=?", []any{selected}
+				order = conductorEventOrder(colset)
 			case "workspaces", "repos": // Shared metadata is normally tiny and invalidates every dependent entity.
 			default:
 				v.Tables = append(v.Tables, recordTable{Name: name, Columns: cols, Coverage: "excluded", Order: "not-selected; full reconciliation covers opaque rows"})
@@ -890,6 +904,9 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 		}
 		if order != "" {
 			t.Order = "parser-created_at-id"
+			if name == conductorEventTable {
+				t.Order = "event-log-sequence"
+			}
 		}
 		v.Tables = append(v.Tables, t)
 	}
@@ -954,6 +971,28 @@ func (s *recordStore) exportSQLite(file, original, entity string, state sqliteSo
 				return recordObject{}, e
 			}
 			v.ParserInputs[id] = ref
+		}
+		// Each session's event log, retained in its own order whether the
+		// session is acquired alone or with the whole database, so both
+		// observations name the same raw closure.
+		ec, e := conductorEventColumns(tx, names)
+		if e != nil {
+			return recordObject{}, e
+		}
+		if ec != nil {
+			v.EventInputs = map[string]recordObject{}
+			for _, id := range ids {
+				t, e := s.table(tx, conductorEventTable, " WHERE session_id=?", conductorEventOrder(ec), []any{id})
+				if e != nil {
+					return recordObject{}, e
+				}
+				t.Order = "event-log-sequence"
+				ref, e := s.putJSON(t)
+				if e != nil {
+					return recordObject{}, e
+				}
+				v.EventInputs[id] = ref
+			}
 		}
 	}
 	if isConductorSource(s.c.source.Kind) && st != "" && mt != "" {
@@ -1229,6 +1268,25 @@ func (s *recordStore) conductorParserRows(v sqliteRevision, sid string) ([]map[s
 	if !ok {
 		return nil, errors.New("unresolved Conductor parser ordinal for retained observation")
 	}
+	return s.conductorRows(ref)
+}
+
+// conductorEventRows returns the session's retained event log, or nil when the
+// observation retained none: it predates event retention, or its database had
+// no event log.
+func (s *recordStore) conductorEventRows(v sqliteRevision, sid string) ([]map[string]any, error) {
+	ref, ok := v.EventInputs[sid]
+	if !ok {
+		return nil, nil
+	}
+	rows, err := s.conductorRows(ref)
+	if rows == nil && err == nil {
+		rows = []map[string]any{}
+	}
+	return rows, err
+}
+
+func (s *recordStore) conductorRows(ref recordObject) ([]map[string]any, error) {
 	var t recordTable
 	if e := s.readJSON(ref, &t); e != nil {
 		return nil, e
@@ -1279,7 +1337,7 @@ func (w *recordOutputWriter) Write(b []byte) (int, error) {
 
 func knownRecordTable(kind, name string) bool {
 	known := map[string][]string{
-		"conductor":   {"sessions", "workspaces", "threads", "messages", "session_messages", "repos"},
+		"conductor":   {"sessions", "workspaces", "threads", "messages", "session_messages", "repos", conductorEventTable},
 		"antigravity": {"conversation_summaries", "gen_metadata"},
 		"tl1":         {"tasks", "task_attempts", "transcript_summaries", "resource_usage", "tool_usage", "handoffs", "candidates", "task_flavors", "task_events", "review_findings", "human_responses", "human_comments"},
 		"codex":       {"threads"},
@@ -1296,7 +1354,13 @@ func sqliteEvidenceIdentity(v sqliteRevision) string {
 	if len(v.EntityIdentities) == 0 {
 		v.EntityIdentities = nil
 	}
-	return hashBytes([]byte(jsonText([]any{v.Schema, v.Tables, v.ParserInputs, v.Dependencies, v.EntityIdentities})))
+	inputs := []any{v.Schema, v.Tables, v.ParserInputs, v.Dependencies, v.EntityIdentities}
+	// Appended only when present, so revisions from before the event log keep
+	// the identity they were published with.
+	if len(v.EventInputs) > 0 {
+		inputs = append(inputs, v.EventInputs)
+	}
+	return hashBytes([]byte(jsonText(inputs)))
 }
 
 // Session authority is the exact raw parser-input closure, independent of
@@ -1360,7 +1424,11 @@ func (s *recordStore) conductorEntityIdentities(v sqliteRevision, sessionTable s
 		if !ok {
 			return nil, errors.New("unresolved Conductor parser sequence")
 		}
-		identities[id] = hashBytes([]byte(jsonText([]any{v.Schema, sessions.Columns, id, fmt.Sprintf("%x", h.Sum(nil)), parserInput, shared, dependencies})))
+		closure := []any{v.Schema, sessions.Columns, id, fmt.Sprintf("%x", h.Sum(nil)), parserInput, shared, dependencies}
+		if events, ok := v.EventInputs[id]; ok {
+			closure = append(closure, events)
+		}
+		identities[id] = hashBytes([]byte(jsonText(closure)))
 	}
 	return identities, nil
 }

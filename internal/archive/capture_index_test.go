@@ -670,6 +670,21 @@ func TestConductorParsesOnlyChangedSessions(t *testing.T) {
 	if conversationMessages(t, catalog, "conductor:s1") != 3 {
 		t.Fatal("the added message is missing")
 	}
+	// Conductor's event log: it joins every session's signal once, an event
+	// no row projects changes only that session's, and a row stored later
+	// for an event already read is the same message.
+	exec(conductorEventLogDDL...)
+	step("the event log appears", 3, 0)
+	exec("INSERT INTO session_events VALUES('s2',0,'e1','agent','{\"type\":\"agent\",\"rawPayload\":{\"type\":\"rate_limit_event\"}}','2026-09-01T02:00:00Z',NULL)")
+	step("an event no row projects", 1, 0)
+	exec("INSERT INTO session_events VALUES('s3',0,'e2','userMessage','{\"type\":\"userMessage\",\"id\":\"s3-m7\",\"message\":\"late\",\"state\":\"sent\"}','2026-09-01T02:00:00Z',NULL)")
+	step("a message only the event log has", 1, 1)
+	exec("INSERT INTO session_messages VALUES('s3-m7','s3','user','late','2026-09-01T02:00:00Z','2026-09-01T02:00:00Z',NULL)")
+	// Rewritten in place: its evidence now names the row.
+	step("its row stored", 1, 1)
+	if conversationMessages(t, catalog, "conductor:s3") != 3 {
+		t.Fatal("the event log's message is missing or counted twice")
+	}
 	var title string
 	if err := catalog.DB.QueryRow("SELECT title FROM workspaces WHERE source_id='s2'").Scan(&title); err != nil || title != "Renamed" {
 		t.Fatalf("renamed session: %q %v", title, err)
