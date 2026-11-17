@@ -20,13 +20,14 @@ type teamsWorkerItem struct {
 	PayloadHash string
 }
 type teamsWorkerState struct {
-	mu             sync.Mutex
-	wake           chan struct{}
-	items          map[string]teamsWorkerItem
-	next           time.Time
-	checking       bool
-	problem        string
-	reconcileAfter string
+	mu                    sync.Mutex
+	wake                  chan struct{}
+	items                 map[string]teamsWorkerItem
+	next                  time.Time
+	checking              bool
+	problem               string
+	reconcileAfter        string
+	contentReconcileAfter string
 }
 
 var teamsWorkerCapabilities = teamsBuildCapabilities
@@ -152,6 +153,40 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 				s.Catalog.markTeamsV2Outcome(id, "unconfirmed")
 			}
 		}
+		// Artifact receipts are likewise reconciled even if completed work no
+		// longer appears in poll. A cursor prevents older uncertain items from
+		// starving later ones; this path never starts another model run.
+		s.teamsWorker.mu.Lock()
+		contentAfter := s.teamsWorker.contentReconcileAfter
+		s.teamsWorker.mu.Unlock()
+		contentRows, e := s.Catalog.reader().QueryContext(ctx, `SELECT work_id FROM teams_content_runs WHERE work_id>? AND state IN ('sending','needs_reconcile') ORDER BY work_id LIMIT 100`, contentAfter)
+		if e != nil {
+			return e
+		}
+		var pendingContent []string
+		for contentRows.Next() {
+			var id string
+			if e = contentRows.Scan(&id); e != nil {
+				contentRows.Close()
+				return e
+			}
+			pendingContent = append(pendingContent, id)
+		}
+		if e = contentRows.Err(); e != nil {
+			contentRows.Close()
+			return e
+		}
+		contentRows.Close()
+		s.teamsWorker.mu.Lock()
+		if len(pendingContent) == 0 {
+			s.teamsWorker.contentReconcileAfter = ""
+		} else {
+			s.teamsWorker.contentReconcileAfter = pendingContent[len(pendingContent)-1]
+		}
+		s.teamsWorker.mu.Unlock()
+		for _, id := range pendingContent {
+			_, _ = s.Catalog.reconcileTeamsContent(ctx, client, d, credential, id)
+		}
 		poll, e := client.Poll(ctx, teams.PollRequest{AppVersion: manifest.AppVersion, LibraryIDs: []string{d.ID}, CapabilityManifest: &manifest})
 		if e != nil {
 			return e
@@ -187,6 +222,10 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 					item.State = "declined"
 				}
 				items[work.ID] = item
+				continue
+			}
+			if work.Kind == "llm" {
+				items[work.ID] = s.checkTeamsContentWork(ctx, client, d, credential, work, manifest)
 				continue
 			}
 			prior, priorErr := readTeamsV2Draft(ctx, s.Catalog.reader(), work.ID)

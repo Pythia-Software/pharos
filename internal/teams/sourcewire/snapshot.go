@@ -104,6 +104,10 @@ func validItem(v Item) bool {
 		if v.Profile != nil || v.EvidenceRevision != "" {
 			return false
 		}
+	case "content_evidence":
+		if len(v.Dependencies) != 1 || v.Profile == nil || v.Profile.ID != "codex_transcript" || v.Profile.Version != 1 || !opaque(v.EvidenceRevision) {
+			return false
+		}
 	default:
 		return false
 	}

@@ -2438,3 +2438,33 @@ test('Teams checking requires a displayed policy choice', { skip }, async t => {
   await app.page.getByRole('button',{name:'Check now'}).waitFor();
   assert.deepEqual(settings,{enabled:true,optOut:false,settingsRevision:4,policyVersion:2});
 });
+
+test('Teams model permission displays the account and requires a separate action', { skip }, async t => {
+  let approved;
+  const inspection={provider:'Claude',model:'synthetic-model',effort:'Low',account:'synthetic@example.invalid · Synthetic',sessionDigest:'a'.repeat(64),authDigest:'b'.repeat(64),settingsRevision:4};
+  const app=await open(t,{url:'/settings/teams',ready:'#teamsSettingsPage .teams-settings',api:{
+    'GET /api/teams/enrollment':{state:'connected_paused',available:true,library:'Synthetic',fingerprint:'',problem:''},
+    'GET /api/teams/worker':{enabled:true,optOut:true,settingsRevision:4,acknowledgedPolicy:1,nextCheck:'',checking:false,problem:'',items:[],modelApproved:false},
+    'GET /api/teams/source-accounts':{sourceRevision:0,settingsRevision:4,proofRequested:true,sources:[]},
+    'POST /api/teams/worker/model/inspect':inspection,
+    'POST /api/teams/worker/model/approve':({body})=>{approved=body;return {approved:true}},
+  }});
+  await app.page.getByRole('button',{name:'Review model account'}).click();
+  await app.page.getByText(/synthetic@example.invalid/).waitFor();
+  assert.equal(approved,undefined);
+  await app.page.getByRole('button',{name:'Allow this account and model'}).click();
+  await app.page.waitForFunction(()=>!document.body.textContent.includes('Account: synthetic@example.invalid'));
+  assert.deepEqual(approved,inspection);
+});
+
+test('Teams sent log opens an exact local response', { skip }, async t => {
+  const app=await open(t,{url:'/settings/teams',ready:'#teamsSettingsPage .teams-settings',api:{
+    'GET /api/teams/enrollment':{state:'connected_paused',available:true,library:'Synthetic',fingerprint:'',problem:''},
+    'GET /api/teams/worker':{enabled:true,optOut:true,settingsRevision:4,acknowledgedPolicy:1,nextCheck:'',checking:false,problem:'',items:[],modelApproved:false},
+    'GET /api/teams/source-accounts':{sourceRevision:0,settingsRevision:4,proofRequested:true,sources:[]},
+    'GET /api/teams/worker/log':{items:[{workId:'synthetic-work',question:'Synthetic question',payload:{answer:'Synthetic answer'},sentAt:'2026-01-01T00:00:00Z'}]},
+  }});
+  await app.page.getByRole('button',{name:'Show recent sends'}).click();
+  await app.page.getByText(/Synthetic question/).click();
+  await app.page.getByText(/Synthetic answer/).waitFor();
+});

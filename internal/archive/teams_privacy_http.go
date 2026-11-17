@@ -24,6 +24,31 @@ func (s *Server) teamsPrivacyHTTP(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch r.Method {
 	case http.MethodGet:
+		if r.URL.Query().Get("review") == "1" {
+			tx, e := s.Catalog.reader().BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true})
+			if e != nil {
+				writeError(w, errors.New("review unavailable"), 500)
+				return
+			}
+			defer tx.Rollback()
+			p, e = readTeamsPrivacy(r.Context(), tx, id)
+			var entries []teamsManualReviewEntry
+			var input string
+			if e == nil {
+				input, e = teamsManualReviewSnapshot(r.Context(), tx, id, &entries)
+			}
+			if e != nil {
+				writeError(w, errors.New("review unavailable for this conversation"), 409)
+				return
+			}
+			if e = tx.Commit(); e != nil {
+				writeError(w, errors.New("review unavailable"), 500)
+				return
+			}
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, map[string]any{"privacy": p, "input": input, "entries": entries}, 200)
+			return
+		}
 		p, err = s.Catalog.teamsPrivacy(r.Context(), id)
 	case http.MethodPost:
 		var body struct {
@@ -51,6 +76,12 @@ func (s *Server) teamsPrivacyHTTP(w http.ResponseWriter, r *http.Request) {
 			p, err = s.Catalog.setTeamsPrivate(r.Context(), id, *body.Private, body.Revision)
 		case "review":
 			p, err = s.Catalog.reviewTeamsClassification(r.Context(), id, body.ClassifierInput, *body.Private, body.Revision)
+		case "manual-clear":
+			if *body.Private {
+				writeError(w, errors.New("invalid manual review"), 400)
+				return
+			}
+			p, err = s.Catalog.manuallyClearTeamsInput(r.Context(), id, body.ClassifierInput, *body.Revision)
 		default:
 			writeError(w, errors.New("unknown privacy action"), 400)
 			return
