@@ -2377,3 +2377,19 @@ test("model color editors preview and save inline while retaining focus", { skip
   await page.getByRole("region", {name: "Reflection colors", exact: true}).scrollIntoViewIfNeeded();
   await shot("independent-provider-palettes");
 });
+
+test('Conversation privacy control saves the reviewed state', { skip }, async t => {
+  let update;
+  const app = await open(t, {
+    url: `/work/${workID}/conversation/${rootConversation}`,
+    ready: '.conversation-panel .turn',
+    api: { 'POST /api/teams/privacy': ({ body }) => {
+      update = body;
+      return { conversationId: rootConversation, userPrivate: body.private, private: body.private, classifierState: 'unclassified', classifierReviewed: false, sensitivityHold: true, revision: 1 };
+    } },
+  });
+  const button = app.page.getByRole('button', { name: 'Mark private' });
+  await button.click();
+  await app.page.getByRole('button', { name: 'Allow content sharing' }).waitFor();
+  assert.deepEqual(update, { action: 'mark', private: true, revision: 0 });
+});

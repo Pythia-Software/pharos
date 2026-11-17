@@ -3874,6 +3874,15 @@
       "reason": "Summary of the message sources disclosure; the shared classic disclosure runtime owns its open state through data-view-key."
     },
     {
+      "key": "0d292cf4a0e4176b:0",
+      "file": "internal/archive/assets/ui.py",
+      "owner": "mount",
+      "tag": "button",
+      "control": "'button', '', 'Mark private'",
+      "contract": "settings",
+      "reason": "Changes the conversation’s persistent library privacy setting; it is not URL view state."
+    },
+    {
       "key": "3f6f4aa5f5684795:0",
       "file": "internal/archive/assets/ui.py",
       "owner": "mount",

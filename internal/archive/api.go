@@ -295,6 +295,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.askHTTP(w, r)
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/api/teams/privacy") {
+		s.teamsPrivacyHTTP(w, r)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/feedback/") {
 		s.feedbackHTTP(w, r)
 		return

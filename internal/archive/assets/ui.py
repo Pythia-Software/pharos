@@ -132,6 +132,7 @@ a.asset-card{text-decoration:none;cursor:pointer}a.asset-card:hover{border-color
     /* Evidence first: aligned operations, prose, and one disclosure to the details. */
     .conversation-panel{padding:0;border-radius:4px;box-shadow:none}
     .conversation-head{padding:18px 22px;background:var(--panel)}
+    .teams-privacy-control{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px}.teams-privacy-control button{font:inherit;font-size:var(--fs-xs);padding:5px 8px;border:1px solid var(--line);border-radius:5px;background:var(--bg);color:var(--ink);cursor:pointer}.teams-privacy-control button:disabled{cursor:default;opacity:.65}.teams-privacy-control .meta{overflow-wrap:anywhere}
     .claude-export-usage-note{display:flex;align-items:flex-start;gap:10px;margin:0 0 16px;padding:10px 12px;border:1px solid color-mix(in srgb,var(--warn) 55%,var(--line));border-radius:6px;background:color-mix(in srgb,var(--warn) 9%,var(--panel));color:var(--ink);font-size:var(--fs-sm);line-height:1.5;overflow-wrap:anywhere}.claude-export-usage-note .app-icon{flex:none;width:18px;height:18px;color:var(--warn)}.claude-export-usage-note strong{display:block}
     .conversation-title-row h2{margin:0;font-size:var(--fs-2xl)}.provider-mark{display:none}
     .conversation-head .chips{margin-top:7px;gap:14px}.conversation-head a.conversation-web-link{color:var(--accent)}.conversation-head .chip{padding:0;border:0;color:var(--muted)}
@@ -2315,6 +2316,16 @@ try{
 if(signal.aborted||ticket!==mounting||!host.isConnected)return;
 c.title||=w.title;showReader(renderConversation(c,roots,async()=>(await api(conversationPath(c),{signal})).selected_settings,archive));
 const panel=host.querySelector('.conversation-panel');readerToolbar=panel.querySelector('.conversation-toolbar');placeReaderControls();bindReaderView(panel);
+// This local control changes the library's sharing policy, not the transcript.
+// A private conversation can still contribute eligible statistics, but is not
+// available to Teams content queries or AI answers.
+{
+ const privacy=node('div','teams-privacy-control'),status=node('span','meta','Loading sharing setting…'),button=node('button','', 'Mark private');
+ button.type='button';button.disabled=true;privacy.append(button,status);panel.querySelector('.conversation-head').append(privacy);
+ const path='/api/teams/privacy?conversation='+encodeURIComponent(c.id);
+ const show=p=>{if(!panel.isConnected)return;button.disabled=p.classifierState==='pending';button.textContent=p.classifierState==='pending'?'Sensitivity check pending':p.private?'Allow content sharing':'Mark private';status.textContent=p.private?'Private for Teams · eligible statistics may still be shared':p.classifierState==='unclassified'?'Content sharing requires your permission · sensitivity check not configured':'Content sharing requires your permission';button.onclick=async()=>{button.disabled=true;try{const review=p.classifierState==='flagged'&&!p.classifierReviewed;const next=await api(path,{method:'POST',body:JSON.stringify({action:review?'review':'mark',private:!p.private,revision:p.revision,...(review?{classifierInput:p.classifierInput}:{})}),signal});show(next)}catch(error){if(!signal.aborted){if(error.status===409){try{show(await api(path,{signal}));status.textContent='The sharing setting changed. Review it before trying again.'}catch{status.textContent='Could not refresh sharing setting.'}}else{button.disabled=false;status.textContent='Could not update sharing setting: '+(error.message||error)}}}}};
+ api(path,{signal}).then(show,error=>{if(!signal.aborted&&panel.isConnected)status.textContent='Sharing setting unavailable: '+(error.message||error)});
+}
 
 if(c.peer){const note=node('p','peer-reader-note'),link=node('a','',c.title||'Untitled workspace');link.href='/work/'+encodeURIComponent(c.workspace_id);link.onclick=event=>{if(event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;event.preventDefault();window.pharosNavigate(link.getAttribute('href'))};note.append(document.createTextNode(`${peerRoleLabel(c.peer_role)}${c.peer_confidence==='low'?' · uncertain':''} · related work: `),link);panel.querySelector('.conversation-head').prepend(note)}
 if(delegationExplorer){const context=node('div');panel.querySelector('.conversation-title-content > .chips').after(context);delegationExplorer.conversation(c.id,context)}
