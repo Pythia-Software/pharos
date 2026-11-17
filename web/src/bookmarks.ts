@@ -10,9 +10,17 @@ import { normalizedDashboardChart } from "./analysis-catalogs";
 import { queryCategories, type QueryCategory } from "./query-categories";
 import { queryDatasets, queryFromURL, queryURL, resolveRollingQuery, rollingQueryMatches, updateQueryWindowURL, type QueryDataset, type RollingWindow } from "./query-links";
 
+// One list holds two kinds of record: Home cards (collected cards and saved
+// views) and page bookmarks (the header star and the Bookmarks drawer). Each
+// record is one or the other, so removing a card never removes a bookmark and
+// a bookmarked page never appears on Home. See isPageBookmark.
 export const BOOKMARKS_KEY = "pharos-bookmarks-v1";
 export type Bookmark = {
   id: string; title: string; url: string; description?: string; savedAt?: number;
+  // Set on records the Bookmarks drawer owns. Older records say nothing.
+  // Only the star wrote created_at. Migration splits older starred records
+  // that also acquired a savedQueryId into a bookmark and a Home card.
+  bookmark?: boolean; created_at?: number;
   dashboard?: boolean; dashboardTarget?: Exclude<DashboardCardTarget, "chart">; action?: string; category?: QueryCategory;
   query?: QueryState; dataset?: QueryDataset; savedQueryId?: string; templateId?: string; coverMetricId?: string; cover?: CardCover;
   // The groups this card shows, when its owner chose a count. Otherwise it
@@ -34,6 +42,15 @@ export function readBookmarks(): Bookmark[] {
   }) : [];
 }
 
+export function isPageBookmark(item: Pick<Bookmark, "bookmark" | "created_at">): boolean {
+  return item.bookmark ?? typeof item.created_at === "number";
+}
+
+// The cards on Home and the saved views each Query Table lists, in Home's order.
+export function readHomeCards(): Bookmark[] {
+  return readBookmarks().filter(item => !isPageBookmark(item));
+}
+
 export function writeBookmarks(items: Bookmark[]) {
   preferences().set(BOOKMARKS_KEY, items);
   window.dispatchEvent(new Event("pharos:bookmarks"));
@@ -44,6 +61,19 @@ export function writeBookmarks(items: Bookmark[]) {
 // arrays remain a migration backup; a marker prevents resurrecting deletions.
 export function migrateSavedQueries() {
   let items = readBookmarks(), changed = false;
+  // An earlier migration merged saved views into matching star bookmarks.
+  // Split those records even when their saved-query migration marker is set.
+  // Keep the current definition and savedQueryId, since both may have been
+  // edited since the backup was made and defaults still name that saved ID.
+  items = items.flatMap(item => {
+    if (item.bookmark != null || typeof item.created_at !== "number" || typeof item.savedQueryId !== "string") return [item];
+    const bookmark: Bookmark = { ...item, bookmark: true };
+    delete bookmark.savedQueryId;
+    const card: Bookmark = { ...item, id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`, bookmark: false };
+    delete card.created_at;
+    changed = true;
+    return [bookmark, card];
+  });
   items = items.map(item => {
     let spec = queryFromURL(item.url, item.query);
     if (spec?.window && spec.window.mode === "calendar" && rollingQueryMatches(spec.query, spec.window)) {
@@ -79,7 +109,7 @@ export function migrateSavedQueries() {
     if (Array.isArray(old)) for (const saved of old.slice(0, 100)) {
       if (!saved || typeof saved.id !== "string" || typeof saved.name !== "string" || !saved.query || typeof saved.savedAt !== "number") continue;
       const url = queryURL(dataset, normalizeQueryState(saved.query), undefined, { preserveSource: true });
-      const found = items.find(item => item.url === url && (!item.dataset || item.dataset === dataset) && (!item.savedQueryId || item.savedQueryId === saved.id));
+      const found = items.find(item => !isPageBookmark(item) && item.url === url && (!item.dataset || item.dataset === dataset) && (!item.savedQueryId || item.savedQueryId === saved.id));
       if (found) { found.dataset = dataset; found.savedQueryId = saved.id; found.savedAt ??= saved.savedAt; }
       else items.push({ id: `query:${dataset}:${saved.id}`, title: saved.name, url, dataset, savedQueryId: saved.id, savedAt: saved.savedAt });
       changed = true;
@@ -90,7 +120,7 @@ export function migrateSavedQueries() {
 }
 
 export function savedQueries(dataset: QueryDataset): SavedQuery[] {
-  return readBookmarks().flatMap(item => {
+  return readHomeCards().flatMap(item => {
     const spec = queryFromURL(item.url, item.query);
     if (spec?.dataset !== dataset) return [];
     return [{ id: item.savedQueryId ?? item.id, name: item.title, savedAt: item.savedAt ?? 0, query: resolveRollingQuery(spec.query, spec.window) }];
@@ -99,7 +129,7 @@ export function savedQueries(dataset: QueryDataset): SavedQuery[] {
 
 export function savedRollingWindow(dataset: QueryDataset, query: QueryState): RollingWindow | undefined {
   const token = encodeQuery(query);
-  for (const item of readBookmarks()) {
+  for (const item of readHomeCards()) {
     const spec = queryFromURL(item.url, item.query);
     if (spec?.dataset === dataset && spec.window && encodeQuery(resolveRollingQuery(spec.query, spec.window)) === token) return spec.window;
   }
@@ -117,6 +147,7 @@ export function collectQuery(dataset: QueryDataset, query: QueryState, title: st
     return Boolean(dashboardContext(address)) && strip(address) === strip(url) && dashboardContext(address) === dashboardContext(url);
   };
   const existing = items.find(item => {
+    if (isPageBookmark(item)) return false;
     // A template can select a specialized study even when its source query
     // and cover match another card. Preserve that identity when collecting.
     if (item.templateId !== options.templateId) return false;
@@ -150,7 +181,7 @@ export function updateBookmark(id: string, title: string, description: string, d
   if (!title.trim() || title.trim().length > 200 || description.length > 500) throw new Error("Use a title up to 200 characters and a description up to 500.");
   const items = readBookmarks(), current = items.find(item => item.id === id), spec = current && queryFromURL(current.url, current.query);
   if (!current) throw new Error("This card is no longer on Home.");
-  if (spec && items.some(item => item.id !== id && item.title === title.trim() && queryFromURL(item.url, item.query)?.dataset === spec.dataset)) throw new Error("Another card or saved view from the same data already has this title. Choose a different title.");
+  if (spec && items.some(item => item.id !== id && !isPageBookmark(item) && item.title === title.trim() && queryFromURL(item.url, item.query)?.dataset === spec.dataset)) throw new Error("Another card or saved view from the same data already has this title. Choose a different title.");
   const updated: Bookmark & { description: string } = { ...current, title: title.trim(), description: description.trim() };
   if (labels) { delete updated.action; delete updated.category; Object.assign(updated, cardLabels(labels)); }
   if (groups !== undefined && groups !== null && !validCardGroups(groups)) throw new Error(`Enter a whole number of groups from 1 to ${cardGroupsMax}.`);
@@ -202,6 +233,12 @@ export function removeBookmark(id: string) {
   writeBookmarks(items.filter(item => item.id !== id));
 }
 
+// Home's Undo puts a removed card back before the card that followed it.
+export function restoreHomeCard(item: Bookmark, before?: string) {
+  const items = readBookmarks().filter(other => other.id !== item.id), to = before ? items.findIndex(other => other.id === before) : -1;
+  items.splice(to < 0 ? items.length : to, 0, item); writeBookmarks(items);
+}
+
 export function moveBookmark(id: string, before?: string) {
   const items = readBookmarks(), from = items.findIndex(item => item.id === id);
   if (from < 0 || id === before) return;
@@ -219,7 +256,7 @@ export async function collectDurableQuery(dataset: QueryDataset, query: QuerySta
 }
 
 export function replaceSavedQuery(dataset: QueryDataset, id: string, query: QueryState, savedAt: number, url: string): SavedQuery {
-  const items = readBookmarks(), current = items.find(item => (item.dataset ?? queryFromURL(item.url, item.query)?.dataset) === dataset && (item.savedQueryId ?? item.id) === id);
+  const items = readBookmarks(), current = items.find(item => !isPageBookmark(item) && (item.dataset ?? queryFromURL(item.url, item.query)?.dataset) === dataset && (item.savedQueryId ?? item.id) === id);
   if (!current) throw new Error("This saved view no longer exists.");
   const updated = { ...current, dataset, query: normalizeQueryState(query), url, savedAt };
   if (updated.coverMetricId && !validCoverValue(query, updated.coverMetricId)) delete updated.coverMetricId;

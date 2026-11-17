@@ -1,6 +1,6 @@
 import { localStorageAdapter, normalizeQueryState, type QueryState, type SavedQuery, type StorageAdapter, httpQuerySnapshotStore, createQueryLinkService } from "@pythia-software/query-table-core";
 import { preferences } from "./preferences";
-import { collectDurableQuery, replaceSavedQuery, migrateSavedQueries, readBookmarks, removeBookmark, savedQueries } from "./bookmarks";
+import { collectDurableQuery, replaceSavedQuery, migrateSavedQueries, readHomeCards, removeBookmark, savedQueries } from "./bookmarks";
 import { queryDatasets, readRollingWindow, rollingQueryMatches, queryURL, type QueryDataset } from "./query-links";
 import { queryFetch } from "./query-request";
 
@@ -192,7 +192,7 @@ export function libraryStorageAdapter(options: { fresh?: boolean; onRecovery?: (
     },
     async deleteSaved(key, id) {
       const dataset = datasetOf(key);
-      const item = readBookmarks().find(item => item.dataset === dataset && (item.savedQueryId ?? item.id) === id || item.id === id);
+      const item = readHomeCards().find(item => item.dataset === dataset && (item.savedQueryId ?? item.id) === id || item.id === id);
       if (item) removeBookmark(item.id);
       if (readDefaultId(key) === id) writeDefaultId(key, null);
     },

@@ -6,7 +6,7 @@ import { isTrendView, barsShown, analysisVersion, canonicalState, normalizeAnaly
 import { dashboardDefaults, legacyViewDefaults } from "./dashboard-defaults";
 import { readDashboardLink } from "./usage-dashboard-model";
 import { readUsageWorkspace, usageTopicDatasets, usageTopics, usageWorkspaceURL, type UsageDataset } from "./usage-workspace-model";
-import { cardLabels, collectDurableQuery, readBookmarks, writeBookmarks, type Bookmark, type CardLabels } from "./bookmarks";
+import { cardLabels, collectDurableQuery, readBookmarks, readHomeCards, writeBookmarks, type Bookmark, type CardLabels } from "./bookmarks";
 import { cardGroupsMax, defaultCardCover, pluralNoun, validCardGroups, type CardGroups } from "./card-cover";
 import type { QuerySuggestion } from "./curiosity-data";
 import type { QueryCategory } from "./query-categories";
@@ -135,7 +135,7 @@ export async function collectCardTemplate(item: QuerySuggestion): Promise<Bookma
 
 // Ask offers a chart's own address as a card; the same address is collected once.
 export function dashboardCardCollected(url: string, target: DashboardCardTarget = "chart"): boolean {
-  return readBookmarks().some(item => item.dashboard && item.url === dashboardCardTargetURL(url, target) && (item.dashboardTarget ?? "chart") === target);
+  return readHomeCards().some(item => item.dashboard && item.url === dashboardCardTargetURL(url, target) && (item.dashboardTarget ?? "chart") === target);
 }
 
 // All creation entry points use this contract: title and context come from the

@@ -9,7 +9,8 @@ import { fittedCoverHeight } from '../../../src/card-loading-model';
 import { loadDashboardCardPreview } from '../../../src/dashboard-card-preview';
 import { analysisCatalogs } from '../../../src/analysis-catalogs';
 import { dashboardDefaults } from '../../../src/dashboard-defaults';
-import { writeBookmarks, readBookmarks, updateBookmark, moveBookmark, removeBookmark } from '../../../src/bookmarks';
+import { writeBookmarks, readBookmarks, readHomeCards, isPageBookmark, restoreHomeCard, savedQueries, collectQuery, updateBookmark, moveBookmark, removeBookmark } from '../../../src/bookmarks';
+import { queryURL } from '../../../src/query-links';
 import { normalizeAnalysis, analysisQuery, analysisResult, analysisLabels, selectGroups, cycleResult, switchView } from '../../../src/dashboard-analysis-model';
 import { trendQuery, trendSeries } from '../../../src/dashboard-trend-model';
 import { optionLabels } from '../../../src/option-labels';
@@ -49,6 +50,31 @@ test('dashboard cards retain the complete chart and relative population through 
   assert.deepEqual(readBookmarks().map(item=>item.id),[second.id]);
   assert.equal(dashboardCardCollected(url),false,'removing the card offers it again');
   assert.throws(()=>collectDashboardCard(url,'   ',''),/title/);
+});
+
+test('page bookmarks and Home cards share one list without appearing in each other\'s place', t => {
+  fixture(t);
+  const url = makeURL({...dashboardDefaults.tokens, metric:'tokens'});
+  const query = {...EMPTY_QUERY, select:[{field:'tool_name'}], limit:25}, tableURL = queryURL('tool_calls', query);
+  // The star wrote created_at long before bookmark:true; an older card has neither.
+  writeBookmarks([
+    {id:'star', title:'Tokens page', url, created_at:1},
+    {id:'table-star', title:'Tool calls', url:tableURL, query, dataset:'tool_calls', bookmark:true, created_at:2},
+    {id:'old-card', title:'Old card', url:queryURL('tool_calls', {...query, limit:50})},
+  ]);
+  assert.deepEqual(readBookmarks().filter(isPageBookmark).map(item=>item.id),['star','table-star']);
+  assert.deepEqual(readHomeCards().map(item=>item.id),['old-card']);
+  assert.deepEqual(savedQueries('tool_calls').map(item=>item.id),['old-card'],'a bookmarked table is not one of its saved views');
+  assert.equal(dashboardCardCollected(url),false,'a bookmark of the same chart is not a Home card');
+  const card = collectDashboardCard(url,'Tokens','');
+  const saved = collectQuery('tool_calls', query, 'Tool calls card');
+  assert.notEqual(saved.id,'table-star','collecting a bookmarked view makes a separate card');
+  assert.deepEqual(readHomeCards().map(item=>item.id),['old-card',card.id,saved.id]);
+  assert.equal(updateBookmark(saved.id,'Tool calls','').title,'Tool calls','a bookmark title does not block a card title');
+  removeBookmark(card.id);
+  assert.deepEqual(readBookmarks().filter(isPageBookmark).map(item=>item.id),['star','table-star'],'removing a card keeps the bookmark');
+  restoreHomeCard(card, saved.id);
+  assert.deepEqual(readHomeCards().map(item=>item.id),['old-card',card.id,saved.id],'Undo returns the card to its place on Home');
 });
 
 test('dashboard cards keep a chosen call to action and category, and store neither when it matches the default', t => {

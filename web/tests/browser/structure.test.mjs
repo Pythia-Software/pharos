@@ -1589,25 +1589,39 @@ test("Background Processing shares the busy switch across Hourly and Daily and s
   await shot('work-history');
 });
 
-test("dashboard collection wraps after four bookmarked cards", { skip }, async t => {
-  const bookmarks = Array.from({ length: 9 }, (_, index) => ({ id: `card-${index}`, title: `Saved view ${index + 1}`, url: `/settings/preferences?card=${index}` }));
-  const { page, settled, shot } = await open(t, { url: '/', ready: '.home-collection .query-card', preferences: { 'pharos-bookmarks-v1': bookmarks } });
+test("dashboard collection wraps after four cards and leaves page bookmarks to their drawer", { skip }, async t => {
+  const cards = Array.from({ length: 9 }, (_, index) => ({ id: `card-${index}`, title: `Saved view ${index + 1}`, url: `/settings/preferences?card=${index}` }));
+  // An older star bookmark says only created_at; a newer one says bookmark:true.
+  const marks = [{ id: "old-star", title: "Older bookmark", url: "/settings/preferences?mark=1", created_at: 1 }, { id: "new-star", title: "Newer bookmark", url: "/settings/preferences?mark=2", bookmark: true, created_at: 2 }];
+  const { page, settled, shot } = await open(t, { url: '/', ready: '.home-collection .query-card', preferences: { 'pharos-bookmarks-v1': [cards[0], ...marks, ...cards.slice(1)], 'pharos-show-nav-button': true } });
   const collection = page.getByRole('region', { name: 'Your collection', exact: true });
   for (const width of [3000, 1180, 320]) {
     await page.setViewportSize({ width, height: 900 });
     await settled();
-    const cards = await collection.locator('.query-card').evaluateAll(cards => cards.map(card => {
+    const boxes = await collection.locator('.query-card').evaluateAll(cards => cards.map(card => {
       const { top, left, right } = card.getBoundingClientRect();
       return { top, left, right };
     }));
-    assert.equal(cards.length, bookmarks.length, 'all bookmarked cards remain visible');
-    const rows = Map.groupBy(cards, card => Math.round(card.top));
+    assert.equal(boxes.length, cards.length, 'every Home card and no page bookmark is on Home');
+    const rows = Map.groupBy(boxes, card => Math.round(card.top));
     assert.ok([...rows.values()].every(row => row.length <= 4), `at most four cards per row at ${width}px`);
     if (width >= 1180) assert.equal(rows.values().next().value.length, 4, 'wide windows fit four cards before wrapping');
-    assert.ok(cards.every(card => card.left >= 0 && card.right <= width), 'cards stay inside narrow windows');
+    assert.ok(boxes.every(card => card.left >= 0 && card.right <= width), 'cards stay inside narrow windows');
     assert.deepEqual(await layoutProblems(page), []);
     await shot(`collection-${width}`);
   }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await activateHeaderTool(page, "navigatorToggle");
+  await page.locator("#bookmarksToggle").click();
+  const entries = page.locator("#bookmarksDrawer.open .bookmark-entry .history-title");
+  await entries.first().waitFor();
+  assert.deepEqual(await entries.allTextContents(), ["Older bookmark", "Newer bookmark"], "the drawer lists only page bookmarks");
+  await page.locator('#bookmarksList .bookmark-entry[data-id="old-star"]').hover();
+  await page.getByRole("button", { name: "Remove Older bookmark", exact: true }).click();
+  await page.getByRole("button", { name: "Remove bookmark", exact: true }).click();
+  await page.waitForFunction(() => window.pharosPrefs.get("pharos-bookmarks-v1", []).length === 10);
+  assert.deepEqual(await page.evaluate(() => window.pharosPrefs.get("pharos-bookmarks-v1", []).map(item => item.id)), ["card-0", "new-star", ...cards.slice(1).map(card => card.id)], "removing a bookmark keeps every card and its order");
+  assert.equal(await collection.locator('.query-card').count(), cards.length);
 });
 
 test("session card keeps a visible saved cover during backfill", { skip }, async t => {

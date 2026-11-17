@@ -2,7 +2,7 @@ import { readWindowChoice, windowLabel } from "./day-window";
 import { Modal } from "./modal";
 import React, { useEffect, useRef, useState } from "react";
 import type { FieldSchema } from "@pythia-software/query-table-core";
-import { migrateSavedQueries, moveBookmark, readBookmarks, removeBookmark, updateBookmark, writeBookmarks, type Bookmark } from "./bookmarks";
+import { migrateSavedQueries, moveBookmark, readHomeCards, removeBookmark, restoreHomeCard, updateBookmark, type Bookmark } from "./bookmarks";
 import { clearPreviewCache, instantiateRecipe, queryRecipes, suggestionPool, suggestionWindowLabel, supportsToday, type QueryPreview, type QuerySuggestion, type WindowActivity } from "./curiosity-data";
 import { loadUsageHistory } from "./usage-history";
 import { queryFromURL, queryHasTimeFilter, rollingWindowDays, rollingWindowField, type QueryDataset } from "./query-links";
@@ -41,7 +41,7 @@ function timeWindowValue(spec: ReturnType<typeof queryFromURL>): string {
 
 export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchema<Record<string, any>>> }) {
   const [active, setActive] = useState(isHome);
-  const [collection, setCollection] = useState<Bookmark[]>(readBookmarks);
+  const [collection, setCollection] = useState<Bookmark[]>(readHomeCards);
   // The deck waits for the library's activity, so each card's window fits
   // where the work lies; it keeps those windows for the visit.
   const [pool, setPool] = useState<QuerySuggestion[] | null>(null), activity = useRef<WindowActivity | undefined>(undefined);
@@ -55,7 +55,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const [editCover, setEditCover] = useState(""), [editGroups, setEditGroups] = useState("");
   const [editAction, setEditAction] = useState(""), [editCategory, setEditCategory] = useState<QueryCategory>("usage");
   const [editError, setEditError] = useState("");
-  const [feedback, setMessage] = useState(""), [undo, setUndo] = useState<{ item: Bookmark; index: number } | null>(null);
+  const [feedback, setMessage] = useState(""), [undo, setUndo] = useState<{ item: Bookmark; before?: string } | null>(null);
   const [drag, setDrag] = useState<{ saved?: string; suggestion?: QuerySuggestion } | null>(null), [insertBefore, setInsertBefore] = useState<string | undefined>();
   const [hidden, setHidden] = useState(document.hidden);
   const reloadPreview = usePreviewReload(setPreviews, setErrors, [active, collection, pool, generation, schemas]);
@@ -64,8 +64,8 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const refreshPolicy = useRef<ResultPolicy>("cached");
 
   useEffect(() => {
-    migrateSavedQueries(); setCollection(readBookmarks());
-    const bookmarks = () => setCollection(readBookmarks());
+    migrateSavedQueries(); setCollection(readHomeCards());
+    const bookmarks = () => setCollection(readHomeCards());
     const route = () => setActive(isHome());
     let cancelled = false;
     void loadUsageHistory(true).then(history => history.active_conversations, () => undefined).then(counts => {
@@ -153,7 +153,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     moveBookmark(id, direction < 0 ? collection[target].id : collection[target + 1]?.id);
   }
   function remove(item: Bookmark) {
-    setUndo({ item, index: collection.findIndex(other => other.id === item.id) }); removeBookmark(item.id); setMessage(`Removed “${item.title}”.`);
+    setUndo({ item, before: collection[collection.findIndex(other => other.id === item.id) + 1]?.id }); removeBookmark(item.id); setMessage(`Removed “${item.title}”.`);
   }
   const finishDrag = () => { setDrag(null); setInsertBefore(undefined); };
   const editingSpec = editing && queryFromURL(editing.url, editing.query);
@@ -186,7 +186,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
         const chart = withCardGroups(spec.query, { recipe, cover: item.cover, metricId: item.coverMetricId }, item.maxGroups);
         return cardLoadingPresentation(chart.query, { recipe, cover: chart.cover, metricId: item.coverMetricId, days: spec.window?.days });
       })() : undefined),
-      preview: spec ? previews[item.id] : { state: "ready" as const, total: 0, summary: "Bookmarked page", excerpt: item.url.split("?")[0].slice(1) || "Home" }, error: errors[item.id],
+      preview: spec ? previews[item.id] : { state: "ready" as const, total: 0, summary: "Saved page", excerpt: item.url.split("?")[0].slice(1) || "Home" }, error: errors[item.id],
     } };
   };
   const editingCard = editing && presented(editing).card;
@@ -203,7 +203,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       {!collection.length ? <div className="home-empty"><Icon name="bookmark" /><span>Make this space yours.<small>Collect cards that help you see your work from different angles</small></span></div> : null}
       {drag ? <span className="home-drop-label"><Icon name="arrow-up" />{drag.saved ? "Drop to reorder your collection" : "Drop to add to your collection"}</span> : null}
     </div>
-    <div className="home-feedback" role="status">{feedback}{undo ? <button type="button" onClick={() => { const items = readBookmarks(); items.splice(Math.min(undo.index, items.length), 0, undo.item); writeBookmarks(items); setUndo(null); setMessage("Restored to your collection."); }}>Undo</button> : null}</div>
+    <div className="home-feedback" role="status">{feedback}{undo ? <button type="button" onClick={() => { restoreHomeCard(undo.item, undo.before); setUndo(null); setMessage("Restored to your collection."); }}>Undo</button> : null}</div>
     <QueryConveyor items={eligible} previews={previews} loading={loading} hasErrors={Object.keys(errors).length > 0} active={active} suspended={hidden || !active || Boolean(drag) || Boolean(editing)}
       onRefresh={() => { refreshPolicy.current = "fresh"; clearPreviewCache(); invalidateCardPreviews(); setGeneration(value => value + 1); setErrors({}); setPool(suggestionPool(new Date(), cardTemplates())); }} onOpen={navigate} onKeep={keep} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag}
       onAllCards={() => navigate("/cards")} />
@@ -239,7 +239,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
         {rollingWindowDays.map(days => <option key={days} value={days}>{windowLabel(days)}</option>)}
         <option value="all">All time</option>
       </select><small id="homeWindowHelp">{editDays === "today" ? "Since local midnight, through now. Follows the current day each time the card runs." : editDays === "all" ? "Removes the saved date range. Other filters stay in place." : editDays ? `${windowLabel(readWindowChoice(editDays))}, through now. Measured back from now each time the card runs.` : "Keeps the dates and time filters already saved with this card."}</small></label>
-        : <p className="home-editor-window-note">{editingRecipe?.period === "current" ? "This card always shows the current state." : editingRecipe?.period === "all" ? "This card always covers all recorded history." : editing?.dashboard ? "This card keeps the time range of the dashboard view it was made from." : editingSpec ? "This card’s time range cannot be changed here." : "This bookmarked page uses its own time controls."}</p>}
+        : <p className="home-editor-window-note">{editingRecipe?.period === "current" ? "This card always shows the current state." : editingRecipe?.period === "all" ? "This card always covers all recorded history." : editing?.dashboard ? "This card keeps the time range of the dashboard view it was made from." : editingSpec ? "This card’s time range cannot be changed here." : "This page uses its own time controls."}</p>}
       {editError ? <p role="alert">{editError}</p> : null}
       {editingRecipe?.exploration && !editingSpec?.query.grouping ? <div className="home-editor-upgrade"><button type="button" onClick={() => {
         const next = instantiateRecipe(editingRecipe, editDays === "today" ? "today" : Number(editDays) || 30);
