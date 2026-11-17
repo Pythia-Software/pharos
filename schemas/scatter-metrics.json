@@ -2379,6 +2379,42 @@
       "field": "input_bytes"
     }
   },
+  "messages_text_chars": {
+    "dataset": "messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM(LENGTH([text]))"
+    }
+  },
+  "messages_text_words": {
+    "dataset": "messages",
+    "keys": {
+      "conversation": "conversation_id",
+      "work": "workspace_id",
+      "message": "id"
+    },
+    "time": {
+      "first": "sent_at",
+      "last": "sent_at"
+    },
+    "where": [],
+    "summary": {
+      "id": "value",
+      "op": "formula",
+      "expression": "SUM(WORD_COUNT([text]))"
+    }
+  },
   "session_shape_wall_seconds": {
     "dataset": "session_shape",
     "keys": {

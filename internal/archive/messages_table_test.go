@@ -174,6 +174,12 @@ func TestMessagesQueryV3GroupsSearchesAndBoundsText(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := testServer(t, config, c)
+	// Trusted scatter totals read the full stored text, while the public
+	// Messages schema must keep rejecting raw text aggregation afterward.
+	points, err := s.scatterRows(t.Context(), fieldSet("messages_text_words", "messages_text_chars"), []querytable.WhereTerm{{Field: "id", Op: "=", Value: "message:m-assistant"}})
+	if err != nil || len(points) != 1 || integer(points[0]["messages_text_chars"]) != int64(utf8.RuneCountInString(longText)) || integer(points[0]["messages_text_words"]) != 4 {
+		t.Fatalf("stored text totals were bounded or unavailable: %#v, %v", points, err)
+	}
 	capabilities := apiCall(t, s, config.APIToken, http.MethodGet, "/api/query/messages/capabilities", nil)
 	if capabilities.Code != 200 || !strings.Contains(capabilities.Body.String(), `"queryCapabilities"`) {
 		t.Fatalf("messages capabilities: %d %s", capabilities.Code, capabilities.Body.String())
@@ -193,6 +199,19 @@ func TestMessagesQueryV3GroupsSearchesAndBoundsText(t *testing.T) {
 	}
 	if _, _, err := s.executeQueryV3(t.Context(), "messages", nil, PharosMessagesSchema(), groupRequest("text", qt.SummaryColumn{ID: "messages", Op: "count"})); err == nil {
 		t.Fatal("grouped text would expose unbounded message bodies")
+	}
+	// The grouped editor offers a representative of any shown field; message
+	// text arrives within the row budget, cut on a character boundary.
+	representative := groupRequest("role", qt.SummaryColumn{ID: "latest", Op: "row", Field: "text"})
+	representative.Grouping.Representative = &qt.RepresentativeRow{OrderBy: []qt.OrderBy{{Field: "id", Dir: "asc"}}}
+	got, _, err = s.executeQueryV3(t.Context(), "messages", nil, PharosMessagesSchema(), representative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range got.Rows {
+		if body := firstString(row["latest"]); firstString(row["role"]) == "assistant" && (len(body) != authoredTextLimit-1 || !utf8.ValidString(body) || strings.Contains(body, "needle")) {
+			t.Fatalf("representative text was not bounded: %d bytes", len(body))
+		}
 	}
 	textMetric := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(),
 		Metrics: []qt.AggSpec{{ID: "first_text", Op: "min", Field: "text"}}}

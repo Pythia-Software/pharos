@@ -1831,9 +1831,9 @@
       "reason": "Connected destination schedule sections use cloud:schedule:<destination ID>; setup and download command disclosures belong to the unapplied backup wizard."
     },
     {
-      "key": "4c5f76ae6d4afdee:0",
+      "key": "d5d7a7f4c08bca90:0",
       "file": "internal/archive/assets/data-guide.js",
-      "owner": "hf",
+      "owner": "ff",
       "tag": "aria-expanded",
       "control": "document.getElementById(\"dataGuideToggle\")",
       "disclosure": true,
