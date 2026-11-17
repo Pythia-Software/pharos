@@ -58,7 +58,7 @@ func (c *Catalog) teamsPrivacy(ctx context.Context, id string) (teamsPrivacy, er
 // change together, so a send can compare its captured revision before release.
 var errTeamsPrivacyStale = errors.New("privacy setting changed; review it again")
 
-func (c *Catalog) updateTeamsPrivacy(ctx context.Context, id string, expected *int64, change func(*teamsPrivacy) error) (teamsPrivacy, error) {
+func (c *Catalog) updateTeamsPrivacy(ctx context.Context, id string, expected *int64, retireExplicit bool, change func(*teamsPrivacy) error) (teamsPrivacy, error) {
 	var result teamsPrivacy
 	lease, err := c.teamsSharingLease()
 	if err != nil {
@@ -76,6 +76,12 @@ func (c *Catalog) updateTeamsPrivacy(ctx context.Context, id string, expected *i
 		before := p
 		if err = change(&p); err != nil {
 			return err
+		}
+		if retireExplicit && !p.UserPrivate {
+			err = teamsRetireExplicitProtection(tx, p)
+			if err != nil {
+				return err
+			}
 		}
 		if p.UserPrivate == before.UserPrivate && p.ClassifierState == before.ClassifierState && p.ClassifierInput == before.ClassifierInput && p.ClassifierReviewed == before.ClassifierReviewed {
 			result = p
@@ -101,7 +107,7 @@ func (c *Catalog) setTeamsPrivate(ctx context.Context, id string, private bool, 
 	if len(expected) > 0 {
 		revision = expected[0]
 	}
-	return c.updateTeamsPrivacy(ctx, id, revision, func(p *teamsPrivacy) error { p.UserPrivate = private; return nil })
+	return c.updateTeamsPrivacy(ctx, id, revision, !private, func(p *teamsPrivacy) error { p.UserPrivate = private; return nil })
 }
 
 // A new input invalidates a previous review. A late classifier result for an
@@ -115,7 +121,7 @@ func (c *Catalog) setTeamsClassification(ctx context.Context, id, input, state s
 	default:
 		return teamsPrivacy{}, fmt.Errorf("invalid classifier state")
 	}
-	return c.updateTeamsPrivacy(ctx, id, nil, func(p *teamsPrivacy) error {
+	return c.updateTeamsPrivacy(ctx, id, nil, false, func(p *teamsPrivacy) error {
 		if state != "pending" && (p.ClassifierInput != input || p.ClassifierState != "pending") {
 			return errors.New("classification is no longer current")
 		}
@@ -133,7 +139,7 @@ func (c *Catalog) reviewTeamsClassification(ctx context.Context, id, input strin
 	if len(expected) > 0 {
 		revision = expected[0]
 	}
-	return c.updateTeamsPrivacy(ctx, id, revision, func(p *teamsPrivacy) error {
+	return c.updateTeamsPrivacy(ctx, id, revision, false, func(p *teamsPrivacy) error {
 		if p.ClassifierState != "flagged" || p.ClassifierInput != input || p.ClassifierReviewed {
 			return errTeamsPrivacyStale
 		}

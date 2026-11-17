@@ -695,6 +695,15 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	if err != nil {
 		return err
 	}
+	// Imported histories do not carry a proved complete local protection
+	// assertion ledger. Retain an explicit hold until that provenance is
+	// reconciled; an absent transferred privacy row is not positive evidence.
+	if _, err = tx.ExecContext(ctx, `INSERT INTO teams_protection_assertions(conversation_id,provider,account,native_id,kind,evidence,active,created_revision)
+ SELECT c.id,c.provider,c.account,c.native_id,'legacy_hold','unreconciled_import',1,r.revision FROM incoming_conversations c CROSS JOIN teams_privacy_revision r
+ WHERE r.id=1 AND NOT EXISTS(SELECT 1 FROM teams_protection_assertions a WHERE a.conversation_id=c.id AND a.provider=c.provider AND a.account=c.account AND a.native_id=c.native_id AND a.kind='legacy_hold' AND a.evidence='unreconciled_import' AND a.active=1);
+ UPDATE teams_protection_baseline SET state='held',generation=generation+1 WHERE id=1 AND EXISTS(SELECT 1 FROM incoming_conversations)`); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM messages WHERE conversation_id IN (SELECT id FROM delivered_conversations)
  AND NOT EXISTS(SELECT 1 FROM incoming_messages s WHERE s.conversation_id=messages.conversation_id AND s.native_id=messages.native_id)`); err != nil {
 		return err

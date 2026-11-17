@@ -960,6 +960,10 @@ func (c *Catalog) backfillChildSessionKinds() error {
 	if err != nil {
 		return err
 	}
+	if err := c.ensureTeamsProtectionProofSchema(); err != nil {
+		return err
+	}
+
 	return nil
 }
 

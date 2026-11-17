@@ -191,6 +191,44 @@ CREATE TABLE IF NOT EXISTS teams_privacy_revision (
 );
 INSERT OR IGNORE INTO teams_privacy_revision(id,revision) VALUES(1,0);
 
+-- Protection proof is independent of classifier progress and shared receipts.
+-- Migration starts held; no positive observation follows from an absent row.
+CREATE TABLE IF NOT EXISTS teams_protection_baseline (
+ id INTEGER PRIMARY KEY CHECK(id=1), library_id TEXT NOT NULL DEFAULT '', instance_id TEXT NOT NULL DEFAULT '',
+ state TEXT NOT NULL CHECK(state IN ('building','current','held')), generation INTEGER NOT NULL DEFAULT 0,
+ format_version INTEGER NOT NULL DEFAULT 1, producer_version INTEGER NOT NULL DEFAULT 1,
+ policy_sha256 TEXT NOT NULL DEFAULT '', inventory_sha256 TEXT NOT NULL DEFAULT '', proposal_sha256 TEXT NOT NULL DEFAULT '',
+ source_revision INTEGER NOT NULL DEFAULT 0, privacy_revision INTEGER NOT NULL DEFAULT 0,
+ mapping_revision INTEGER NOT NULL DEFAULT 0, acknowledged_policy INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO teams_protection_baseline(id,state) VALUES(1,'held');
+CREATE TABLE IF NOT EXISTS teams_protection_assertions (
+ assertion_id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL,
+ provider TEXT NOT NULL, account TEXT NOT NULL, native_id TEXT NOT NULL,
+ kind TEXT NOT NULL CHECK(kind IN ('explicit_private','positive_flag','inherited_guard','legacy_hold')),
+ evidence TEXT NOT NULL DEFAULT '', policy_sha256 TEXT NOT NULL DEFAULT '',
+ active INTEGER NOT NULL CHECK(active IN (0,1)), created_revision INTEGER NOT NULL,
+ retired_revision INTEGER, retirement_evidence TEXT NOT NULL DEFAULT '', retired_by_action_id INTEGER REFERENCES teams_protection_actions(action_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS teams_protection_active_assertion ON teams_protection_assertions(conversation_id,provider,account,native_id,kind,evidence) WHERE active=1;
+CREATE INDEX IF NOT EXISTS teams_protection_assertion_identity ON teams_protection_assertions(provider,account,native_id);
+CREATE TABLE IF NOT EXISTS teams_protection_actions (
+ action_id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL,
+ provider TEXT NOT NULL, account TEXT NOT NULL, native_id TEXT NOT NULL,
+ kind TEXT NOT NULL CHECK(kind='explicit_unmark'), observed_revision INTEGER NOT NULL, retired_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS teams_protection_observations (
+ binding_id TEXT NOT NULL, conversation_id TEXT NOT NULL, origin TEXT NOT NULL,
+ baseline_generation INTEGER NOT NULL, decision_revision INTEGER NOT NULL,
+ indexed_digest TEXT NOT NULL, evidence_sha256 TEXT NOT NULL, capture_sha256 TEXT NOT NULL,
+ capture_revision TEXT NOT NULL, provenance_sha256 TEXT NOT NULL, dependency_sha256 TEXT NOT NULL,
+ source_revision INTEGER NOT NULL, privacy_revision INTEGER NOT NULL, mapping_revision INTEGER NOT NULL,
+ policy_sha256 TEXT NOT NULL, decision TEXT NOT NULL CHECK(decision IN ('non_private','explicit_private','inherited_private','flagged','unknown')),
+ decision_origin TEXT NOT NULL CHECK(decision_origin IN ('observed_default','reviewed_baseline','explicit_action','reconciled_lineage')),
+ PRIMARY KEY(binding_id,conversation_id,origin),
+ FOREIGN KEY(binding_id,conversation_id,origin) REFERENCES teams_codex_capture_custody(binding_id,conversation_id,origin) ON DELETE CASCADE
+);
+
 -- Adapter-origin proofs are local observations, never account attestations or
 -- sharing grants. A changed source configuration creates a fresh binding.
 CREATE TABLE IF NOT EXISTS teams_source_bindings (
