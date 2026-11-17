@@ -17,6 +17,10 @@ func (c *DeviceClient) ObserveSourceProtection(ctx context.Context, library stri
 	if err != nil {
 		return out, err
 	}
+	wantID, err := sourcewire.ProtectionObservationID(v, c.installation, library)
+	if err != nil || wantID != v.ObservationID {
+		return out, errors.New("invalid Teams protection identity")
+	}
 	path, err := LibraryPath(library, "source-protection")
 	if err != nil {
 		return out, err

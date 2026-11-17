@@ -17,6 +17,8 @@ type Classification struct {
 
 type ProtectionObservation struct {
 	Version          int            `json:"version"`
+	Contract         string         `json:"contract"`
+	IssuedAt         int64          `json:"issued_at"`
 	ObservationID    string         `json:"observation_id"`
 	ExpectedRevision int64          `json:"expected_revision"`
 	Revision         int64          `json:"revision"`
@@ -42,7 +44,7 @@ type ProtectionReceipt struct {
 }
 
 func (v ProtectionObservation) Validate() error {
-	if v.Version != 1 || !uuidPattern.MatchString(v.ObservationID) || v.ExpectedRevision < 0 || v.Revision < 1 || v.Revision != v.ExpectedRevision+1 || !opaque(v.Token) || !opaque(v.Witness) || !opaque(v.EvidenceRevision) || v.Dependencies == nil || len(v.Dependencies) > MaxDependenciesPerItem {
+	if v.Version != 1 || v.Contract != SourceRecoveryContract || v.IssuedAt <= 0 || v.IssuedAt > 253402300799 || !uuidPattern.MatchString(v.ObservationID) || v.ExpectedRevision < 0 || v.Revision < 1 || v.Revision != v.ExpectedRevision+1 || !opaque(v.Token) || !opaque(v.Witness) || !opaque(v.EvidenceRevision) || v.Dependencies == nil || len(v.Dependencies) > MaxDependenciesPerItem {
 		return ErrInvalid
 	}
 	previous := ""

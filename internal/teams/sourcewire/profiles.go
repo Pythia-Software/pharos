@@ -18,6 +18,9 @@ type ProfileItem struct {
 	EvidenceRevision string   `json:"evidence_revision"`
 }
 type ProfilePage struct {
+	Contract            string        `json:"contract"`
+	IssuedAt            int64         `json:"issued_at"`
+	UploadID            string        `json:"upload_id"`
 	SnapshotID          string        `json:"snapshot_id"`
 	InventorySHA256     string        `json:"inventory_sha256"`
 	ProfileID           string        `json:"profile_id"`
@@ -30,6 +33,9 @@ type ProfilePage struct {
 	Items               []ProfileItem `json:"items"`
 }
 type ProfileSeal struct {
+	Contract            string   `json:"contract"`
+	IssuedAt            int64    `json:"issued_at"`
+	UploadID            string   `json:"upload_id"`
 	SnapshotID          string   `json:"snapshot_id"`
 	InventorySHA256     string   `json:"inventory_sha256"`
 	ProfileID           string   `json:"profile_id"`
@@ -104,7 +110,7 @@ func (v ProfileItem) Validate() error {
 	return nil
 }
 func (p ProfilePage) Validate() error {
-	if !profileIdentity(p.SnapshotID, p.InventorySHA256, p.ProfileID, p.ProfileVersion, p.ProfileRevision, p.LocalRevision, p.ExpectedPriorSHA256) || p.Index < 0 || p.Index >= MaxPages || p.Items == nil || len(p.Items) > MaxItemsPerPage {
+	if p.Contract != SourceRecoveryContract || p.IssuedAt <= 0 || p.IssuedAt > 253402300799 || !uuidPattern.MatchString(p.UploadID) || !profileIdentity(p.SnapshotID, p.InventorySHA256, p.ProfileID, p.ProfileVersion, p.ProfileRevision, p.LocalRevision, p.ExpectedPriorSHA256) || p.Index < 0 || p.Index >= MaxPages || p.Items == nil || len(p.Items) > MaxItemsPerPage {
 		return ErrInvalid
 	}
 	if p.Index == 0 {
@@ -124,7 +130,7 @@ func (p ProfilePage) Validate() error {
 	return nil
 }
 func (s ProfileSeal) Validate() error {
-	if !profileIdentity(s.SnapshotID, s.InventorySHA256, s.ProfileID, s.ProfileVersion, s.ProfileRevision, s.LocalRevision, s.ExpectedPriorSHA256) || s.PageCount < 1 || s.PageCount > MaxPages || s.ItemCount < 0 || s.ItemCount > s.PageCount*MaxItemsPerPage || !digest(s.FinalPageSHA256, false) {
+	if s.Contract != SourceRecoveryContract || s.IssuedAt <= 0 || s.IssuedAt > 253402300799 || !uuidPattern.MatchString(s.UploadID) || !profileIdentity(s.SnapshotID, s.InventorySHA256, s.ProfileID, s.ProfileVersion, s.ProfileRevision, s.LocalRevision, s.ExpectedPriorSHA256) || s.PageCount < 1 || s.PageCount > MaxPages || s.ItemCount < 0 || s.ItemCount > s.PageCount*MaxItemsPerPage || !digest(s.FinalPageSHA256, false) {
 		return ErrInvalid
 	}
 	for _, n := range []int{s.Coverage.IdentityAmbiguous, s.Coverage.OverlapUnresolved, s.Coverage.CaptureGap, s.Coverage.UnsupportedMeasure, s.Coverage.MappingConflict} {

@@ -1449,6 +1449,9 @@ var moveRetainedTables = []string{"ui_preferences", "query_table_query_snapshots
 	// Native proofs require conversation rows and must instead be re-observed.
 	"teams_source_bindings", "teams_source_revision", "teams_source_mapping_revisions", "teams_source_mapping_current", "teams_source_mapping_exposure",
 	"teams_v2_uploads", "teams_v2_results", "teams_v2_declines", "teams_content_runs",
+	// Preserve exact source evidence and transport custody; copy parents before
+	// children. Settings stay disabled and continuity held after replacement.
+	"teams_origin_outbox", "teams_profile_outbox", "teams_profile_outbox_pages", "teams_recovery_stage_batches", "teams_recovery_stage_pages",
 	"safety_state", "safety_cart", "safety_handoffs", "fix_state", "fix_cart", "fix_handoffs",
 	"source_states", "source_record_states", "source_item_states", "source_terminal_states", "sync_generations", "hosts", "protections", "repository_retirements", "library_delivery_checkpoints", "library_workspace_delivery_checkpoints"}
 

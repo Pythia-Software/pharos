@@ -41,6 +41,12 @@ var teamsProtectionProjectionQueries = []struct{ name, query string }{
 	{"mapping_exposure", `SELECT binding_id,mapping_revision,exposed_at FROM teams_source_mapping_exposure ORDER BY binding_id`},
 	{"enrollment", `SELECT id,generation FROM teams_protection_enrollment ORDER BY id`},
 	{"policy_ack", `SELECT id,policy_id,policy_sha256,origin,org_id,person_id,installation_id,library_id,instance_id,enrollment_generation,settings_revision,acknowledged_at FROM teams_protection_policy_ack ORDER BY id`},
+	{"v2_uploads", `SELECT work_id,version_id,library_id,instance_id,org_id,installation_id,config_sha256,snapshot_id,binding_id,inventory_revision,inventory_sha256,local_revision,evaluation_revision,settings_revision,source_revision,privacy_revision,generation,mode,policy_version,authorization_json,pages_json,seal_json,sealed_json,binding_json,assignments_json,state FROM teams_v2_uploads ORDER BY work_id`},
+	{"origin_outbox", `SELECT observation_id,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,run_id,run_generation,expires_at,token,expected_revision,observation_json,observation_sha256,state,receipt_json FROM teams_origin_outbox ORDER BY observation_id`},
+	{"profile_outbox", `SELECT upload_id,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,settings_revision,source_revision,privacy_revision,snapshot_id,inventory_sha256,profile_revision,issued_at,expires_at,seal_json,seal_sha256,state,seal_receipt_json FROM teams_profile_outbox ORDER BY upload_id`},
+	{"profile_pages", `SELECT upload_id,page_index,page_json,page_sha256,receipt_json FROM teams_profile_outbox_pages ORDER BY upload_id,page_index`},
+	{"recovery_batches", `SELECT run_id,installation_id,upload_id,org_id,person_id,library_id,instance_id,generation,issued_at,expires_at,settings_revision,source_revision,privacy_revision,prior_profile_revision,prior_profile_sha256,state FROM teams_recovery_stage_batches ORDER BY run_id,installation_id,upload_id`},
+	{"recovery_pages", `SELECT run_id,installation_id,upload_id,page_index,command_id,page_json,page_sha256,receipt_json FROM teams_recovery_stage_pages ORDER BY run_id,installation_id,upload_id,page_index`},
 	{"settings", `SELECT id,library_id,instance_id,org_id,installation_id,key_fingerprint,enabled,metrics_opt_out,acknowledged_policy,settings_revision,local_revision,observed_generation,observed_privacy_revision FROM teams_local_settings ORDER BY id`},
 }
 

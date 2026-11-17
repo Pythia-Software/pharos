@@ -1,7 +1,9 @@
 {
   "observation": {
     "version": 1,
-    "observation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "contract": "source_recovery_v1",
+    "issued_at": 1794931200,
+    "observation_id": "5ecfbb47-ca83-8a6d-a7cf-1bf4545fe235",
     "expected_revision": 0,
     "revision": 1,
     "token": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
@@ -20,26 +22,28 @@
     "reviewed_flag_revision": 0,
     "manual_review_evidence": ""
   },
-  "canonical_json": "{\"version\":1,\"observation_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"expected_revision\":0,\"revision\":1,\"token\":\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\",\"witness\":\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI\",\"dependencies\":[\"AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM\"],\"evidence_revision\":\"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ\",\"protection\":\"flagged\",\"classification\":{\"state\":\"pending\",\"required\":true,\"evidence_revision\":\"\",\"policy_sha256\":\"\"},\"reviewed_flag_revision\":0,\"manual_review_evidence\":\"\"}",
-  "sha256": "cb79df11e904863031a692265634828dab63c1f036654af64a7b578abc893c09",
+  "canonical_json": "{\"version\":1,\"contract\":\"source_recovery_v1\",\"issued_at\":1794931200,\"observation_id\":\"5ecfbb47-ca83-8a6d-a7cf-1bf4545fe235\",\"expected_revision\":0,\"revision\":1,\"token\":\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\",\"witness\":\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI\",\"dependencies\":[\"AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM\"],\"evidence_revision\":\"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ\",\"protection\":\"flagged\",\"classification\":{\"state\":\"pending\",\"required\":true,\"evidence_revision\":\"\",\"policy_sha256\":\"\"},\"reviewed_flag_revision\":0,\"manual_review_evidence\":\"\"}",
+  "sha256": "8d6271f0d56f963a37eb77f09868cae6c0144fb95eba6c5db785fde129fe91af",
   "accepted_receipt": {
     "status": "accepted",
-    "observation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "observation_id": "5ecfbb47-ca83-8a6d-a7cf-1bf4545fe235",
     "revision": 1,
-    "observation_sha256": "cb79df11e904863031a692265634828dab63c1f036654af64a7b578abc893c09",
+    "observation_sha256": "8d6271f0d56f963a37eb77f09868cae6c0144fb95eba6c5db785fde129fe91af",
     "privacy_revision": 7,
     "origin_protection": "flagged",
     "safety_pending": true
   },
   "held_receipt": {
     "status": "held",
-    "observation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "observation_id": "5ecfbb47-ca83-8a6d-a7cf-1bf4545fe235",
     "revision": 0,
-    "observation_sha256": "cb79df11e904863031a692265634828dab63c1f036654af64a7b578abc893c09",
+    "observation_sha256": "8d6271f0d56f963a37eb77f09868cae6c0144fb95eba6c5db785fde129fe91af",
     "privacy_revision": 0,
     "origin_protection": "",
     "safety_pending": true
   },
-  "accepted_receipt_json": "{\"status\":\"accepted\",\"observation_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"revision\":1,\"observation_sha256\":\"cb79df11e904863031a692265634828dab63c1f036654af64a7b578abc893c09\",\"privacy_revision\":7,\"origin_protection\":\"flagged\",\"safety_pending\":true}",
-  "held_receipt_json": "{\"status\":\"held\",\"observation_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"revision\":0,\"observation_sha256\":\"cb79df11e904863031a692265634828dab63c1f036654af64a7b578abc893c09\",\"privacy_revision\":0,\"origin_protection\":\"\",\"safety_pending\":true}"
+  "accepted_receipt_json": "{\"status\":\"accepted\",\"observation_id\":\"5ecfbb47-ca83-8a6d-a7cf-1bf4545fe235\",\"revision\":1,\"observation_sha256\":\"8d6271f0d56f963a37eb77f09868cae6c0144fb95eba6c5db785fde129fe91af\",\"privacy_revision\":7,\"origin_protection\":\"flagged\",\"safety_pending\":true}",
+  "held_receipt_json": "{\"status\":\"held\",\"observation_id\":\"5ecfbb47-ca83-8a6d-a7cf-1bf4545fe235\",\"revision\":0,\"observation_sha256\":\"8d6271f0d56f963a37eb77f09868cae6c0144fb95eba6c5db785fde129fe91af\",\"privacy_revision\":0,\"origin_protection\":\"\",\"safety_pending\":true}",
+  "installation_id": "00000000-0000-4000-8000-000000000003",
+  "library_id": "synthetic-library"
 }
