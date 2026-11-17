@@ -11,15 +11,17 @@ import (
 // A private conversation is excluded from org LLM input and content queries;
 // the separate query policy decides which statistical operations may include it.
 type teamsPrivacy struct {
-	provider, account, native string
-	ConversationID            string `json:"conversationId"`
-	UserPrivate               bool   `json:"userPrivate"`
-	ClassifierState           string `json:"classifierState"`
-	ClassifierInput           string `json:"classifierInput,omitempty"`
-	ClassifierReviewed        bool   `json:"classifierReviewed"`
-	Private                   bool   `json:"private"`
-	SensitivityHold           bool   `json:"sensitivityHold"`
-	Revision                  int64  `json:"revision"`
+	provider, account, native                   string
+	storedConversationID                        string
+	storedProvider, storedAccount, storedNative string
+	ConversationID                              string `json:"conversationId"`
+	UserPrivate                                 bool   `json:"userPrivate"`
+	ClassifierState                             string `json:"classifierState"`
+	ClassifierInput                             string `json:"classifierInput,omitempty"`
+	ClassifierReviewed                          bool   `json:"classifierReviewed"`
+	Private                                     bool   `json:"private"`
+	SensitivityHold                             bool   `json:"sensitivityHold"`
+	Revision                                    int64  `json:"revision"`
 }
 
 func (p *teamsPrivacy) resolve() {
@@ -41,8 +43,8 @@ func readTeamsPrivacy(ctx context.Context, q interface {
 	if matches > 1 || mismatches > 0 {
 		return p, errTeamsSourceUnavailable
 	}
-	err := q.QueryRowContext(ctx, `SELECT c.provider,c.account,c.native_id,COALESCE(p.user_private,0),COALESCE(p.classifier_state,'unclassified'),COALESCE(p.classifier_input,''),COALESCE(p.classifier_reviewed,0),r.revision
- FROM conversations c CROSS JOIN teams_privacy_revision r LEFT JOIN teams_conversation_privacy p ON (p.provider=c.provider AND p.account=c.account AND p.native_id=c.native_id) OR p.conversation_id=c.id WHERE c.id=? AND r.id=1`, id).Scan(&p.provider, &p.account, &p.native, &p.UserPrivate, &p.ClassifierState, &p.ClassifierInput, &p.ClassifierReviewed, &p.Revision)
+	err := q.QueryRowContext(ctx, `SELECT c.provider,c.account,c.native_id,COALESCE(p.conversation_id,c.id),COALESCE(p.provider,c.provider),COALESCE(p.account,c.account),COALESCE(p.native_id,c.native_id),COALESCE(p.user_private,0),COALESCE(p.classifier_state,'unclassified'),COALESCE(p.classifier_input,''),COALESCE(p.classifier_reviewed,0),r.revision
+ FROM conversations c CROSS JOIN teams_privacy_revision r LEFT JOIN teams_conversation_privacy p ON (p.provider=c.provider AND p.account=c.account AND p.native_id=c.native_id) OR p.conversation_id=c.id WHERE c.id=? AND r.id=1`, id).Scan(&p.provider, &p.account, &p.native, &p.storedConversationID, &p.storedProvider, &p.storedAccount, &p.storedNative, &p.UserPrivate, &p.ClassifierState, &p.ClassifierInput, &p.ClassifierReviewed, &p.Revision)
 	if err != nil {
 		return p, err
 	}
@@ -78,7 +80,10 @@ func (c *Catalog) updateTeamsPrivacy(ctx context.Context, id string, expected *i
 			return err
 		}
 		if retireExplicit && !p.UserPrivate {
-			err = teamsRetireExplicitProtection(tx, p)
+			retirement := p
+			retirement.ConversationID = p.storedConversationID
+			retirement.provider, retirement.account, retirement.native = p.storedProvider, p.storedAccount, p.storedNative
+			err = teamsRetireExplicitProtection(tx, retirement)
 			if err != nil {
 				return err
 			}

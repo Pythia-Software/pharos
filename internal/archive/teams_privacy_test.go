@@ -92,6 +92,20 @@ func TestTeamsPrivacyPolicyAndRevisions(t *testing.T) {
 	if err != nil || !p.Private {
 		t.Fatalf("mark lost on reindex: %+v", p)
 	}
+	if _, err = c.setTeamsPrivate(ctx, "new-local-id", false); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, c, `SELECT count(*) FROM teams_protection_assertions a JOIN teams_protection_actions x ON x.action_id=a.retired_by_action_id WHERE a.conversation_id='c' AND a.kind='explicit_private' AND a.active=0 AND x.conversation_id='c' AND x.retired_count=1 AND x.action_id=(SELECT max(action_id) FROM teams_protection_actions)`); n != 1 {
+		t.Fatalf("relinked privacy assertion not retired: %d", n)
+	}
+	// Older rows may lack source identity; retire exactly the stored version.
+	execTx(t, c.DB, `INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('legacy','w','test','local','legacy')`, `INSERT INTO teams_conversation_privacy(conversation_id,user_private) VALUES('legacy',1)`)
+	if _, err = c.setTeamsPrivate(ctx, "legacy", false); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, c, `SELECT count(*) FROM teams_protection_assertions WHERE conversation_id='legacy' AND provider='' AND account='' AND native_id='' AND kind='explicit_private' AND active=0 AND retired_by_action_id IS NOT NULL`); n != 1 {
+		t.Fatalf("legacy identity not retired: %d", n)
+	}
 }
 
 func TestTeamsPrivacyTransfersWithConversation(t *testing.T) {

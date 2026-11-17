@@ -261,6 +261,23 @@ func TestTeamsMoveDisarmsPendingWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := reopenCatalog(t, a.CatalogPath)
+	execTx(t, c.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('ledger-w','test','local','ledger-w','Synthetic','2026-01-01')`, `INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('ledger-c','ledger-w','test','local','ledger-c'),('ledger-current','ledger-w','test','local','ledger-current')`)
+	if _, err := c.setTeamsPrivate(t.Context(), "ledger-c", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.setTeamsPrivate(t.Context(), "ledger-c", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []string{"pending", "flagged", "pending", "clear"} {
+		if _, err := c.setTeamsClassification(t.Context(), "ledger-c", "synthetic-flag", state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, state := range []string{"pending", "flagged"} {
+		if _, err := c.setTeamsClassification(t.Context(), "ledger-current", "current-flag", state); err != nil {
+			t.Fatal(err)
+		}
+	}
 	execTx(t, c.DB, `UPDATE teams_local_settings SET library_id='synthetic',instance_id='instance',org_id='org',enabled=1`,
 		`INSERT INTO teams_source_bindings(binding_id,provenance_sha256,host_id,source_name,source_kind,provider,account_label,source_root,created_at) VALUES('binding','hash','host','source','codex','codex','local','/synthetic','now')`,
 		`INSERT INTO teams_source_mapping_revisions(revision,binding_id,library_id,instance_id,origin,org_id,person_id,installation_id,provider,mode,reviewed_at) VALUES(1,'binding','synthetic','instance','https://synthetic.invalid','org','person','installation','codex','work','now')`,
@@ -313,11 +330,32 @@ func TestTeamsMoveDisarmsPendingWork(t *testing.T) {
 	if err := source.DB.QueryRow(`SELECT state FROM teams_content_runs WHERE work_id='content'`).Scan(&state); err != nil || state != "awaiting_review" {
 		t.Fatalf("content draft lost on source: %s %v", state, err)
 	}
+	if n := countRows(t, source, `SELECT count(*) FROM teams_protection_assertions WHERE conversation_id='ledger-c' AND kind='positive_flag' AND evidence='synthetic-flag' AND active=1`); n != 1 {
+		t.Fatalf("source flag lost: %d", n)
+	}
+	if n := countRows(t, source, `SELECT count(*) FROM teams_protection_assertions a JOIN teams_protection_actions x ON x.action_id=a.retired_by_action_id WHERE a.conversation_id='ledger-c' AND a.kind='explicit_private' AND a.active=0 AND x.retired_count=1`); n != 1 {
+		t.Fatalf("source retirement lost: %d", n)
+	}
+	if n := countRows(t, source, `SELECT count(*) FROM teams_protection_assertions WHERE conversation_id='ledger-current' AND kind='positive_flag' AND evidence='current-flag' AND active=1`); n != 1 {
+		t.Fatalf("current source flag duplicated or lost: %d", n)
+	}
+	if n := countRows(t, source, `SELECT count(*) FROM teams_protection_baseline WHERE state='held'`); n != 1 {
+		t.Fatal("source baseline not held")
+	}
+	if n := countRows(t, source, `SELECT count(*) FROM teams_protection_observations`); n != 0 {
+		t.Fatal("source observations retained")
+	}
 	if n := countRows(t, source, `SELECT COUNT(*) FROM teams_source_mapping_exposure WHERE binding_id='binding' AND mapping_revision=1`); n != 1 {
 		t.Fatal("source exposure fence was lost during move")
 	}
 	dest := reopenCatalog(t, b.CatalogPath)
 	defer dest.Close()
+	if n := countRows(t, dest, `SELECT count(*) FROM teams_protection_assertions WHERE conversation_id='ledger-c' AND kind='legacy_hold' AND evidence='unreconciled_import' AND active=1`); n != 1 {
+		t.Fatalf("destination import hold missing: %d", n)
+	}
+	if n := countRows(t, dest, `SELECT count(*) FROM teams_protection_baseline WHERE state='held'`); n != 1 {
+		t.Fatal("destination baseline not held")
+	}
 	var n int
 	if err := dest.DB.QueryRow(`SELECT COUNT(*) FROM teams_outbox`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("outbox moved: %d %v", n, err)

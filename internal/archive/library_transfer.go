@@ -1393,7 +1393,10 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 // query caches, free SQLite pages, or a retained WAL.
 var moveRetainedTables = []string{"ui_preferences", "query_table_query_snapshots", "query_table_computed_columns", "sync_settings", "background_settings", "background_temporary_cadences", "repository_checkouts", "automatic_source_states",
 	"cloud_destinations", "cloud_backup_runs", "cloud_backup_schedules", "library_size_history",
-	"ask_settings", "ask_sessions", "ask_visits", "ask_native_sessions", "teams_conversation_privacy", "teams_privacy_revision", "teams_local_settings", "teams_outbox", "teams_send_log", "finding_actions", "finding_cart", "finding_cart_clones", "finding_interventions", "finding_settings",
+	"ask_settings", "ask_sessions", "ask_visits", "ask_native_sessions",
+	// Copy the revision and retained ledger before privacy rows so their insert
+	// triggers see existing assertions and observe the source revision.
+	"teams_privacy_revision", "teams_protection_actions", "teams_protection_assertions", "teams_conversation_privacy", "teams_local_settings", "teams_outbox", "teams_send_log", "finding_actions", "finding_cart", "finding_cart_clones", "finding_interventions", "finding_settings",
 	// Keep the identity fence even when the delivered history itself is gone.
 	// Native proofs require conversation rows and must instead be re-observed.
 	"teams_source_bindings", "teams_source_revision", "teams_source_mapping_revisions", "teams_source_mapping_current", "teams_source_mapping_exposure",
