@@ -154,6 +154,7 @@ func TestTeamsReportSyntheticPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	var issued struct {
+		RequestID     string `json:"request_id"`
 		VersionID     string `json:"version_id"`
 		PublicationID string `json:"publication_id"`
 	}
@@ -171,6 +172,14 @@ func TestTeamsReportSyntheticPostgres(t *testing.T) {
 	}
 	if work == nil {
 		t.Fatalf("synthetic work missing: status %q", poll.CapabilityStatus)
+	}
+	var consent struct {
+		Audiences struct {
+			Publications []teamsReportPublication `json:"publications"`
+		} `json:"audiences"`
+	}
+	if json.Unmarshal(work.Config, &consent) != nil || len(consent.Audiences.Publications) != 1 || !consent.Audiences.Publications[0].IncludeCompleteness {
+		t.Fatal("signed config did not include explicit completeness")
 	}
 	override(t, &teamsWorkerCapabilities, func() teamsCapabilityManifest { return manifest })
 	override(t, &teamsLoadSourceConfig, func(string) (Config, error) { return cfg, nil })
@@ -203,6 +212,7 @@ func TestTeamsReportSyntheticPostgres(t *testing.T) {
 		ReportID string `json:"report_id"`
 	}
 	control("/_test/publish-report", map[string]string{"version_id": issued.VersionID, "publication_id": issued.PublicationID}, &published)
+	t.Logf("synthetic request=%s version=%s report=%s", issued.RequestID, issued.VersionID, published.ReportID)
 	if published.ReportID == "" {
 		t.Fatal("missing report ID")
 	}
