@@ -4,6 +4,23 @@ import "database/sql"
 
 const teamsCodexRequestTriggerSQL = `-- Any changed indexed request message or ledger invalidates the local profile.
 -- Ingest may rebuild it only after both representations agree in one commit.
+CREATE TRIGGER IF NOT EXISTS teams_transcript_evidence_deleted AFTER DELETE ON teams_codex_transcript_evidence_v1
+BEGIN UPDATE teams_source_revision SET revision=revision+1 WHERE id=1; END;
+CREATE TRIGGER IF NOT EXISTS teams_transcript_message_insert AFTER INSERT ON messages
+BEGIN DELETE FROM teams_codex_transcript_evidence_v1 WHERE conversation_id=new.conversation_id; END;
+CREATE TRIGGER IF NOT EXISTS teams_transcript_message_update AFTER UPDATE ON messages
+WHEN (old.conversation_id,old.native_id,old.role,old.kind,old.text,old.raw_text,old.source_order,old.created_at,old.selected)
+ IS NOT (new.conversation_id,new.native_id,new.role,new.kind,new.text,new.raw_text,new.source_order,new.created_at,new.selected)
+BEGIN DELETE FROM teams_codex_transcript_evidence_v1 WHERE conversation_id=old.conversation_id OR conversation_id=new.conversation_id; END;
+CREATE TRIGGER IF NOT EXISTS teams_transcript_message_delete AFTER DELETE ON messages
+BEGIN DELETE FROM teams_codex_transcript_evidence_v1 WHERE conversation_id=old.conversation_id; END;
+CREATE TRIGGER IF NOT EXISTS teams_transcript_conversation_identity AFTER UPDATE ON conversations
+WHEN (old.id,old.provider,old.account,old.native_id) IS NOT (new.id,new.provider,new.account,new.native_id)
+BEGIN DELETE FROM teams_codex_transcript_evidence_v1 WHERE conversation_id=old.id OR conversation_id=new.id; END;
+CREATE TRIGGER IF NOT EXISTS teams_transcript_conversation_delete BEFORE DELETE ON conversations
+BEGIN DELETE FROM teams_codex_transcript_evidence_v1 WHERE conversation_id=old.id; END;
+CREATE TRIGGER IF NOT EXISTS teams_transcript_custody_update AFTER UPDATE ON teams_codex_capture_custody
+BEGIN DELETE FROM teams_codex_transcript_evidence_v1 WHERE binding_id=old.binding_id AND conversation_id=old.conversation_id AND origin=old.origin; END;
 CREATE TRIGGER IF NOT EXISTS teams_codex_profiles_deleted AFTER DELETE ON teams_codex_request_profiles
 BEGIN UPDATE teams_source_revision SET revision=revision+1 WHERE id=1; END;
 CREATE TRIGGER IF NOT EXISTS teams_codex_message_insert AFTER INSERT ON messages

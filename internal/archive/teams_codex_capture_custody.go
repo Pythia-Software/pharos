@@ -1,12 +1,19 @@
 package archive
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"hash"
 	"io"
 	"time"
 )
+
+type teamsRetainedTranscript struct {
+	Digest   string
+	Messages []MessageRecord
+}
 
 // teamsPersistCodexCaptureCustody records only an unambiguous retained capture
 // selected by trusted indexing. It is local provenance, not sharing authority.
@@ -18,7 +25,7 @@ import (
 // not a requirement that later unrelated capture revisions stay unchanged.
 const teamsMaxCustodyCaptureBytes = 64 << 20
 
-func teamsVerifiedCodexCapture(view *captureView, record WorkspaceRecord, origin string) *capturedFile {
+func teamsVerifiedCodexCapture(view *captureView, record WorkspaceRecord, origin string, source SourceConfig) *capturedFile {
 	if view == nil || view.manifest == nil || view.evidenceRevision == "" || !validRecordHash(record.EvidenceIdentity) {
 		return nil
 	}
@@ -45,17 +52,49 @@ func teamsVerifiedCodexCapture(view *captureView, record WorkspaceRecord, origin
 		return nil
 	}
 
-	f, err := view.open(rel)
+	qualified := teamsAcquisitionEligible(selected) && selected.Path == origin
+	var f io.ReadCloser
+	var err error
+	if qualified {
+		f, err = teamsOpenBoundedCapture(view, rel)
+	} else {
+		f, err = view.open(rel)
+	}
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
 	h := sha256.New()
-	n, err := io.Copy(h, io.LimitReader(f, selected.Size+1))
+	var retained bytes.Buffer
+	var transcript hash.Hash
+	writer := io.Writer(h)
+	if qualified {
+		transcript = sha256.New()
+		_, _ = transcript.Write([]byte("pharos-codex-transcript-v1\x00"))
+		writer = io.MultiWriter(h, transcript, &retained)
+	}
+	n, err := io.Copy(writer, io.LimitReader(f, selected.Size+1))
 	if err != nil || n != selected.Size || hex.EncodeToString(h.Sum(nil)) != selected.SHA256 {
 		return nil
 	}
-	return selected
+	copyFile := *selected
+	if transcript != nil {
+		var native string
+		for _, conversation := range record.Conversations {
+			if conversation.Origin == origin {
+				if native != "" {
+					return &copyFile
+				}
+				native = conversation.NativeID
+			}
+		}
+		if native != "" {
+			if messages, e := teamsCodexParseContentBytes(source, origin, native, retained.Bytes()); e == nil {
+				copyFile.teamsTranscript = &teamsRetainedTranscript{Digest: hex.EncodeToString(transcript.Sum(nil)), Messages: messages}
+			}
+		}
+	}
+	return &copyFile
 }
 
 func teamsPersistCodexCaptureCustody(tx *sql.Tx, view *captureView, record WorkspaceRecord, selected *capturedFile, binding, conversation, origin, indexedDigest, provenance string) (bool, error) {

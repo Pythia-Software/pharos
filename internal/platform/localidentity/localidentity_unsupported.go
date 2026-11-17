@@ -13,6 +13,8 @@ func of(fs.FileInfo) (Key, error) {
 	return Key{}, ErrUnsupported
 }
 
+func acquisition(fs.FileInfo) (AcquisitionStamp, error) { return AcquisitionStamp{}, ErrUnsupported }
+
 // No Key is valid here, so formatDevice is never reached.
 func formatDevice(device uint64) string {
 	return strconv.FormatUint(device, 10)

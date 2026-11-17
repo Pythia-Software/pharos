@@ -624,6 +624,14 @@ func TestTeamsRecoveryLegacyCopyHeld(t *testing.T) {
 func TestTeamsRecoveryPreviousProtectedSchema(t *testing.T) {
 	c, _ := testCatalog(t)
 	ctx := t.Context()
+	for _, name := range []string{"teams_transcript_message_insert", "teams_transcript_message_update", "teams_transcript_message_delete", "teams_transcript_conversation_identity", "teams_transcript_conversation_delete", "teams_transcript_custody_update", "teams_transcript_evidence_deleted"} {
+		if _, err := c.DB.Exec(`DROP TRIGGER IF EXISTS ` + quotedIdentifier(name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := c.DB.Exec(`DROP TABLE teams_codex_transcript_evidence_v1`); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"teams_recovery_stage_pages", "teams_recovery_stage_batches", "teams_profile_outbox_pages", "teams_profile_outbox", "teams_origin_outbox"} {
 		if _, err := c.DB.Exec(`DROP TABLE ` + quotedIdentifier(name)); err != nil {
 			t.Fatal(err)
@@ -637,7 +645,7 @@ func TestTeamsRecoveryPreviousProtectedSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newTables := []string{"teams_v2_uploads", "teams_origin_outbox", "teams_profile_outbox", "teams_profile_outbox_pages", "teams_recovery_stage_batches", "teams_recovery_stage_pages"}
+	newTables := []string{"teams_v2_uploads", "teams_origin_outbox", "teams_profile_outbox", "teams_profile_outbox_pages", "teams_recovery_stage_batches", "teams_recovery_stage_pages", "teams_codex_transcript_evidence_v1"}
 	for _, fence := range teamsProtectionFenceStatements() {
 		if !teamsFenceBelongsTo(fence.name, newTables) {
 			if _, err = tx.Exec(fence.sql); err != nil {

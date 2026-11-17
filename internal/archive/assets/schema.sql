@@ -286,6 +286,18 @@ CREATE TABLE IF NOT EXISTS teams_codex_capture_custody (
   FOREIGN KEY(binding_id,conversation_id,origin) REFERENCES teams_codex_request_profiles(binding_id,conversation_id,origin) ON DELETE CASCADE
 );
 
+-- Metadata-only evidence of one exact retained transcript and indexed review.
+-- This is dormant local evidence, never a source assignment or send authority.
+CREATE TABLE IF NOT EXISTS teams_codex_transcript_evidence_v1 (
+  binding_id TEXT NOT NULL, conversation_id TEXT NOT NULL, origin TEXT NOT NULL,
+  indexed_digest TEXT NOT NULL, capture_sha256 TEXT NOT NULL, capture_revision TEXT NOT NULL,
+  transcript_sha256 TEXT NOT NULL, review_input TEXT NOT NULL,
+  content_matched INTEGER NOT NULL CHECK(content_matched=1), gates_version INTEGER NOT NULL CHECK(gates_version=1),
+  PRIMARY KEY(binding_id,conversation_id,origin),
+  FOREIGN KEY(binding_id,conversation_id,origin) REFERENCES teams_codex_capture_custody(binding_id,conversation_id,origin) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS teams_codex_transcript_evidence_conversation ON teams_codex_transcript_evidence_v1(conversation_id);
+
 -- Typed binding acquisition is separate from numeric v2 authority and outbox.
 -- A row in acquiring state is only a journaled request, never read authority.
 -- Exact original 032 transport evidence, scoped to its enrolled installation.

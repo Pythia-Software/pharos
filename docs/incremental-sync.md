@@ -113,6 +113,15 @@ Ordinary captured-file indexing skips missing or resized entries and reports
 them in `unavailable_capture_inputs`, while continuing with healthy files and
 surviving snapshot generations. A partial lease does not certify a durable
 inventory. Acquisition and verification still require complete retained inputs.
+
+For opted-in Teams Codex indexing, a stable no-follow acquisition records the
+host's source-root device and inode and the file's device, inode, change time,
+size and modification time alongside its retained capture. Indexing may also retain a metadata-only digest of the exact
+transcript and indexed review input. This describes the acquired image, not a
+current-file census or permission to send. A matching stamp alone cannot prove
+freshness on network, portable, coarse-timestamp or otherwise unverified
+filesystems; those remain provisional without a separately established stronger
+witness. Unsupported acquisition keeps the ordinary capture and index path.
 Logical SQLite readers use the durable revision/pin contract from handoff 1.
 
 The shared `Catalog.acquireRetainedInput` boundary is used by ingestion, service

@@ -32,6 +32,7 @@ var teamsProtectionProjectionQueries = []struct{ name, query string }{
 	{"native_proofs", `SELECT binding_id,conversation_id,origin,provider,native_id,status,trailing_partial,indexed_digest,total_tokens,total_digest FROM teams_native_source_proofs ORDER BY binding_id,conversation_id,origin`},
 	{"profiles", `SELECT binding_id,conversation_id,origin,indexed_digest,evidence_sha256 FROM teams_codex_request_profiles ORDER BY binding_id,conversation_id,origin`},
 	{"custody", `SELECT binding_id,conversation_id,origin,indexed_digest,evidence_sha256,capture_sha256,captured_at,capture_path,provenance_sha256,evidence_identity,capture_revision FROM teams_codex_capture_custody ORDER BY binding_id,conversation_id,origin`},
+	{"transcript_evidence_v1", `SELECT binding_id,conversation_id,origin,indexed_digest,capture_sha256,capture_revision,transcript_sha256,review_input,content_matched,gates_version FROM teams_codex_transcript_evidence_v1 ORDER BY binding_id,conversation_id,origin`},
 	{"source_states", `SELECT host_id,source_name,kind,capability,cursor,fingerprint,index_version,coverage,pending_count FROM source_states ORDER BY host_id,source_name`},
 	{"source_record_states", `SELECT host_id,source_name,source_kind,source_account,source_id,digest FROM source_record_states ORDER BY host_id,source_name,source_kind,source_account,source_id`},
 	{"source_item_states", `SELECT host_id,source_name,item,extractor,size,version,signal FROM source_item_states ORDER BY host_id,source_name,item`},

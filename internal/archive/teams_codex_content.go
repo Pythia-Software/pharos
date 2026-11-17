@@ -63,26 +63,44 @@ func teamsCodexContentFile(source SourceConfig, origin, native string) ([]Messag
 	if e != nil || !bytes.Equal(first, second) {
 		return nil, empty, errTeamsSourceUnavailable
 	}
-	var quality teamsJSONLQuality
-	events, e := readJSONLinesObserved(bytes.NewReader(first), int64(len(first)), quality.observe)
-	if e != nil || quality.gap || quality.trailingPartial {
-		return nil, empty, errTeamsSourceUnavailable
-	}
-	proof := teamsCodexNativeProof(events, native, quality)
-	if proof.Status != "header_independent_unvalidated" {
-		return nil, empty, errTeamsSourceUnavailable
-	}
-	a := jsonlAdapter{baseAdapter: baseAdapter{config: source}, provider: "codex"}
-	record, ok, e := a.codex(path, events)
-	if e != nil || !ok || len(record.Conversations) != 1 || record.Conversations[0].NativeID != native {
-		return nil, empty, errTeamsSourceUnavailable
+	return teamsCodexContentBytes(source, path, native, first)
+}
+
+// teamsCodexContentBytes applies the same content gates to a verified,
+// decoded retained capture. The caller must establish custody separately.
+func teamsCodexContentBytes(source SourceConfig, path, native string, first []byte) ([]MessageRecord, [32]byte, error) {
+	var empty [32]byte
+	messages, err := teamsCodexParseContentBytes(source, path, native, first)
+	if err != nil {
+		return nil, empty, err
 	}
 	h := sha256.New()
 	h.Write([]byte("pharos-codex-transcript-v1\x00"))
 	h.Write(first)
 	var digest [32]byte
 	copy(digest[:], h.Sum(nil))
-	return record.Conversations[0].Messages, digest, nil
+	return messages, digest, nil
+}
+
+func teamsCodexParseContentBytes(source SourceConfig, path, native string, first []byte) ([]MessageRecord, error) {
+	if len(first) == 0 || len(first) > 4<<20 || first[len(first)-1] != '\n' {
+		return nil, errTeamsSourceUnavailable
+	}
+	var quality teamsJSONLQuality
+	events, e := readJSONLinesObserved(bytes.NewReader(first), int64(len(first)), quality.observe)
+	if e != nil || quality.gap || quality.trailingPartial {
+		return nil, errTeamsSourceUnavailable
+	}
+	proof := teamsCodexNativeProof(events, native, quality)
+	if proof.Status != "header_independent_unvalidated" {
+		return nil, errTeamsSourceUnavailable
+	}
+	a := jsonlAdapter{baseAdapter: baseAdapter{config: source}, provider: "codex"}
+	record, ok, e := a.codex(path, events)
+	if e != nil || !ok || len(record.Conversations) != 1 || record.Conversations[0].NativeID != native {
+		return nil, errTeamsSourceUnavailable
+	}
+	return record.Conversations[0].Messages, nil
 }
 
 // Content exposed to a Teams tool must exactly match the source-derived

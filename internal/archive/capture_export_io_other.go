@@ -8,8 +8,9 @@ import "os"
 // exclusive rename, which only the Darwin and Linux adapters provide.
 const captureExportSupported = false
 
-func exportOpenRoot(string) (*exportDir, error) { return nil, errCaptureExportUnsupported }
-func (d *exportDir) Close() error               { return nil }
+func exportOpenRoot(string) (*exportDir, error)            { return nil, errCaptureExportUnsupported }
+func exportOpenAcquisitionRoot(string) (*exportDir, error) { return nil, errCaptureExportUnsupported }
+func (d *exportDir) Close() error                          { return nil }
 func (d *exportDir) sub(string) (*exportDir, error) {
 	return nil, errCaptureExportUnsupported
 }
