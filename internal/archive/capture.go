@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gbdubs/pharos/internal/platform/filelock"
+	"github.com/gbdubs/pharos/internal/platform/localidentity"
 )
 
 // Capture copies this Mac's raw source data onto the capture root, normally on
@@ -122,12 +123,15 @@ func (m *captureManifest) acceptsSource(host Host, source SourceConfig) bool {
 // source's mtime, so size+mtime identify it on both sides; captured_at changes
 // whenever it is captured again.
 type capturedFile struct {
-	RecoveryID string `json:"recovery_id,omitempty"`
-	Path       string `json:"path"`
-	Captured   string `json:"captured"`
-	Size       int64  `json:"size"`
-	MTime      string `json:"mtime"`
-	MTimeNS    int64  `json:"mtime_ns"`
+	teamsTranscript      *teamsRetainedTranscript
+	RecoveryID           string                          `json:"recovery_id,omitempty"`
+	Path                 string                          `json:"path"`
+	Captured             string                          `json:"captured"`
+	Size                 int64                           `json:"size"`
+	MTime                string                          `json:"mtime"`
+	MTimeNS              int64                           `json:"mtime_ns"`
+	TeamsAcquisition     *localidentity.AcquisitionStamp `json:"teams_acquisition_v1,omitempty"`
+	TeamsAcquisitionRoot *teamsAcquisitionRoot           `json:"teams_acquisition_root_v1,omitempty"`
 	// Verified pending-file observations order rewrites even when an upstream
 	// tool preserves size and mtime. Native metadata remains unchanged below.
 	ObservedNS   int64             `json:"observed_ns,omitempty"`
@@ -849,10 +853,25 @@ func (c *sourceCapture) captureFiles(items []captureItem, present map[string]boo
 		previous := c.files[rel]
 		if previous != nil {
 			previous.MissingSince = ""
-			if previous.Path == item.path && (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Size == info.Size() && previous.MTimeNS == info.ModTime().UnixNano() && c.intactFile(previous) {
+			stampCurrent := true
+			if isCodexSource(c.source.Kind) && teamsProofRecapture(c.ctx, item.path) {
+				if teamsProofForce(c.ctx) || previous.TeamsAcquisition == nil || previous.TeamsAcquisitionRoot == nil {
+					stampCurrent = false
+				} else {
+					stamp, root, e := teamsAcquisitionStamp(c.source.Path, item.path)
+					stampCurrent = e == nil && *previous.TeamsAcquisition == stamp && previous.TeamsAcquisitionRoot.Device == root.Dev && previous.TeamsAcquisitionRoot.Inode == root.Ino
+				}
+			}
+			if stampCurrent && previous.Path == item.path && (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Size == info.Size() && previous.MTimeNS == info.ModTime().UnixNano() && c.intactFile(previous) {
 				unchanged := true
 				if c.verifyDelivery {
-					digest, err := captureDeliveryDigest(c.ctx, item.path)
+					var digest string
+					var err error
+					if teamsProofRecapture(c.ctx, item.path) {
+						digest, err = teamsBoundedSourceDigest(c.ctx, c.source.Path, item.path)
+					} else {
+						digest, err = captureDeliveryDigest(c.ctx, item.path)
+					}
 					if err != nil {
 						return err
 					}
@@ -968,7 +987,20 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 			return nil, nil, toDestination(err)
 		}
 	}
-	source, err := os.Open(item.path)
+	var source *os.File
+	var rootStamp exportStat
+	var secured bool
+	var err error
+	if isCodexSource(c.source.Kind) && teamsProofRecapture(c.ctx, item.path) {
+		source, rootStamp, err = teamsOpenCodexAcquisition(c.source.Path, item.path)
+		secured = err == nil
+	}
+	if teamsProofRecapture(c.ctx, item.path) && !secured {
+		return nil, nil, errTeamsSourceUnavailable
+	}
+	if !secured {
+		source, err = os.Open(item.path)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -977,9 +1009,19 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 	if err != nil {
 		return nil, nil, err
 	}
+	var acquisition *localidentity.AcquisitionStamp
+	if secured {
+		stamp, e := localidentity.Acquisition(info)
+		if e == nil {
+			acquisition = &stamp
+		}
+	}
 	// Exactly this many bytes are copied: an append-only log that grows
 	// meanwhile yields a consistent prefix, and the next run sees the new size.
 	size, mtime := info.Size(), info.ModTime()
+	if teamsProofRecapture(c.ctx, item.path) && (acquisition == nil || size <= 0 || size > 4<<20) {
+		return nil, nil, errTeamsSourceUnavailable
+	}
 	if err := reserveCaptureAcquisition(c.dir, size); err != nil {
 		return nil, nil, err
 	}
@@ -1024,6 +1066,18 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 	if copied += n; copied < size {
 		return abandon(errCaptureSourceChanged)
 	}
+	if acquisition != nil && captureFault != nil {
+		if e := captureFault("copy-read", rel); e != nil {
+			return abandon(e)
+		}
+	}
+	if acquisition != nil {
+		if e := teamsSameAcquisition(c.source.Path, item.path, source, *acquisition, rootStamp); e != nil {
+			// Preserve the legacy captured prefix when the live file changes
+			// during the copy, but make no stable acquisition claim for it.
+			acquisition = nil
+		}
+	}
 	if c.session.recoveryID != "" {
 		rewritten = keep && digest.sum() != previous.SHA256
 	}
@@ -1038,7 +1092,10 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 		return nil, nil, toDestination(err)
 	}
 	entry := &capturedFile{Path: item.path, Captured: rel, Size: size, MTime: mtime.UTC().Format(time.RFC3339Nano), MTimeNS: mtime.UnixNano(),
-		SHA256: digest.sum(), CapturedAt: now(), RecoveryID: c.session.recoveryID}
+		SHA256: digest.sum(), CapturedAt: now(), RecoveryID: c.session.recoveryID, TeamsAcquisition: acquisition}
+	if acquisition != nil {
+		entry.TeamsAcquisitionRoot = &teamsAcquisitionRoot{Device: rootStamp.Dev, Inode: rootStamp.Ino}
+	}
 	if previous != nil {
 		entry.ObservedNS = previous.ObservedNS
 	}
@@ -1058,6 +1115,15 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 		}
 		entry.Previous = append(withoutVersion(entry.Previous, kept.Captured), kept)
 		version = &kept
+	}
+	// Rotation may already have preserved the old latest file by rename. If
+	// the source changes during rotation, retain the normal captured prefix
+	// but do not claim a stable acquisition for the new evidence lane.
+	if acquisition != nil {
+		if e := teamsSameAcquisition(c.source.Path, item.path, source, *acquisition, rootStamp); e != nil {
+			entry.TeamsAcquisition = nil
+			entry.TeamsAcquisitionRoot = nil
+		}
 	}
 	if err := os.Rename(temporary, destination); err != nil {
 		os.Remove(temporary)

@@ -36,6 +36,28 @@ type Key struct {
 	valid         bool
 }
 
+// AcquisitionStamp is local, host-bound metadata from one native stat. It is
+// evidence of a checked acquisition, not a durable cross-host file identity.
+type AcquisitionStamp struct {
+	Device        uint64 `json:"device"`
+	Inode         uint64 `json:"inode"`
+	ChangeSeconds int64  `json:"change_seconds"`
+	ChangeNanos   int64  `json:"change_nanos"`
+	Size          int64  `json:"size"`
+	MTimeNS       int64  `json:"mtime_ns"`
+}
+
+// Acquisition identifies an observed regular file on this host. A matching
+// stamp is not by itself a freshness guarantee: filesystem timestamp and
+// identity behavior may be coarse or remote. Consumers need an independently
+// verified filesystem witness before treating this as a current-file census.
+func Acquisition(info fs.FileInfo) (AcquisitionStamp, error) {
+	if info == nil || !info.Mode().IsRegular() || info.Size() < 0 {
+		return AcquisitionStamp{}, ErrUnavailable
+	}
+	return acquisition(info)
+}
+
 // Valid reports whether k came from a successful observation.
 func (k Key) Valid() bool { return k.valid }
 

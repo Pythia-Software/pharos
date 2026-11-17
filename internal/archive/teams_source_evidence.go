@@ -16,8 +16,15 @@ import (
 // the same writer transaction as the indexed record. It does not attest an
 // account or authorize reporting. Until the scoped source resolver and send
 // barrier consume this revision, no production work may use these proofs.
-func teamsRecordNativeEvidence(tx *sql.Tx, host string, config SourceConfig, view *captureView, record WorkspaceRecord, digest string, observing bool, captures map[string]*capturedFile) error {
+func teamsRecordNativeEvidence(ctx context.Context, tx *sql.Tx, host string, config SourceConfig, view *captureView, record WorkspaceRecord, digest string, observing bool, captures map[string]*capturedFile) error {
 	if !observing || !isCodexSource(config.Kind) || record.SourceKind != "codex" || host == "" || config.Name == "" {
+		return nil
+	}
+	var requested bool
+	if err := tx.QueryRowContext(ctx, `SELECT proof_requested FROM teams_source_revision WHERE id=1`).Scan(&requested); err != nil {
+		return err
+	}
+	if !requested {
 		return nil
 	}
 	hasProof := false
@@ -65,14 +72,10 @@ func teamsRecordNativeEvidence(tx *sql.Tx, host string, config SourceConfig, vie
 	if root == "" {
 		return errors.New("source provenance is unavailable")
 	}
-	provenance, err := json.Marshal(struct {
-		Domain, Host, Name, Kind, Account, Root, OptionsFingerprint string
-	}{"pharos-teams-source-binding-v1", host, config.Name, config.Kind, config.Account, root, optionsFingerprint})
+	fingerprint, err := teamsSourceBindingFingerprint(host, config.Name, config.Kind, config.Account, root, optionsFingerprint)
 	if err != nil {
 		return err
 	}
-	sum := sha256.Sum256(provenance)
-	fingerprint := hex.EncodeToString(sum[:])
 	var random [16]byte
 	if _, err = rand.Read(random[:]); err != nil {
 		return err
@@ -130,6 +133,11 @@ func teamsRecordNativeEvidence(tx *sql.Tx, host string, config SourceConfig, vie
 			return e
 		}
 		changed = changed || custodyChanged
+		transcriptChanged, e := teamsPersistCodexTranscriptEvidence(ctx, tx, captures[conversation.Origin], binding, conversationID, conversation.Origin, digest)
+		if e != nil {
+			return e
+		}
+		changed = changed || transcriptChanged
 	}
 	if changed {
 		_, err = tx.Exec(`UPDATE teams_source_revision SET revision=revision+1 WHERE id=1`)
@@ -144,6 +152,15 @@ func teamsSourceOptionsFingerprint(options map[string]any) (string, error) {
 		return "", err
 	}
 	sum := sha256.Sum256(append([]byte("pharos-teams-source-options-v1\x00"), raw...))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func teamsSourceBindingFingerprint(host, name, kind, account, root, options string) (string, error) {
+	provenance, err := json.Marshal(struct{ Domain, Host, Name, Kind, Account, Root, OptionsFingerprint string }{"pharos-teams-source-binding-v1", host, name, kind, account, root, options})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(provenance)
 	return hex.EncodeToString(sum[:]), nil
 }
 
@@ -196,6 +213,13 @@ func (c *Catalog) teamsInvalidateRequestProofParts(ctx context.Context, host str
 			continue
 		}
 		if err := c.writeTransaction(ctx, "teams-invalidate-unparsed-request-proof", func(tx *sql.Tx) error {
+			var requested bool
+			if err := tx.QueryRowContext(ctx, `SELECT proof_requested FROM teams_source_revision WHERE id=1`).Scan(&requested); err != nil {
+				return err
+			}
+			if !requested {
+				return nil
+			}
 			_, err := tx.ExecContext(ctx, `DELETE FROM teams_codex_request_profiles WHERE origin=? AND binding_id IN (SELECT binding_id FROM teams_source_bindings WHERE host_id=? AND source_name=? AND lower(source_kind)='codex' AND superseded_at='')`, part.item, host, config.Name)
 			return err
 		}); err != nil {
@@ -203,4 +227,29 @@ func (c *Catalog) teamsInvalidateRequestProofParts(ctx context.Context, host str
 		}
 	}
 	return nil
+}
+
+// A different retained payload at the same source time cannot replace the
+// indexed record. Remove only the transcript proof for that ambiguous scope;
+// an actually older capture must not erase the newer host's evidence.
+func (c *Catalog) teamsInvalidateAmbiguousTranscriptCapture(ctx context.Context, host string, config SourceConfig, parts []sourcePart) error {
+	return c.writeTransaction(ctx, "teams-invalidate-ambiguous-transcript", func(tx *sql.Tx) error {
+		var requested bool
+		if err := tx.QueryRowContext(ctx, `SELECT proof_requested FROM teams_source_revision WHERE id=1`).Scan(&requested); err != nil {
+			return err
+		}
+		if !requested {
+			return nil
+		}
+		for _, part := range parts {
+			if part.item == "" || part.evidenceObservation {
+				continue
+			}
+			_, err := tx.ExecContext(ctx, `DELETE FROM teams_codex_transcript_evidence_v1 WHERE origin=? AND binding_id IN (SELECT binding_id FROM teams_source_bindings WHERE host_id=? AND source_name=? AND lower(source_kind)='codex' AND superseded_at='') AND EXISTS (SELECT 1 FROM source_item_states WHERE host_id=? AND source_name=? AND item=? AND version=? AND COALESCE(signal,'')<>?)`, part.item, host, config.Name, host, config.Name, part.item, part.version, part.signal)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

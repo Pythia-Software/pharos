@@ -121,8 +121,21 @@ func teamsRecoveryStructureSupported(ctx context.Context, tx *sql.Tx) error {
 		return errTeamsProtectionContinuity
 	}
 	legacy := present == 0
+	var hasTranscriptEvidence bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='teams_codex_transcript_evidence_v1')`).Scan(&hasTranscriptEvidence); err != nil {
+		return errTeamsProtectionContinuity
+	}
+	if !hasTranscriptEvidence {
+		var remaining int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name GLOB 'teams_transcript_*'`).Scan(&remaining); err != nil || remaining != 0 {
+			return errTeamsProtectionContinuity
+		}
+	}
 	newFenceTables := append([]string{"teams_v2_uploads"}, newTables...)
 	for _, fence := range teamsProtectionFenceStatements() {
+		if !hasTranscriptEvidence && teamsFenceBelongsTo(fence.name, []string{"teams_codex_transcript_evidence_v1"}) {
+			continue
+		}
 		if legacy && teamsFenceBelongsTo(fence.name, newFenceTables) {
 			continue
 		}
@@ -157,6 +170,9 @@ func teamsRecoveryStructureSupported(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	for _, spec := range teamsProtectionProjectionQueries {
+		if !hasTranscriptEvidence && spec.name == "transcript_evidence_v1" {
+			continue
+		}
 		if legacy && (spec.name == "v2_uploads" || spec.name == "origin_outbox" || spec.name == "profile_outbox" || spec.name == "profile_pages" || spec.name == "recovery_batches" || spec.name == "recovery_pages") {
 			continue
 		}

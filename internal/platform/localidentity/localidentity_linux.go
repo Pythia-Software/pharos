@@ -15,3 +15,5 @@ func fromStat(stat *syscall.Stat_t) Key {
 func formatDevice(device uint64) string {
 	return strconv.FormatUint(device, 10)
 }
+
+func changeTime(stat *syscall.Stat_t) (int64, int64) { return stat.Ctim.Sec, stat.Ctim.Nsec }

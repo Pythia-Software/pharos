@@ -22,6 +22,16 @@ func exportOpenRoot(path string) (*exportDir, error) {
 	return &exportDir{fd: fd, path: path}, nil
 }
 
+// Acquisition must not follow a replaced final root component. Parent path
+// aliases remain supported, as on ordinary macOS library paths.
+func exportOpenAcquisitionRoot(path string) (*exportDir, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	return &exportDir{fd: fd, path: path}, nil
+}
+
 func (d *exportDir) Close() error {
 	if d == nil || d.fd < 0 {
 		return nil

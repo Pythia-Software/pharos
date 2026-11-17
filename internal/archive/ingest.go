@@ -107,6 +107,13 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 			return IngestResult{Source: adapter.Config().Name, Error: "Teams source proof state is unavailable"}
 		}
 		a.teamsProofEnabled = requested
+		// Automatic sync may have planned before the proof setting was read.
+		// Rebuild under the current setting so stamped part signals participate.
+		if requested && modeOf(ctx).plan != nil {
+			mode := modeOf(ctx)
+			mode.plan = nil
+			ctx = withIngestMode(ctx, mode)
+		}
 	}
 	ctx = c.withSQLiteAcquisition(ctx, adapter)
 	setAdapterContext(adapter, ctx)
@@ -444,7 +451,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		if proofObservation {
 			teamsCaptures = make(map[string]*capturedFile)
 			for _, conversation := range record.Conversations {
-				teamsCaptures[conversation.Origin] = teamsVerifiedCodexCapture(captureViewOf(adapter), *record, conversation.Origin)
+				teamsCaptures[conversation.Origin] = teamsVerifiedCodexCapture(captureViewOf(adapter), *record, conversation.Origin, config)
 			}
 		}
 		copied, older, conversations, messages := false, false, 0, 0
@@ -482,7 +489,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 				}
 			}
 			nativeAdapter, observing := adapter.(*jsonlAdapter)
-			if err = teamsRecordNativeEvidence(tx, host, config, captureViewOf(adapter), *record, digest, observing && nativeAdapter.teamsProofEnabled, teamsCaptures); err != nil {
+			if err = teamsRecordNativeEvidence(ctx, tx, host, config, captureViewOf(adapter), *record, digest, observing && nativeAdapter.teamsProofEnabled, teamsCaptures); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(`INSERT INTO source_record_states(host_id,source_name,source_kind,source_account,source_id,digest,updated_at)
@@ -546,6 +553,18 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			return err
 		}
 		if older {
+			if proofObservation && captureViewOf(adapter) != nil {
+				attached, err := c.teamsAttachUnchangedTranscript(ctx, host, config, captureViewOf(adapter), *record, teamsCaptures, tracker, parts)
+				if err != nil {
+					return err
+				}
+				if attached {
+					return nil
+				}
+				if err := c.teamsInvalidateAmbiguousTranscriptCapture(ctx, host, config, parts); err != nil {
+					return err
+				}
+			}
 			if err := tracker.recordTerminal(c, parts); err != nil {
 				return err
 			}

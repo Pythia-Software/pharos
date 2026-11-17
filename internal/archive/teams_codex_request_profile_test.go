@@ -317,20 +317,20 @@ func TestTeamsCodexCaptureRequiresMatchingBytes(t *testing.T) {
 	view := newCaptureView(Host{}, dir, manifest)
 	view.evidenceRevision = strings.Repeat("a", 64)
 	record := WorkspaceRecord{EvidenceIdentity: strings.Repeat("b", 64)}
-	if teamsVerifiedCodexCapture(view, record, origin) == nil {
+	if teamsVerifiedCodexCapture(view, record, origin, SourceConfig{}) == nil {
 		t.Fatal("matching capture rejected")
 	}
 	f.MissingSince = "2026-11-10T00:00:00Z"
-	if teamsVerifiedCodexCapture(view, record, origin) == nil {
+	if teamsVerifiedCodexCapture(view, record, origin, SourceConfig{}) == nil {
 		t.Fatal("verified retained capture rejected after source disappeared")
 	}
 	f.SHA256 = strings.Repeat("c", 64)
-	if teamsVerifiedCodexCapture(view, record, origin) != nil {
+	if teamsVerifiedCodexCapture(view, record, origin, SourceConfig{}) != nil {
 		t.Fatal("mismatched captured bytes admitted")
 	}
 	f.SHA256 = teamsPayloadHash([]byte(data))
 	manifest.Files = append(manifest.Files, f)
-	if teamsVerifiedCodexCapture(view, record, origin) != nil {
+	if teamsVerifiedCodexCapture(view, record, origin, SourceConfig{}) != nil {
 		t.Fatal("ambiguous capture admitted")
 	}
 }

@@ -511,14 +511,27 @@ func defaultBool(value any, fallback bool) bool {
 
 type jsonlAdapter struct {
 	baseAdapter
-	provider          string
-	teamsProofEnabled bool
+	provider           string
+	teamsProofEnabled  bool
+	teamsCaptureHashes map[string]string
 	// TL1 records the attempt's initial setting independently of its transcript.
 	initialEffort string
 	names         map[string]transcriptName
 }
 
 var codexForkFilename = regexp.MustCompile(`([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl(?:\.zst)?$`)
+
+// The retained content hash participates in proof-enabled indexing even if a
+// source rewrites a file and restores its size and modification time.
+func (a *jsonlAdapter) teamsCaptureSignal(path, signal string) string {
+	if !a.teamsProofEnabled {
+		return signal
+	}
+	if digest := a.teamsCaptureHashes[a.original(path)]; digest != "" {
+		return signal + "\x00teams-capture-v1:" + digest
+	}
+	return signal
+}
 
 func (a *jsonlAdapter) Fingerprint() (string, error) {
 	fingerprint, err := a.files().pathFingerprint(a.config.Path, func(path string, entry os.DirEntry) bool {
@@ -627,6 +640,17 @@ func (a *jsonlAdapter) discoverParts(unchanged func([]sourcePart) bool, emit fun
 }
 
 func (a *jsonlAdapter) planParts() (*sourceWorkPlan, error) {
+	a.teamsCaptureHashes = nil
+	if a.provider == "codex" && a.teamsProofEnabled && a.view != nil && a.view.manifest != nil {
+		a.teamsCaptureHashes = make(map[string]string, len(a.view.manifest.Files))
+		for _, f := range a.view.manifest.Files {
+			if teamsAcquisitionEligible(f) {
+				// Root and file stamps must participate too: replacement may
+				// preserve the retained bytes while changing their provenance.
+				a.teamsCaptureHashes[f.Path] = hashBytes([]byte(jsonText([]any{f.SHA256, f.TeamsAcquisition, f.TeamsAcquisitionRoot})))
+			}
+		}
+	}
 	groups, infos, roots := map[string][]string{}, map[string]fs.FileInfo{}, []string{}
 	if err := a.files().WalkDir(a.config.Path, func(path string, entry os.DirEntry, walkErr error) error {
 		info, err := a.transcriptInfo(path, entry, walkErr)
@@ -677,6 +701,7 @@ func (a *jsonlAdapter) planParts() (*sourceWorkPlan, error) {
 			if name, ok := a.names[path]; ok {
 				part.signal = name.signal()
 			}
+			part.signal = a.teamsCaptureSignal(path, part.signal)
 			parts = append(parts, part)
 		}
 		plan.groups = append(plan.groups, plannedPartGroup{parts: parts, read: func(emit partEmitter) error {
@@ -826,6 +851,7 @@ func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool
 			observe(&record, max(part.version, name.observed))
 		}
 	}
+	part.signal = a.teamsCaptureSignal(path, part.signal)
 	return record, part, ok, err
 }
 
