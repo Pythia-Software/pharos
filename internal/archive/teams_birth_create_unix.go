@@ -63,13 +63,19 @@ func teamsCreateManagedLibrary(ctx context.Context, application, path, name stri
 		return Config{}, err
 	}
 	absolute = filepath.Join(parent, filepath.Base(absolute))
+	// This experimental lane is local to the support volume; the portable
+	// external-library flow remains the ordinary Create path.
+	volume := libraryVolumeIdentity(parent)
+	if volume == "" || volume != libraryVolumeIdentity(pharosSupportDir()) {
+		return Config{}, errTeamsProtectionContinuity
+	}
 	appID := installationID(application)
 	hardware, err := teamsBirthHardwareUUID()
 	if err != nil || hardware == "" {
 		return Config{}, errTeamsProtectionContinuity
 	}
 	cfg := Config{Application: application, Library: true, Path: filepath.Join(absolute, libraryConfigName), CatalogPath: filepath.Join(absolute, "catalog", "catalog.sqlite3"), ArchiveRoot: filepath.Join(absolute, "preserved"), StagingRoot: filepath.Join(absolute, "staging")}
-	store, err := teamsCredentialStore(cfg)
+	store, err := teamsBirthCredentialStore(cfg)
 	if err != nil {
 		return Config{}, err
 	}
@@ -175,6 +181,11 @@ func teamsCreateManagedLibrary(ctx context.Context, application, path, name stri
 			return Config{}, e
 		}
 		record = next
+		// A scope-indexed witness prevents a moved birth or a stripped
+		// descriptor marker from being mistaken for a legacy upgrade.
+		if e = store.Save(teamsBirthIdentityName(record.Scope), []byte(reservationName)); e != nil {
+			return Config{}, e
+		}
 		key := make([]byte, 32)
 		if _, e = rand.Read(key); e != nil {
 			return Config{}, e
@@ -191,7 +202,13 @@ func teamsCreateManagedLibrary(ctx context.Context, application, path, name stri
 		if e != nil {
 			return Config{}, e
 		}
-		predecessor := sha256.Sum256(raw)
+		bound := record
+		bound.Phase = "image_bound"
+		boundBytes, e := teamsEncodeBirthReservation(bound)
+		if e != nil {
+			return Config{}, e
+		}
+		predecessor := sha256.Sum256(boundBytes)
 		pending := teamsCheckpointRecord{Version: 1, Scope: record.Scope, KeyID: keyID, Sequence: 1, Phase: "pending", PreviousUnactivated: hex.EncodeToString(predecessor[:]), Next: record.Tuple, Operation: challenge, Transition: "no_tightening", Cover: []teamsCheckpointGuardCover{}}
 		encoded, e := teamsEncodeCheckpoint(pending)
 		if e != nil {
@@ -207,6 +224,16 @@ func teamsCreateManagedLibrary(ctx context.Context, application, path, name stri
 		return Config{}, err
 	}
 	if record.Phase == "committed" {
+		use, e := fileLease(libraryUseLock(cfg), false)
+		if e != nil {
+			return Config{}, e
+		}
+		defer use.Close()
+		owner, e := fileLease(filepath.Join(filepath.Dir(canonical(cfg.CatalogPath)), ".pharos-service.lock"), true)
+		if e != nil {
+			return Config{}, e
+		}
+		defer owner.Close()
 		config, e := LoadConfig(cfg.Path)
 		if e != nil {
 			return Config{}, e
@@ -224,8 +251,23 @@ func teamsCreateManagedLibrary(ctx context.Context, application, path, name stri
 		}
 		return config, nil
 	}
-	if record.Application != appID || record.Path != absolute || record.Host != hardware || record.UID != os.Geteuid() || record.Volume != libraryVolumeIdentity(parent) || record.Phase != "image_bound" {
+	if record.Application != appID || record.Path != absolute || record.Host != hardware || record.UID != os.Geteuid() || record.Volume != libraryVolumeIdentity(parent) || (record.Phase != "image_bound" && record.Phase != "verified") {
 		return Config{}, errTeamsProtectionContinuity
+	}
+	// Exclude the service and offline catalog replacement during finalization.
+	use, e := fileLease(libraryUseLock(cfg), false)
+	if e != nil {
+		return Config{}, e
+	}
+	defer use.Close()
+	owner, e := fileLease(filepath.Join(filepath.Dir(canonical(cfg.CatalogPath)), ".pharos-service.lock"), true)
+	if e != nil {
+		return Config{}, e
+	}
+	defer owner.Close()
+	// Reconfirm directory-entry publication even after an ambiguous sync error.
+	if e = teamsSyncBirthParent(parent); e != nil {
+		return Config{}, e
 	}
 	// Only the exact pending successor or its already-finalized host record can
 	// recover a published birth. Never take the general predecessor recovery.
@@ -238,8 +280,12 @@ func teamsCreateManagedLibrary(ctx context.Context, application, path, name stri
 		return Config{}, errTeamsProtectionContinuity
 	}
 	if err = teamsVerifyBirthImage(absolute, record); err != nil {
-		// A crash after enabling WAL can leave a valid SQLite sidecar. The
-		// independently bound file identities and SQL tuple must still match.
+		// A verified reservation proves the original bytes were checked
+		// before SQLite touched them. Subsequent crash recovery checks the
+		// independent location, exact host successor, fence and projection.
+		if record.Phase != "verified" {
+			return Config{}, err
+		}
 		if e := teamsVerifyBirthLocation(absolute, record); e != nil {
 			return Config{}, err
 		}
@@ -256,6 +302,15 @@ func teamsCreateManagedLibrary(ctx context.Context, application, path, name stri
 	defer w.db.Close()
 	if err = teamsVerifyFreshSQL(ctx, w, record.Tuple); err != nil {
 		return Config{}, err
+	}
+	if record.Phase == "image_bound" {
+		verified := record
+		verified.Phase = "verified"
+		raw, err = teamsAdvanceBirthReservation(store, reservationName, raw, record, verified)
+		if err != nil {
+			return Config{}, err
+		}
+		record = verified
 	}
 	var mode string
 	if err = w.db.QueryRowContext(ctx, `PRAGMA journal_mode=WAL`).Scan(&mode); err != nil || mode != "wal" {

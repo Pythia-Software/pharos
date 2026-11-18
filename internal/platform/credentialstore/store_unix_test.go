@@ -117,3 +117,23 @@ func TestProtectedFilesRejectSymlinks(t *testing.T) {
 		t.Fatalf("directory mode: %v", err)
 	}
 }
+
+func TestSaveUnderSymlinkedExistingAncestor(t *testing.T) {
+	parent := t.TempDir()
+	real := filepath.Join(parent, "real")
+	if err := os.Mkdir(real, 0700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(parent, "support")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	store := NewDurable(filepath.Join(link, "credentials", "records"))
+	name := strings.Repeat("a", 64)
+	if err := store.Save(name, []byte("synthetic")); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := store.Load(name); err != nil || string(value) != "synthetic" {
+		t.Fatalf("load: %v", err)
+	}
+}

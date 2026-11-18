@@ -17,9 +17,15 @@ import (
 
 const maxSecretBytes = 64 << 10
 
-type protectedFiles struct{ root string }
+type protectedFiles struct {
+	root    string
+	durable bool
+}
 
 func New(root string) Store { return &protectedFiles{root: root} }
+
+// NewDurable is the power-loss-resistant lane for managed birth checkpoints.
+func NewDurable(root string) Store { return &protectedFiles{root: root, durable: true} }
 func validName(name string) bool {
 	if len(name) != 64 {
 		return false
@@ -38,7 +44,7 @@ func (s *protectedFiles) openRoot(create bool) (int, error) {
 	if !filepath.IsAbs(s.root) || filepath.Clean(s.root) != s.root {
 		return -1, ErrUnsafe
 	}
-	if create {
+	if create && s.durable {
 		// Persist newly created ancestor entries before publishing credentials.
 		// Otherwise a durable record can disappear after a power loss because
 		// its containing directory was never committed by its parent.
@@ -61,7 +67,15 @@ func (s *protectedFiles) openRoot(create bool) (int, error) {
 			return -1, ErrUnsafe
 		}
 		for path := s.root; ; path = filepath.Dir(path) {
-			fd, e := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+			openPath := path
+			if path == ancestor {
+				var e error
+				openPath, e = filepath.EvalSymlinks(path)
+				if e != nil {
+					return -1, ErrUnsafe
+				}
+			}
+			fd, e := unix.Open(openPath, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 			if e != nil {
 				return -1, ErrUnsafe
 			}
@@ -73,6 +87,10 @@ func (s *protectedFiles) openRoot(create bool) (int, error) {
 			if path == ancestor {
 				break
 			}
+		}
+	} else if create {
+		if err := os.MkdirAll(s.root, 0700); err != nil {
+			return -1, ErrUnsafe
 		}
 	}
 	parent, err := unix.Open(filepath.Dir(s.root), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
@@ -167,7 +185,7 @@ func readAt(root int, name string) ([]byte, error) {
 	}
 	return b, nil
 }
-func writeTemp(root int, secret []byte) (string, error) {
+func writeTemp(root int, secret []byte, durable bool) (string, error) {
 	var nonce [16]byte
 	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
 		return "", err
@@ -184,7 +202,11 @@ func writeTemp(root int, secret []byte) (string, error) {
 		return "", err
 	}
 	if _, err = f.Write(secret); err == nil {
-		err = durableFileSync(int(f.Fd()))
+		if durable {
+			err = durableFileSync(int(f.Fd()))
+		} else {
+			err = f.Sync()
+		}
 	}
 	if e := f.Close(); err == nil {
 		err = e
@@ -215,7 +237,7 @@ func (s *protectedFiles) Save(name string, secret []byte) error {
 	if err = sweepTemps(root); err != nil {
 		return err
 	}
-	tmp, err := writeTemp(root, secret)
+	tmp, err := writeTemp(root, secret, s.durable)
 	if err != nil {
 		return err
 	}
@@ -270,7 +292,7 @@ func (s *protectedFiles) Replace(name string, expected, secret []byte) error {
 	if subtle.ConstantTimeCompare(old, expected) != 1 {
 		return ErrUnsafe
 	}
-	tmp, err := writeTemp(root, secret)
+	tmp, err := writeTemp(root, secret, s.durable)
 	if err != nil {
 		return err
 	}

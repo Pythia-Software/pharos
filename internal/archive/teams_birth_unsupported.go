@@ -15,3 +15,5 @@ func teamsCreateManagedLibrary(context.Context, string, string, string) (Config,
 	return Config{}, errTeamsBirthUnsupported
 }
 func teamsOpenManagedCatalog(context.Context, Config) (*Catalog, bool, error) { return nil, false, nil }
+
+func teamsHasRetainedBirth(Config) bool { return false }

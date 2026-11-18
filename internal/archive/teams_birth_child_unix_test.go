@@ -4,6 +4,7 @@ package archive
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,12 +14,17 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/credentialstore"
 )
 
 func TestTeamsManagedChildHelper(t *testing.T) {
 	config := os.Getenv("PHAROS_BIRTH_TEST_CONFIG")
 	if config == "" {
 		return
+	}
+	if os.Getenv("PHAROS_BIRTH_TEST_FAIL_STORE") == "1" {
+		override(t, &teamsCredentialStore, func(Config) (credentialstore.Store, error) { return nil, errors.New("synthetic unavailable store") })
 	}
 	if err := Run([]string{"--config", config, "serve", "--dynamic", "--endpoint", os.Getenv("PHAROS_BIRTH_TEST_ENDPOINT"), "--application", os.Getenv("PHAROS_BIRTH_TEST_APP")}); err != nil {
 		t.Fatal(err)
@@ -95,5 +101,52 @@ func TestTeamsManagedCreateAndChildRestart(t *testing.T) {
 			_ = cmd.Process.Kill()
 			t.Fatal("child did not stop")
 		}
+	}
+}
+
+func TestLegacyChildIgnoresUnavailableBirthStore(t *testing.T) {
+	slowTest(t)
+	support := t.TempDir()
+	t.Setenv("PHAROS_SUPPORT_DIR", support)
+	target := filepath.Join(t.TempDir(), "Legacy")
+	cfg, err := InitLibrary(target, libraryVolumeIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := filepath.Join(t.TempDir(), "Synthetic.app")
+	endpoint := filepath.Join(t.TempDir(), "endpoint.json")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestTeamsManagedChildHelper$")
+	cmd.Env = append(os.Environ(), "PHAROS_TEST_SUPPORT_DIR="+support, "PHAROS_BIRTH_TEST_CONFIG="+cfg.Path, "PHAROS_BIRTH_TEST_APP="+app, "PHAROS_BIRTH_TEST_ENDPOINT="+endpoint, "PHAROS_BIRTH_TEST_FAIL_STORE=1")
+	cmd.Stderr = os.Stderr
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	deadline := time.NewTimer(20 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if _, e := os.Stat(endpoint); e == nil {
+			break
+		}
+		select {
+		case e := <-done:
+			t.Fatalf("legacy child exited: %v", e)
+		case <-deadline.C:
+			_ = cmd.Process.Kill()
+			t.Fatal("legacy child did not serve")
+		case <-tick.C:
+		}
+	}
+	if err = cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("legacy child did not stop")
 	}
 }

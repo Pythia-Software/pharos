@@ -36,6 +36,11 @@ func teamsBirthReservationName(applicationID, path string) string {
 	sum := sha256.Sum256([]byte("pharos-managed-birth-location-v1\x00" + applicationID + "\x00" + path))
 	return hex.EncodeToString(sum[:])
 }
+func teamsBirthIdentityName(scope string) string {
+	sum := sha256.Sum256([]byte("pharos-managed-birth-identity-v1\x00" + scope))
+	return hex.EncodeToString(sum[:])
+}
+
 func (r teamsBirthReservation) valid() bool {
 	if r.Version != 1 || r.Scope != teamsCheckpointScope(r.Application, r.LibraryID) || r.Application == "" || r.Host == "" || r.UID < 0 || r.LibraryID == "" || r.InstanceID == "" || !filepath.IsAbs(r.Path) || filepath.Clean(r.Path) != r.Path {
 		return false
@@ -43,7 +48,7 @@ func (r teamsBirthReservation) valid() bool {
 	switch r.Phase {
 	case "reserved":
 		return r.ImageSHA256 == "" && r.Tuple == nil && r.DirectoryInode == 0 && r.CatalogInode == 0
-	case "image_bound":
+	case "image_bound", "verified":
 		return teamsCheckpointHex(r.ImageSHA256, 64) && teamsCheckpointTupleValid(r.Tuple) && r.Tuple.Instance == teamsCheckpointInstance(r.LibraryID, r.InstanceID) && r.DirectoryInode != 0 && r.CatalogInode != 0
 	case "abandoned":
 		return (r.ImageSHA256 == "" && r.Tuple == nil) || (teamsCheckpointHex(r.ImageSHA256, 64) && teamsCheckpointTupleValid(r.Tuple) && r.Tuple.Instance == teamsCheckpointInstance(r.LibraryID, r.InstanceID))
@@ -75,13 +80,13 @@ func teamsReadBirthReservation(store credentialstore.Store, name string) ([]byte
 	return raw, r, nil
 }
 func teamsAdvanceBirthReservation(store credentialstore.Store, name string, oldRaw []byte, old, next teamsBirthReservation) ([]byte, error) {
-	if old.Phase == "reserved" && next.Phase != "image_bound" && next.Phase != "abandoned" || old.Phase == "image_bound" && next.Phase != "committed" && next.Phase != "abandoned" || old.Phase == "committed" || old.Phase == "abandoned" {
+	if old.Phase == "reserved" && next.Phase != "image_bound" && next.Phase != "abandoned" || old.Phase == "image_bound" && next.Phase != "verified" && next.Phase != "abandoned" || old.Phase == "verified" && next.Phase != "committed" || old.Phase == "committed" || old.Phase == "abandoned" {
 		return nil, errTeamsProtectionContinuity
 	}
 	if old.Version != next.Version || old.Scope != next.Scope || old.Application != next.Application || old.Path != next.Path || old.Host != next.Host || old.Volume != next.Volume || old.UID != next.UID || old.LibraryID != next.LibraryID || old.InstanceID != next.InstanceID {
 		return nil, errTeamsProtectionContinuity
 	}
-	if old.Phase == "image_bound" && (old.ImageSHA256 != next.ImageSHA256 || old.DirectoryDevice != next.DirectoryDevice || old.DirectoryInode != next.DirectoryInode || old.CatalogDevice != next.CatalogDevice || old.CatalogInode != next.CatalogInode || old.Tuple == nil || next.Tuple == nil || *old.Tuple != *next.Tuple) {
+	if (old.Phase == "image_bound" || old.Phase == "verified") && (old.ImageSHA256 != next.ImageSHA256 || old.DirectoryDevice != next.DirectoryDevice || old.DirectoryInode != next.DirectoryInode || old.CatalogDevice != next.CatalogDevice || old.CatalogInode != next.CatalogInode || old.Tuple == nil || next.Tuple == nil || *old.Tuple != *next.Tuple) {
 		return nil, errTeamsProtectionContinuity
 	}
 	encoded, err := teamsEncodeBirthReservation(next)

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gbdubs/pharos/internal/platform/credentialstore"
@@ -104,7 +105,7 @@ func TestTeamsCreateManagedLibrary(t *testing.T) {
 		t.Fatal(err)
 	}
 	interrupted := reservation
-	interrupted.Phase = "image_bound"
+	interrupted.Phase = "verified"
 	interruptedBytes, err := teamsEncodeBirthReservation(interrupted)
 	if err != nil {
 		t.Fatal(err)
@@ -243,6 +244,33 @@ func TestTeamsBirthDoesNotClaimExistingLibrary(t *testing.T) {
 			_ = c.Close()
 		}
 		t.Fatalf("legacy library claimed: %v", err)
+	}
+	// A failed competing birth must not claim a different, valid legacy leaf.
+	canonicalParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalTarget := filepath.Join(canonicalParent, "existing")
+	appID := installationID(app)
+	store, err := teamsBirthCredentialStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := teamsBirthReservation{Version: 1, Phase: "image_bound", Application: appID, Path: canonicalTarget, Host: "synthetic-hardware", UID: os.Geteuid(), Volume: libraryVolumeIdentity(canonicalParent), LibraryID: "other-library", InstanceID: "other-instance", DirectoryInode: 1, CatalogInode: 2, ImageSHA256: strings.Repeat("0", 64)}
+	stale.Scope = teamsCheckpointScope(appID, stale.LibraryID)
+	stale.Tuple = &teamsCheckpointTuple{Generation: 1, Instance: teamsCheckpointInstance(stale.LibraryID, stale.InstanceID), CommitID: strings.Repeat("0", 32), Digest: strings.Repeat("0", 64)}
+	raw, err := teamsEncodeBirthReservation(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Save(teamsBirthReservationName(appID, canonicalTarget), raw); err != nil {
+		t.Fatal(err)
+	}
+	if c, found, err := teamsOpenManagedCatalog(context.Background(), cfg); err != nil || found {
+		if c != nil {
+			_ = c.Close()
+		}
+		t.Fatalf("interrupted birth claimed legacy leaf: %v", err)
 	}
 	override(t, &teamsCredentialStore, func(Config) (credentialstore.Store, error) {
 		return nil, errors.New("synthetic unavailable host storage")

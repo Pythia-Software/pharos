@@ -266,6 +266,20 @@ func Run(arguments []string) error {
 		return runAddThisMacCLI(config, args, os.Stdin, os.Stdout)
 	}
 	if command == "serve" {
+		var use, owner *os.File
+		if d, e := readLibraryDescriptor(config); (e == nil && d.ManagedBirth) || teamsHasRetainedBirth(config) {
+			var e error
+			use, e = fileLease(libraryUseLock(config), false)
+			if e != nil {
+				return e
+			}
+			defer use.Close()
+			owner, e = fileLease(filepath.Join(filepath.Dir(canonical(config.CatalogPath)), ".pharos-service.lock"), true)
+			if e != nil {
+				return e
+			}
+			defer owner.Close()
+		}
 		catalog, managed, err := teamsOpenManagedCatalog(context.Background(), config)
 		if err != nil {
 			return err
@@ -275,19 +289,7 @@ func Run(arguments []string) error {
 				return err
 			}
 			catalog, err = OpenCatalog(config.CatalogPath)
-			if err == nil {
-				var version string
-				if e := catalog.DB.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&version); e != nil {
-					_ = catalog.reads.Close()
-					_ = catalog.DB.Close()
-					return e
-				}
-				if version == "35" {
-					_ = catalog.reads.Close()
-					_ = catalog.DB.Close()
-					return errTeamsProtectionContinuity
-				}
-			}
+
 		}
 		if err != nil {
 			return err
@@ -324,7 +326,7 @@ func Run(arguments []string) error {
 		// Only a service that got its port serves the library: then a release
 		// (see releasedMarkerName) ends.
 		server.life.listening = func() { _ = os.Remove(releasedMarker(config.CatalogPath)) }
-		return server.Serve()
+		return server.serveWithLeases(use, owner)
 	}
 	if err := config.EnsureDirs(); err != nil {
 		return err

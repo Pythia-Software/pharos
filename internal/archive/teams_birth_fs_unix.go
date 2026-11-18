@@ -188,6 +188,11 @@ func teamsVerifyBirthLocation(path string, r teamsBirthReservation) error {
 	if unix.Lstat(main, &c) != nil || c.Mode&unix.S_IFMT != unix.S_IFREG || c.Nlink != 1 || c.Uid != uint32(os.Geteuid()) || c.Ino != r.CatalogInode {
 		return errTeamsProtectionContinuity
 	}
+	// A stable volume UUID survives remount device-number changes. Where the
+	// platform cannot supply one, a changed device stays held.
+	if !strings.HasPrefix(r.Volume, "uuid:") && (uint64(d.Dev) != r.DirectoryDevice || uint64(c.Dev) != r.CatalogDevice) {
+		return errTeamsProtectionContinuity
+	}
 	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
 		var side unix.Stat_t
 		err := unix.Lstat(main+suffix, &side)
@@ -237,4 +242,13 @@ func teamsEnsureManagedParent(path string) error {
 		}
 	}
 	return nil
+}
+
+func teamsSyncBirthParent(path string) error {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	return unix.Fsync(fd)
 }

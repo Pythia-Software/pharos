@@ -86,14 +86,18 @@ func TestTeamsBirthReservationTransitions(t *testing.T) {
 	if _, err = teamsAdvanceBirthReservation(store, name, bound, next, altered); err == nil {
 		t.Fatal("changed path accepted")
 	}
-	committed := next
-	committed.Phase = "committed"
-	committed.DirectoryInode = 1
-	committed.CatalogInode = 2
-	if _, err = teamsAdvanceBirthReservation(store, name, raw, next, committed); err == nil {
+	verified := next
+	verified.Phase = "verified"
+	if _, err = teamsAdvanceBirthReservation(store, name, raw, next, verified); err == nil {
 		t.Fatal("stale predecessor accepted")
 	}
-	if _, err = teamsAdvanceBirthReservation(store, name, bound, next, committed); err != nil {
+	verifiedBytes, err := teamsAdvanceBirthReservation(store, name, bound, next, verified)
+	if err != nil {
+		t.Fatal(err)
+	}
+	committed := verified
+	committed.Phase = "committed"
+	if _, err = teamsAdvanceBirthReservation(store, name, verifiedBytes, verified, committed); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -36,21 +36,21 @@ func teamsOpenManagedCatalog(ctx context.Context, cfg Config) (*Catalog, bool, e
 	}
 	parent, e := filepath.EvalSymlinks(filepath.Dir(filepath.Dir(cfg.Path)))
 	if e != nil {
-		if version == "35" || managedMarker {
+		if managedMarker {
 			return nil, true, e
 		}
 		return nil, false, nil
 	}
 	path := filepath.Join(parent, filepath.Base(filepath.Dir(cfg.Path)))
 	if cfg.Application == "" {
-		if version == "35" || managedMarker {
+		if managedMarker {
 			return nil, true, errTeamsProtectionContinuity
 		}
 		return nil, false, nil
 	}
 	store, e := teamsCredentialStore(cfg)
 	if e != nil {
-		if version == "35" || managedMarker {
+		if managedMarker {
 			return nil, true, e
 		}
 		return nil, false, nil
@@ -60,7 +60,10 @@ func teamsOpenManagedCatalog(ctx context.Context, cfg Config) (*Catalog, bool, e
 	if version != "35" {
 		// A retained birth record prevents a restored older image from being
 		// silently opened as ordinary data. A reserved unrelated path is inert.
-		if managedMarker || (e == nil && (r.Phase == "committed" || r.Phase == "image_bound")) {
+		if managedMarker {
+			return nil, true, errTeamsProtectionContinuity
+		}
+		if e == nil && (r.Phase == "committed" || r.Phase == "image_bound" || r.Phase == "verified") && teamsVerifyBirthLocation(path, r) == nil {
 			return nil, true, errTeamsProtectionContinuity
 		}
 		return nil, false, nil
@@ -69,17 +72,25 @@ func teamsOpenManagedCatalog(ctx context.Context, cfg Config) (*Catalog, bool, e
 		if managedMarker {
 			return nil, true, errTeamsProtectionContinuity
 		}
-		// Existing authenticated v35 upgrades have their own host checkpoint;
-		// verify that continuity without inventing a birth record.
-		d, e := readLibraryDescriptor(cfg)
-		if e != nil {
-			return nil, true, e
+		// Existing upgrades remain on their old startup path. A fresh birth
+		// has a second, scope-indexed witness even if its path changed.
+		if descriptorErr == nil {
+			scope := teamsCheckpointScope(appID, descriptor.ID)
+			if _, witnessErr := store.Load(teamsBirthIdentityName(scope)); witnessErr == nil {
+				return nil, true, errTeamsProtectionContinuity
+			} else if !errors.Is(witnessErr, os.ErrNotExist) {
+				return nil, true, witnessErr
+			}
 		}
-		catalog, e := openCatalogWithDSN(cfg.CatalogPath, catalogDSN(cfg.CatalogPath)+"&mode=rw", func(c *Catalog) error { _, err := c.configureTeamsCheckpoint(ctx, cfg, d); return err })
-		return catalog, true, e
+		return nil, false, nil
 	}
+
 	if e != nil {
 		return nil, true, e
+	}
+	witness, e := store.Load(teamsBirthIdentityName(r.Scope))
+	if e != nil || string(witness) != teamsBirthReservationName(appID, path) {
+		return nil, true, errTeamsProtectionContinuity
 	}
 	actual, e := filepath.EvalSymlinks(cfg.CatalogPath)
 	if e != nil || actual != filepath.Join(path, "catalog", "catalog.sqlite3") {
@@ -96,14 +107,25 @@ func teamsOpenManagedCatalog(ctx context.Context, cfg Config) (*Catalog, bool, e
 	if err != nil || !d.ManagedBirth || d.ID != r.LibraryID || d.Instance != r.InstanceID {
 		return nil, true, errTeamsProtectionContinuity
 	}
+	// Only birth checkpoint writes use the power-loss durable host lane.
+	store, err = teamsBirthCredentialStore(cfg)
+	if err != nil {
+		return nil, true, err
+	}
 	// mode=rw prevents accidentally replacing a missing catalog with an empty DB.
 	dsn := catalogDSN(cfg.CatalogPath) + "&mode=rw"
 	catalog, err := openCatalogWithDSN(cfg.CatalogPath, dsn, func(c *Catalog) error {
-		// A verified held checkpoint still permits the guarded local lane;
-		// proof effects remain held by the existing checkpoint policy.
-		_, e := c.configureTeamsCheckpoint(ctx, cfg, d)
+		// Held writes do not advance the retained checkpoint today. Park a
+		// managed birth until a held-state writer can prevent rollback.
+		held, e := c.configureTeamsCheckpointWithStore(ctx, cfg, d, store)
 		if e != nil {
 			return e
+		}
+		if held {
+			_ = c.teamsCheckpoint.writer.db.Close()
+			clear(c.teamsCheckpoint.guardKey)
+			c.teamsCheckpoint = nil
+			return errTeamsProtectionContinuity
 		}
 		c.teamsCheckpoint.writer.validateBinding = func() error {
 			current, _, e := teamsReadBirthReservation(store, teamsBirthReservationName(appID, path))
@@ -137,5 +159,5 @@ func teamsHasRetainedBirth(cfg Config) bool {
 		return false
 	}
 	_, r, err := teamsReadBirthReservation(store, teamsBirthReservationName(installationID(cfg.Application), path))
-	return err == nil && (r.Phase == "committed" || r.Phase == "image_bound")
+	return err == nil && (r.Phase == "committed" || r.Phase == "image_bound" || r.Phase == "verified")
 }

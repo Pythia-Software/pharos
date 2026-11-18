@@ -1038,6 +1038,10 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 			err = fmt.Errorf("Choose a library folder outside the Pharos app.")
 			break
 		}
+		if !managedBirth && teamsHasRetainedBirth(Config{Library: true, Application: m.registry.Application, Path: filepath.Join(path, libraryConfigName), CatalogPath: filepath.Join(path, "catalog", "catalog.sqlite3")}) {
+			err = errTeamsProtectionContinuity
+			break
+		}
 		create := m.operations.begin(OperationSpec{Kind: "library.create", Subject: name, Trigger: triggerUser})
 		var config Config
 		if managedBirth {

@@ -154,21 +154,30 @@ func NewServer(config Config, catalog *Catalog) *Server {
 }
 func (s *Server) Config() Config { s.configMu.RLock(); defer s.configMu.RUnlock(); return s.config }
 
-func (s *Server) Serve() error {
+func (s *Server) Serve() error { return s.serveWithLeases(nil, nil) }
+
+// A managed child acquires these before its first checkpoint reconciliation.
+func (s *Server) serveWithLeases(use, owner *os.File) error {
 	if s.workError != nil {
 		return s.workError
 	}
 	config := s.Config()
-	use, err := fileLease(libraryUseLock(config), false)
-	if err != nil {
-		return err
+	if use == nil {
+		var err error
+		use, err = fileLease(libraryUseLock(config), false)
+		if err != nil {
+			return err
+		}
+		defer use.Close()
 	}
-	defer use.Close()
-	owner, err := fileLease(filepath.Join(filepath.Dir(canonical(config.CatalogPath)), ".pharos-service.lock"), true)
-	if err != nil {
-		return err
+	if owner == nil {
+		var err error
+		owner, err = fileLease(filepath.Join(filepath.Dir(canonical(config.CatalogPath)), ".pharos-service.lock"), true)
+		if err != nil {
+			return err
+		}
+		defer owner.Close()
 	}
-	defer owner.Close()
 	// A compaction holds the use lock exclusively, so none is running; what
 	// one killed part way left is tens of gigabytes nothing else removes.
 	removeCompactionLeftovers(canonical(config.CatalogPath))
