@@ -1,0 +1,38 @@
+{
+  "status": "candidate_pending_joint_review",
+  "description": "Synthetic reconcile-and-close; never treat a generic 404, missing/pruned row, or timeout as definitive absence. Exact request body retries use a fresh transport nonce.",
+  "request": {
+    "upload_id": "11111111-1111-4111-8111-111111111111",
+    "reservation_sha256": "e46be60b0cf881434908ad3877b88f55c58e61ab76d2896df6dfc470ac7ff7bb",
+    "commit_body_sha256": "e8f9b18fd5f0b05be8790351843bf5f954ea201aa3a5c647238c44bf7199b551"
+  },
+  "responses": {
+    "accepted": {
+      "status": "accepted",
+      "receipt": {
+        "id": "55555555-5555-4555-8555-555555555555",
+        "work_id": "22222222-2222-4222-8222-222222222222",
+        "installation_id": "33333333-3333-4333-8333-333333333333",
+        "payload_sha256": "5e78715935f407c94a47cb35afc0fd297ef698a860169bc046a74d9e8d04f044",
+        "submission_sha256": "e8f9b18fd5f0b05be8790351843bf5f954ea201aa3a5c647238c44bf7199b551",
+        "idempotency_key": "11111111-1111-4111-8111-111111111111",
+        "result_revision": 1,
+        "accepted_at": "2026-11-16T01:05:00Z",
+        "outcome": "completed"
+      }
+    },
+    "closed": {
+      "status": "closed",
+      "upload_id": "11111111-1111-4111-8111-111111111111",
+      "reservation_sha256": "e46be60b0cf881434908ad3877b88f55c58e61ab76d2896df6dfc470ac7ff7bb",
+      "retain_until": "2026-11-23T02:00:00Z",
+      "reservation_expires_at": "2026-11-16T02:00:00Z",
+      "commit_body_sha256": "e8f9b18fd5f0b05be8790351843bf5f954ea201aa3a5c647238c44bf7199b551"
+    },
+    "indeterminate": {
+      "status": "indeterminate"
+    }
+  },
+  "invariant": "The work/upload lock checks an exact receipt first. A matching persisted upload can be atomically closed using its server-verified expiry. A delayed commit checks the same fence and cannot accept after closed. A missing or pruned upload and receipt is indeterminate. The close request contains no reservation or result content.",
+  "digest_note": "commit_body_sha256 and receipt submission_sha256 hash the exact signed HTTP commit body without a domain prefix; commit_sha256 in the multipart fixture hashes the canonical semantic commit with the pharos-teams-typed-result-commit-v2 domain."
+}
