@@ -318,3 +318,27 @@ func TestTeamsScheduledQuerySizeBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestScheduledReleaseDisclosesSinglePartialContributor(t *testing.T) {
+	raw, err := os.ReadFile("testdata/teams-report-series/scheduled_series_config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := strings.Replace(string(raw), `"disclosure_revision":1`, `"disclosure_revision":2`, 1)
+	const end = `"withdrawal_does_not_remove_published_snapshots"`
+	const release = end + `,"single_contributor_value_and_partial_coverage"`
+	v2 := strings.Replace(revision, end, release, 1)
+	c, err := parseTeamsScheduledConfig([]byte(v2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	terms := teamsScheduledTerms(c)
+	if terms.DisclosureRevision != 2 || !strings.Contains(terms.Inference, "your token total") || !strings.Contains(terms.Inference, "partial coverage") || !strings.Contains(terms.Inference, "named report readers") {
+		t.Fatal("release disclosure omitted the scope of a single partial contribution")
+	}
+	for _, bad := range []string{revision, strings.Replace(string(raw), end, release, 1), strings.Replace(v2, `"disclosure_revision":2`, `"disclosure_revision":3`, 1)} {
+		if _, err := parseTeamsScheduledConfig([]byte(bad)); err == nil {
+			t.Fatal("mismatched release terms accepted")
+		}
+	}
+}

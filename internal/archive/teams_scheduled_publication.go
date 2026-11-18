@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -187,15 +188,19 @@ func parseTeamsScheduledConfig(raw []byte) (teamsScheduledConfig, error) {
 	if json.Unmarshal(raw, &top) != nil || json.Unmarshal(top["retention_policy"], &retention) != nil || retention["duration_days"] == nil {
 		return c, errTeamsQueryUnsupported
 	}
-	if c.Publication.SchemaVersion != 2 || c.Publication.DisclosureRevision != 1 || len(c.Publication.Descriptors) != 1 {
+	if c.Publication.SchemaVersion != 2 || (c.Publication.DisclosureRevision != 1 && c.Publication.DisclosureRevision != 2) || len(c.Publication.Descriptors) != 1 {
 		return c, errTeamsQueryUnsupported
 	}
 	d := c.Publication.Descriptors[0]
+	disclosures := teamsScheduledDisclosures
+	if c.Publication.DisclosureRevision == 2 {
+		disclosures = append(slices.Clone(disclosures), "single_contributor_value_and_partial_coverage")
+	}
 	_, idErr := teams.WorkPath(d.ID, "status")
 	if idErr != nil || d.Kind != "aggregate" || !teamsScheduledReaders(d.Readers) || d.Destination.Kind != "web" || len(d.Triggers) != 1 {
 		return c, errTeamsQueryUnsupported
 	}
-	if _, err := teams.WorkPath(d.Triggers[0].ID, "status"); err != nil || d.Triggers[0].Kind != "response_deadline" || len(d.Outputs.Fields) != 1 || d.Outputs.Fields[0] != (teamsScheduledField{"total_tokens", "integer", "captured_tokens", "tokens", "sum"}) || !teamsScheduledEqual(d.Outputs.Coverage, teamsScheduledCoverage) || !teamsScheduledEqual(d.Disclosures, teamsScheduledDisclosures) {
+	if _, err := teams.WorkPath(d.Triggers[0].ID, "status"); err != nil || d.Triggers[0].Kind != "response_deadline" || len(d.Outputs.Fields) != 1 || d.Outputs.Fields[0] != (teamsScheduledField{"total_tokens", "integer", "captured_tokens", "tokens", "sum"}) || !teamsScheduledEqual(d.Outputs.Coverage, teamsScheduledCoverage) || !teamsScheduledEqual(d.Disclosures, disclosures) {
 		return c, errTeamsQueryUnsupported
 	}
 	if _, err := teams.WorkPath(c.Requester.ID, "status"); err != nil || c.Question == "" || len(c.Question) > 2000 || c.Requester.DisplayName == "" || len(c.Requester.DisplayName) > 256 || c.ApprovalPolicy != "metrics_or_review" || !teamsScheduledVersion.MatchString(c.MinAppVersion) || c.RetentionPolicy.Mode != "organization_controlled" || c.RetentionPolicy.PolicyVersion < 1 || (c.RetentionPolicy.DurationDays != nil && *c.RetentionPolicy.DurationDays < 1) || !teamsScheduledReaders(c.Audiences.ResponseReaders) || c.Audiences.Publications == nil || len(c.Audiences.Publications) != 0 || c.Audiences.Exports == nil || len(c.Audiences.Exports) != 0 || !canonicalTeamsScheduledZone(c.Schedule.Timezone) || !validTeamsScheduledSpec(c.Schedule) || c.ScheduleBounds.AnchorAt.IsZero() || !c.ScheduleBounds.UntilAt.After(c.ScheduleBounds.AnchorAt) {
@@ -275,7 +280,12 @@ type teamsScheduledDisclosure struct {
 }
 
 func teamsScheduledTerms(c teamsScheduledConfig) teamsScheduledDisclosure {
-	return teamsScheduledDisclosure{Cadence: c.Schedule.Cadence, Timezone: c.Schedule.Timezone, CatchUp: c.Schedule.CatchUp, TriggerID: c.Publication.Descriptors[0].Triggers[0].ID, DisclosureRevision: c.Publication.DisclosureRevision, ResponseWindowSeconds: c.Schedule.ResponseWindowSeconds, AnchorAt: c.ScheduleBounds.AnchorAt, UntilAt: c.ScheduleBounds.UntilAt, Field: "Combined captured tokens from all available history (sum)", Coverage: "Aggregate counts: complete, incomplete inventory, opted out, unavailable, declined and pending", DefaultAndOptOut: "Collection readers can see attributable values. Report readers see only the aggregate and approved coverage. Only privacy-safe numeric sources are eligible. The organization default applies; opt out of automatic sharing or choose review.", Cutoff: "Accepted by the response deadline; an accepted result remains eligible after a later opt-out. Each input retains its observed and computed times.", Inference: "A report with one contributor reveals that person's value; comparing snapshots may reveal contributions.", Withdrawal: "Withdrawal does not remove already published snapshots."}
+	terms := teamsScheduledDisclosure{Cadence: c.Schedule.Cadence, Timezone: c.Schedule.Timezone, CatchUp: c.Schedule.CatchUp, TriggerID: c.Publication.Descriptors[0].Triggers[0].ID, DisclosureRevision: c.Publication.DisclosureRevision, ResponseWindowSeconds: c.Schedule.ResponseWindowSeconds, AnchorAt: c.ScheduleBounds.AnchorAt, UntilAt: c.ScheduleBounds.UntilAt, Field: "Combined captured tokens from all available history (sum)", Coverage: "Aggregate counts: complete, incomplete inventory, opted out, unavailable, declined and pending", DefaultAndOptOut: "Collection readers can see attributable values. Report readers see only the aggregate and approved coverage. Only privacy-safe numeric sources are eligible. The organization default applies; opt out of automatic sharing or choose review.", Cutoff: "Accepted by the response deadline; an accepted result remains eligible after a later opt-out. Each input retains its observed and computed times.", Inference: "A report with one contributor reveals that person's value; comparing snapshots may reveal contributions.", Withdrawal: "Withdrawal does not remove already published snapshots."}
+	if c.Publication.DisclosureRevision == 2 {
+		terms.Inference = "If only your library contributes, the named report readers can see your token total. They can see the total even when your library has only partial coverage. Comparing reports can reveal changes in your contribution."
+		terms.Coverage = "Each report identifies whether its token total covers all eligible data or only part of it"
+	}
+	return terms
 }
 
 // labels must already be scoped to this exact consent config by the caller.
