@@ -2449,6 +2449,19 @@ test('Teams checking requires a displayed policy choice', { skip }, async t => {
   assert.deepEqual(protection,{acknowledge:true,settingsRevision:4});
 });
 
+test('Teams source receipt lookup reports an inconclusive miss', { skip }, async t => {
+  let checks=0;
+  const app=await open(t,{url:'/settings/teams',ready:'#teamsSettingsPage .teams-settings',api:{
+    'GET /api/teams/enrollment':{state:'connected_paused',available:true,library:'Synthetic',fingerprint:'',problem:''},
+    'GET /api/teams/worker':{enabled:true,optOut:true,settingsRevision:4,acknowledgedPolicy:1,nextCheck:'',checking:false,problem:'',sourceProblem:'Source protection is waiting for verified evidence.',sourceLookupAvailable:true,items:[],modelApproved:false},
+    'GET /api/teams/source-accounts':{sourceRevision:0,settingsRevision:4,proofRequested:false,sources:[]},
+    'POST /api/teams/worker/source-reconcile':()=>{checks++;return {found:false}},
+  }});
+  await app.page.getByRole('button',{name:'Check protection status'}).click();
+  await app.page.getByText('No retained receipt could be confirmed. The earlier request may have taken effect.').waitFor();
+  assert.equal(checks,1);
+});
+
 test('Teams model permission displays the account and requires a separate action', { skip }, async t => {
   let approved;
   const inspection={provider:'Claude',model:'synthetic-model',effort:'Low',account:'synthetic@example.invalid · Synthetic',sessionDigest:'a'.repeat(64),authDigest:'b'.repeat(64),settingsRevision:4};

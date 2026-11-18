@@ -7,7 +7,7 @@ type SourceAccount = { bindingId: string; provider: string; sourceName: string; 
 type SourceStatus = { sourceRevision: number; settingsRevision: number; proofRequested: boolean; sources: SourceAccount[] };
 type ScheduledTerms = { field: string; coverage: string; defaultAndOptOut: string; cutoff: string; inference: string; withdrawal: string; anchorAt: string; untilAt: string };
 type WorkItem = { scheduledResult?: { total: string; sourceState: string; exactJson: string }; scheduledTerms?: ScheduledTerms; scheduledAssignment?: { deadline_at: string; timezone: string }; workId: string; question: string; prompt: string; retention: unknown; requester: string; requesterId: string; requesterFallback?: string; readerLabels?: {entries:{person_id:string;status:string;display_name?:string}[]}; labelsReady: boolean; labelsToken?: string; labelsExpireAt?: string; generation: number; readers: string[] | null; state: string; payloadHash: string; configHash: string; payload: unknown; publicationV2?: {schema_version:number; descriptors:{id:string;readers:{kind:string;id:string}[];outputs:{fields:{id:string;unit:string}[];coverage:string[]};destination:{kind:string};disclosures:string[]}[]} | null; schedule?: {cadence:string; timezone:string; catch_up:string; response_window_seconds:number} | null; period?: {key:string; start_at?:string; end_at?:string} | null; exports?: {id:string;kind:string;destination:string;fields:string[]}[] | null; publications?: {id:string;kind:string;readers:{kind:string;id:string}[];fields:string[];include_completeness?:boolean}[] | null };
-type WorkerStatus = { enabled: boolean; optOut: boolean; settingsRevision: number; acknowledgedPolicy: number; nextCheck: string; checking: boolean; problem: string; sourceProblem?: string; items: WorkItem[]; modelApproved: boolean };
+type WorkerStatus = { enabled: boolean; optOut: boolean; settingsRevision: number; acknowledgedPolicy: number; nextCheck: string; checking: boolean; problem: string; sourceProblem?: string; sourceLookupAvailable?: boolean; items: WorkItem[]; modelApproved: boolean };
 type ModelInspection = { provider: string; model: string; effort: string; account: string; sessionDigest: string; authDigest: string; settingsRevision: number };
 type SentItem = {workId:string; question:string; payload:unknown; sentAt:string};
 type OrgPolicy = { value: boolean; policyVersion: number; settingsRevision: number };
@@ -89,6 +89,7 @@ function TeamsWork() {
   const [allowMetrics, setAllowMetrics] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [sourceLookupMessage, setSourceLookupMessage] = useState("");
   const [model, setModel] = useState<ModelInspection | null>(null);
   const [sent, setSent] = useState<SentItem[] | null>(null);
   const refresh = useCallback(async () => { try { setStatus(await workerRequest<WorkerStatus>()); } catch { setError("Could not read Teams requests."); } }, []);
@@ -97,6 +98,12 @@ function TeamsWork() {
     setBusy(true); setError("");
     try { await workerRequest(path, body); await refresh(); }
     catch (e) { await refresh(); setError(e instanceof Error ? e.message : "Could not update Teams."); }
+    finally { setBusy(false); }
+  };
+  const checkSourceReceipt = async () => {
+    setBusy(true); setError(""); setSourceLookupMessage("");
+    try { const result = await workerRequest<{found: boolean}>("/source-reconcile", {}); setSourceLookupMessage(result.found ? "The retained receipt was checked." : "No retained receipt could be confirmed. The earlier request may have taken effect."); await refresh(); }
+    catch (e) { await refresh(); setError(e instanceof Error ? e.message : "Could not check source protection."); }
     finally { setBusy(false); }
   };
   const reviewPolicy = async () => { setBusy(true); setError(""); try { setPolicy(await workerRequest<OrgPolicy>("/policy")); } catch (e) { setError(e instanceof Error ? e.message : "Could not read the organization default."); } finally { setBusy(false); } };
@@ -126,7 +133,8 @@ function TeamsWork() {
         <button type="button" disabled={busy} onClick={() => { void act("/model/approve", model).then(() => setModel(null)); }}>Allow this account and model</button>{" "}<button type="button" disabled={busy} onClick={() => setModel(null)}>Cancel</button></> : null}
     </section> : null}
     {status?.problem ? <p role="status">{status.problem}</p> : null}
-    {status?.sourceProblem ? <p role="status">{status.sourceProblem}</p> : null}
+    {status?.sourceProblem ? <><p role="status">{status.sourceProblem}</p>{status.sourceLookupAvailable ? <button type="button" disabled={busy} onClick={() => void checkSourceReceipt()}>Check protection status</button> : null}</> : null}
+    {sourceLookupMessage ? <p role="status">{sourceLookupMessage}</p> : null}
     {status?.items.map(item => <div className="teams-source" key={item.workId}>
       <h4>{item.question}</h4><p>Requested by {item.requester || "your organization"}.{!item.publicationV2 ? ` Readers: ${item.readers?.map(id => id === item.requesterId && item.requesterFallback ? `${item.requesterFallback} (request name; ${id})` : id).join(", ") || "none listed"}.` : ""}</p>
       {status.enabled && item.publicationV2 && ["awaiting_source_consent", "awaiting_review"].includes(item.state) ? <ReaderAudiences item={item} refresh={refresh} /> : null}

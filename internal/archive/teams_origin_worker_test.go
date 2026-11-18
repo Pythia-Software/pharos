@@ -52,6 +52,15 @@ func TestTeamsWorkerSourcePilotSignedOriginFifthPage(t *testing.T) {
 func TestTeamsWorkerSourcePilotSignedOriginAuthFault(t *testing.T) {
 	runTeamsWorkerSourcePilotSignedOrigin(t, false, false, false, "auth")
 }
+func TestTeamsWorkerSourcePilotExpiredAuthorityParks(t *testing.T) {
+	runTeamsWorkerSourcePilotSignedOrigin(t, false, false, false, "expired-authority")
+}
+func TestTeamsWorkerSourcePilotLostReceiptLookup(t *testing.T) {
+	runTeamsWorkerSourcePilotSignedOrigin(t, false, false, false, "lost-lookup")
+}
+func TestTeamsWorkerSourcePilotSignedReceiptLookup(t *testing.T) {
+	runTeamsWorkerSourcePilotSignedOrigin(t, false, false, false, "lookup")
+}
 func TestTeamsWorkerSourcePilotSignedOriginStale(t *testing.T) {
 	runTeamsWorkerSourcePilotSignedOrigin(t, false, false, false, "stale")
 }
@@ -96,9 +105,12 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 	const person = "00000000-0000-4000-8000-000000000002"
 	const installation = "00000000-0000-4000-8000-000000000003"
 	var signedOrigins, originAttempts, starts int
-	var firstOrigin []byte
+	var firstOrigin, secondOrigin []byte
 	var suffixCandidate sourcewire.Item
 	var firstPages, secondPages int
+	var lookups, resent int
+	lookupMissing := true
+	var duringLookup func()
 	var unconfirmedPage []byte
 	var requestRun string
 	startBodies := map[string][]byte{}
@@ -282,6 +294,36 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 				}
 			}
 			_ = json.NewEncoder(w).Encode(sourcewire.RecoveryPageReceipt{Status: "proof_required", RunID: request.RunID, Generation: int64(len(accepted) + 1), ServerTime: now, UnacceptedFloor: now - 1, ExternalProofRequired: true, Family: "origins", Items: items, NextCursor: cursor})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/source-protection/") && strings.Contains(r.URL.Path, "/receipts/"):
+			lookups++
+			if len(raw) != 0 {
+				t.Error("lookup sent an observation body")
+			}
+			if duringLookup != nil {
+				duringLookup()
+			}
+			if lookupMissing {
+				http.Error(w, "unavailable", http.StatusNotFound)
+				return
+			}
+			lookedUp := firstOrigin
+			if len(secondOrigin) > 0 {
+				candidate, e := sourcewire.DecodeProtectionObservation(secondOrigin)
+				if e == nil && strings.Contains(r.URL.Path, candidate.ObservationID) {
+					lookedUp = secondOrigin
+				}
+			}
+			v, e := sourcewire.DecodeProtectionObservation(lookedUp)
+			if e != nil {
+				t.Error(e)
+				w.WriteHeader(500)
+				return
+			}
+			want := "/v1/device/libraries/" + d.ID + "/source-protection/" + v.ObservationID + "/receipts/" + sourcewire.ProtectionDigest(lookedUp)
+			if r.URL.Path != want {
+				t.Error("lookup changed exact observation identity")
+			}
+			_ = json.NewEncoder(w).Encode(sourcewire.ProtectionReceipt{Status: "accepted", ObservationID: v.ObservationID, Revision: v.Revision, ObservationSHA256: sourcewire.ProtectionDigest(lookedUp), PrivacyRevision: 1, OriginProtection: v.Protection})
 		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/source-protection/"):
 			v, e := sourcewire.DecodeProtectionObservation(raw)
 			if e != nil {
@@ -290,6 +332,9 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 				return
 			}
 			originAttempts++
+			if originAttempts > 1 && bytes.Equal(firstOrigin, raw) {
+				resent++
+			}
 			if mode == "first-expired" && originAttempts == 1 {
 				w.WriteHeader(http.StatusConflict)
 				_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "source_issuance_expired"}})
@@ -314,10 +359,10 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
 			}
-			if originAttempts == 2 && !bytes.Equal(firstOrigin, raw) {
+			if originAttempts == 2 && mode != "lost-lookup" && !bytes.Equal(firstOrigin, raw) {
 				t.Error("origin retry changed bytes")
 			}
-			if originAttempts == 2 && (mode == "stale" || mode == "expired") {
+			if originAttempts == 2 && (mode == "stale" || mode == "expired" || mode == "lookup") {
 				code := "stale_protection_revision"
 				if mode == "expired" {
 					code = "source_issuance_expired"
@@ -700,6 +745,44 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 	if originAttempts != 1 || signedOrigins != 0 {
 		t.Fatalf("uncertain origin advanced: attempts=%d accepted=%d", originAttempts, signedOrigins)
 	}
+	if mode == "lost-lookup" {
+		if err = c.writeTransaction(ctx, "synthetic-local-run-expiry", func(tx *sql.Tx) error {
+			_, e := tx.Exec(`UPDATE teams_origin_outbox SET expires_at=? WHERE state='prepared'`, time.Now().Unix()-1)
+			return e
+		}); err != nil {
+			t.Fatal(err)
+		}
+		lookupMissing = false
+		local := httptest.NewServer(service)
+		defer local.Close()
+		r, err := http.NewRequest(http.MethodPost, local.URL+"/api/teams/worker/source-reconcile", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Header.Set("Authorization", "Bearer "+cfg.APIToken)
+		response, err := local.Client().Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"found":true`) || lookups != 1 || originAttempts != 1 {
+			t.Fatalf("lost receipt lookup %d %s gets=%d puts=%d", response.StatusCode, body, lookups, originAttempts)
+		}
+		if n := countRows(t, c, `SELECT count(*) FROM teams_origin_outbox o JOIN teams_origin_attempts a ON a.observation_id=o.observation_id WHERE o.state='accepted' AND o.receipt_json IS NOT NULL AND a.terminal_code='reconciled_lookup'`); n != 1 {
+			t.Fatal("lost receipt was not committed")
+		}
+		if _, err = service.checkTeamsWork(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if resent != 0 || originAttempts != 2 || signedOrigins != 1 {
+			t.Fatalf("worker did not advance to a distinct observation: replayed=%d attempts=%d accepted=%d", resent, originAttempts, signedOrigins)
+		}
+		return
+	}
 	if mode == "first-expired" {
 		var disposition string
 		if err = c.DB.QueryRow(`SELECT terminal_code FROM teams_origin_attempts`).Scan(&disposition); err != nil || disposition != "first_rejected_source_issuance_expired" {
@@ -736,22 +819,42 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 	}
 	// An old census cannot replace the exact request, but must not discard its receipt.
 	invalidated = true
-	// The server may have accepted the first PUT even if the 24-hour recovery
-	// run then expires. Its exact attempted bytes remain replayable for their
-	// original issuance horizon; untouched batch members require a new run.
-	if err = c.writeTransaction(ctx, "synthetic-run-expiry", func(tx *sql.Tx) error {
-		if _, e := tx.Exec(`UPDATE teams_origin_runs SET expires_at=?`, time.Now().UTC().Unix()-1); e != nil {
+	// Expiry of the original recovery run removes authority for a replay,
+	// but a user-requested read-only lookup may still find its receipt.
+	if mode == "expired-authority" {
+		if err = c.writeTransaction(ctx, "synthetic-run-expiry", func(tx *sql.Tx) error {
+			_, e := tx.Exec(`UPDATE teams_origin_outbox SET expires_at=? WHERE state='prepared'`, time.Now().Unix()-1)
 			return e
+		}); err != nil {
+			t.Fatal(err)
 		}
-		_, e := tx.Exec(`UPDATE teams_origin_outbox SET expires_at=? WHERE state='prepared'`, time.Now().UTC().Unix()-1)
-		return e
-	}); err != nil {
-		t.Fatal(err)
+		if _, err = service.checkTeamsWork(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if originAttempts != 1 {
+			t.Fatal("expired authority replayed observation")
+		}
+		r := httptest.NewRequest(http.MethodPost, "/api/teams/worker/source-reconcile", strings.NewReader("{}"))
+		w := httptest.NewRecorder()
+		service.teamsWorkerHTTP(w, r)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"found":false`) || lookups != 1 {
+			t.Fatalf("unavailable expired lookup: %d %s", w.Code, w.Body.String())
+		}
+		if _, err = service.checkTeamsWork(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if originAttempts != 1 {
+			t.Fatal("failed lookup recreated expired authority")
+		}
+		if n := countRows(t, c, `SELECT count(*) FROM teams_origin_outbox o JOIN teams_origin_attempts a ON a.observation_id=o.observation_id WHERE o.state='prepared' AND o.receipt_json IS NULL AND a.terminal_code=''`); n != 1 {
+			t.Fatal("expired attempt lost or replaced")
+		}
+		return
 	}
 	if _, err = service.checkTeamsWork(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if mode == "stale" || mode == "expired" {
+	if mode == "stale" || mode == "expired" || mode == "lookup" {
 		want := "unknown_stale_protection_revision"
 		if mode == "expired" {
 			want = "unknown_source_issuance_expired"
@@ -770,10 +873,198 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 		if e != nil || !ambiguous {
 			t.Fatal("unresolved possible hold lost")
 		}
+		if mode == "lookup" {
+			// A missing oldest receipt must not mask a later recoverable one.
+			second, e := sourcewire.DecodeProtectionObservation(firstOrigin)
+			if e != nil {
+				t.Fatal(e)
+			}
+			firstID := second.ObservationID
+			for i := 1; i < 256; i++ {
+				second.Token = base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{byte(i)}, 32))
+				second.ObservationID, e = sourcewire.ProtectionObservationID(second, installation, d.ID)
+				if e != nil {
+					t.Fatal(e)
+				}
+				if second.ObservationID > firstID {
+					break
+				}
+			}
+			if second.ObservationID <= firstID {
+				t.Fatal("could not order synthetic observations")
+			}
+			secondOrigin, _, e = second.Bytes()
+			if e != nil {
+				t.Fatal(e)
+			}
+			e = c.writeTransaction(ctx, "synthetic-second-unknown", func(tx *sql.Tx) error {
+				_, e := tx.Exec(`INSERT INTO teams_origin_outbox(observation_id,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,run_id,run_generation,expires_at,token,expected_revision,observation_json,observation_sha256,state) SELECT ?,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,run_id,run_generation,expires_at,?,expected_revision,?,?,'prepared' FROM teams_origin_outbox WHERE observation_id=?`, second.ObservationID, second.Token, secondOrigin, sourcewire.ProtectionDigest(secondOrigin), firstID)
+				if e != nil {
+					return e
+				}
+				_, e = tx.Exec(`INSERT INTO teams_origin_attempts(observation_id,first_attempt_at,terminal_code) VALUES(?,?,'unknown_stale_protection_revision')`, second.ObservationID, time.Now().Unix())
+				return e
+			})
+			if e != nil {
+				t.Fatal(e)
+			}
+			status := httptest.NewRecorder()
+			service.teamsWorkerHTTP(status, httptest.NewRequest(http.MethodGet, "/api/teams/worker", nil))
+			var statusBody struct {
+				Available bool `json:"sourceLookupAvailable"`
+			}
+			if status.Code != 200 || json.Unmarshal(status.Body.Bytes(), &statusBody) != nil || !statusBody.Available {
+				t.Fatalf("lookup action not offered: %d %s", status.Code, status.Body.String())
+			}
+			action := func() *httptest.ResponseRecorder {
+				r := httptest.NewRequest(http.MethodPost, "/api/teams/worker/source-reconcile", strings.NewReader("{}"))
+				w := httptest.NewRecorder()
+				service.teamsWorkerHTTP(w, r)
+				return w
+			}
+			w := action()
+			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"found":false`) || lookups != 1 || originAttempts != 2 {
+				t.Fatalf("missing lookup altered state: %d lookups=%d puts=%d", w.Code, lookups, originAttempts)
+			}
+			if n := countRows(t, c, `SELECT count(*) FROM teams_origin_outbox o JOIN teams_origin_attempts a ON a.observation_id=o.observation_id WHERE o.state='prepared' AND o.receipt_json IS NULL AND a.terminal_code='unknown_stale_protection_revision'`); n != 2 {
+				t.Fatal("missing lookup changed protected state")
+			}
+			lookupMissing = false
+			duringLookup = func() {
+				use, e := fileLease(libraryUseLock(cfg), true)
+				if e != nil {
+					t.Errorf("library lease crossed lookup: %v", e)
+				} else {
+					use.Close()
+				}
+				lease, e := c.teamsSharingLease()
+				if e != nil {
+					t.Errorf("sharing lease crossed lookup: %v", e)
+				} else {
+					lease.Close()
+				}
+				if e = c.setTeamsSourceTransferChoice(ctx, d, credential, settings.SettingsRevision, false); e != nil {
+					t.Errorf("withdraw during lookup: %v", e)
+				}
+			}
+			w = action()
+			if w.Code != http.StatusOK || lookups != 2 || originAttempts != 2 {
+				t.Fatalf("exact lookup failed: %d %s lookups=%d puts=%d", w.Code, w.Body.String(), lookups, originAttempts)
+			}
+			if n := countRows(t, c, `SELECT count(*) FROM teams_origin_outbox o JOIN teams_origin_attempts a ON a.observation_id=o.observation_id WHERE o.state='accepted' AND o.receipt_json IS NOT NULL AND a.terminal_code='reconciled_lookup'`); n != 1 {
+				t.Fatal("accepted receipt and disposition did not commit together")
+			}
+			if _, err = service.checkTeamsWork(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if originAttempts != 2 {
+				t.Fatal("withdrawal authorized a new observation")
+			}
+			status = httptest.NewRecorder()
+			service.teamsWorkerHTTP(status, httptest.NewRequest(http.MethodGet, "/api/teams/worker", nil))
+			statusBody.Available = true
+			if status.Code != 200 || json.Unmarshal(status.Body.Bytes(), &statusBody) != nil || statusBody.Available {
+				t.Fatalf("withdrawn source offered lookup: %d %s", status.Code, status.Body.String())
+			}
+			if e = c.setTeamsSourceTransferChoice(ctx, d, credential, settings.SettingsRevision, true); e != nil {
+				t.Fatal(e)
+			}
+			// Recreate one live uncertain receipt to prove an older expired
+			// row cannot mask it, then age both terminal states.
+			if e = c.writeTransaction(ctx, "synthetic-live-uncertain", func(tx *sql.Tx) error {
+				if _, e := tx.Exec(`UPDATE teams_origin_outbox SET state='prepared',receipt_json=NULL WHERE observation_id=?`, second.ObservationID); e != nil {
+					return e
+				}
+				_, e := tx.Exec(`UPDATE teams_origin_attempts SET terminal_code='unknown_stale_protection_revision' WHERE observation_id=?`, second.ObservationID)
+				return e
+			}); e != nil {
+				t.Fatal(e)
+			}
+			duringLookup = nil
+			// Valid immutable commands in both terminal states age beyond the
+			// service's retained horizon. Neither may consume a lookup turn.
+			for i, original := range [][]byte{firstOrigin, secondOrigin} {
+				aged, e := sourcewire.DecodeProtectionObservation(original)
+				if e != nil {
+					t.Fatal(e)
+				}
+				oldID := aged.ObservationID
+				for offset := int64(60); offset < 600; offset++ {
+					aged.IssuedAt = time.Now().Unix() - int64(sourcewire.RecoveryHorizon/time.Second) - offset
+					aged.ObservationID, e = sourcewire.ProtectionObservationID(aged, installation, d.ID)
+					if e != nil {
+						t.Fatal(e)
+					}
+					if i != 0 || aged.ObservationID < second.ObservationID {
+						break
+					}
+				}
+				if i == 0 && aged.ObservationID >= second.ObservationID {
+					t.Fatal("could not sort expired observation first")
+				}
+				agedBody, _, e := aged.Bytes()
+				if e != nil {
+					t.Fatal(e)
+				}
+				disposition := ""
+				if i == 1 {
+					disposition = "unknown_stale_protection_revision"
+				}
+				e = c.writeTransaction(ctx, "synthetic-aged-attempt", func(tx *sql.Tx) error {
+					if _, e := tx.Exec(`DELETE FROM teams_origin_attempts WHERE observation_id=?`, oldID); e != nil {
+						return e
+					}
+					if _, e := tx.Exec(`UPDATE teams_origin_outbox SET observation_id=?,observation_json=?,observation_sha256=?,state='prepared',receipt_json=NULL WHERE observation_id=?`, aged.ObservationID, agedBody, sourcewire.ProtectionDigest(agedBody), oldID); e != nil {
+						return e
+					}
+					_, e := tx.Exec(`INSERT INTO teams_origin_attempts(observation_id,first_attempt_at,terminal_code) VALUES(?,?,?)`, aged.ObservationID, time.Now().Unix(), disposition)
+					return e
+				})
+				if e != nil {
+					t.Fatal(e)
+				}
+				if i == 0 {
+					status = httptest.NewRecorder()
+					service.teamsWorkerHTTP(status, httptest.NewRequest(http.MethodGet, "/api/teams/worker", nil))
+					statusBody.Available = false
+					if status.Code != 200 || json.Unmarshal(status.Body.Bytes(), &statusBody) != nil || !statusBody.Available {
+						t.Fatalf("live receipt masked by expired: %d %s", status.Code, status.Body.String())
+					}
+					w = action()
+					if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"found":true`) || lookups != 3 {
+						t.Fatalf("live receipt not selected: %d %s gets=%d", w.Code, w.Body.String(), lookups)
+					}
+				}
+			}
+			status = httptest.NewRecorder()
+			service.teamsWorkerHTTP(status, httptest.NewRequest(http.MethodGet, "/api/teams/worker", nil))
+			statusBody.Available = true
+			if status.Code != 200 || json.Unmarshal(status.Body.Bytes(), &statusBody) != nil || statusBody.Available {
+				t.Fatalf("expired issuance offered lookup: %d %s", status.Code, status.Body.String())
+			}
+			w = action()
+			if w.Code != http.StatusConflict || lookups != 3 {
+				t.Fatalf("expired issuance sent lookup: %d gets=%d", w.Code, lookups)
+			}
+			if n := countRows(t, c, `SELECT count(*) FROM teams_origin_outbox o JOIN teams_origin_attempts a ON a.observation_id=o.observation_id WHERE o.state='prepared' AND o.receipt_json IS NULL AND a.terminal_code IN ('','unknown_stale_protection_revision')`); n != 2 {
+				t.Fatal("expired lookup changed evidence")
+			}
+		}
 		return
 	}
 	if signedOrigins != 1 {
 		t.Fatalf("uncertain origin did not reconcile first: %d", signedOrigins)
+	}
+	if mode == "multi-replace" || mode == "many" {
+		if err = c.writeTransaction(ctx, "synthetic-expire-accepted-run", func(tx *sql.Tx) error {
+			if _, e := tx.Exec(`UPDATE teams_origin_runs SET expires_at=?`, time.Now().Unix()-1); e != nil {
+				return e
+			}
+			_, e := tx.Exec(`UPDATE teams_origin_outbox SET expires_at=? WHERE state='accepted'`, time.Now().Unix()-1)
+			return e
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	invalidated = false
 	if mode == "multi-replace" {
@@ -803,7 +1094,7 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 			t.Fatal(err)
 		}
 	}
-	if signedOrigins != 5 || starts != 3 {
+	if signedOrigins != 5 || starts != 2 {
 		t.Fatalf("independent bounded turns: accepted=%d starts=%d", signedOrigins, starts)
 	}
 	if _, err = service.checkTeamsWork(ctx); err != nil {

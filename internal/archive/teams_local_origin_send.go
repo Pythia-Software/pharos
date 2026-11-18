@@ -21,12 +21,12 @@ type teamsLocalOriginState struct {
 }
 
 func teamsLocalOriginStateIn(ctx context.Context, tx *sql.Tx, cfg Config, d LibraryDescriptor, credential *teams.EnrollmentCredential, snapshot teamsV2Inventory, scope teamsOriginBatchScope, id string, replay bool) (teamsLocalOriginState, error) {
-	return teamsLocalOriginStateCheckedIn(ctx, tx, cfg, d, credential, snapshot, scope, id, replay, false, nil)
+	return teamsLocalOriginStateCheckedIn(ctx, tx, cfg, d, credential, snapshot, scope, id, replay, false, nil, false)
 }
 
 // A caller that already checked the census in this transaction can provide its
 // unique indexed item, avoiding a complete source proof for every receipt.
-func teamsLocalOriginStateCheckedIn(ctx context.Context, tx *sql.Tx, cfg Config, d LibraryDescriptor, credential *teams.EnrollmentCredential, snapshot teamsV2Inventory, scope teamsOriginBatchScope, id string, replay, checked bool, candidate *sourcewire.Item) (teamsLocalOriginState, error) {
+func teamsLocalOriginStateCheckedIn(ctx context.Context, tx *sql.Tx, cfg Config, d LibraryDescriptor, credential *teams.EnrollmentCredential, snapshot teamsV2Inventory, scope teamsOriginBatchScope, id string, replay, checked bool, candidate *sourcewire.Item, lookupOnly bool) (teamsLocalOriginState, error) {
 	var out teamsLocalOriginState
 	var err error
 	if replay {
@@ -65,7 +65,7 @@ func teamsLocalOriginStateCheckedIn(ctx context.Context, tx *sql.Tx, cfg Config,
 	if err != nil || hash != sourcewire.ProtectionDigest(out.body) {
 		return teamsLocalOriginState{}, errTeamsConsentStale
 	}
-	if out.state == "held" || (out.state == "prepared" && !out.attempted && expires <= time.Now().UTC().Unix()) {
+	if out.state == "held" || (out.state == "prepared" && !lookupOnly && expires <= time.Now().UTC().Unix()) {
 		return teamsLocalOriginState{}, errTeamsPilotPending
 	}
 	if out.state != "prepared" && out.state != "accepted" {
@@ -79,7 +79,7 @@ func teamsLocalOriginStateCheckedIn(ctx context.Context, tx *sql.Tx, cfg Config,
 	if err != nil || want != id || v.ObservationID != id || v.Token != token || v.ExpectedRevision != expected || (v.Protection != "explicit_private" && v.Protection != "unknown") {
 		return teamsLocalOriginState{}, errTeamsConsentStale
 	}
-	if _, err = sourcewire.CheckRecoveryIssuance(v.IssuedAt, time.Now().UTC()); err != nil && !out.attempted {
+	if _, err = sourcewire.CheckRecoveryIssuance(v.IssuedAt, time.Now().UTC()); err != nil && out.state == "prepared" && !lookupOnly {
 		return teamsLocalOriginState{}, errTeamsPilotPending
 	}
 	found := replay && out.attempted

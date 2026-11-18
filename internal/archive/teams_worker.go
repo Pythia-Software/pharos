@@ -40,6 +40,9 @@ type teamsWorkerState struct {
 	checking              bool
 	problem               string
 	sourceProblem         string
+	sourceLookup          bool
+	sourceLookupScope     string
+	sourceLookupAfter     string
 	reconcileAfter        string
 	contentReconcileAfter string
 }
@@ -65,6 +68,8 @@ func (w *teamsWorkerState) clearWorkLocked() {
 	w.workBindings = nil
 	w.settingsValid = false
 	w.viewScope = ""
+	w.sourceLookupScope = ""
+	w.sourceLookupAfter = ""
 }
 
 var errTeamsWorkerAuthorityChanged = errors.New("Teams worker authority changed")

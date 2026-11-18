@@ -9172,6 +9172,15 @@
       "reason": "Refreshes reader identities or records a local Teams consent decision; it is not query view state."
     },
     {
+      "key": "5edb8b1b93259e0f:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "button",
+      "control": "onClick={() => void checkSourceReceipt()}",
+      "contract": "settings",
+      "reason": "Requests a local Teams receipt check; it does not change saved query view state."
+    },
+    {
       "key": "6e5cc8ce37feeed3:0",
       "file": "web/src/teams-settings.tsx",
       "owner": "TeamsWork",
