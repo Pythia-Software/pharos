@@ -166,6 +166,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"os"
 	"runtime"
 	"unsafe"
 
@@ -185,8 +186,19 @@ type ortSession struct {
 	info        modelInfo
 }
 
+// runtimeTelemetryEnv turns off the usage telemetry that official ONNX Runtime
+// builds send to Microsoft. It also stops the runtime creating a device
+// identifier and an upload queue under Application Support. The runtime reads
+// it once, when it starts, and DisableTelemetryEvents cannot do this: the
+// startup event and the identifier already exist by the time it can be called.
+const runtimeTelemetryEnv = "ORT_DISABLE_TELEMETRY"
+
 // openORT loads the runtime library and the model.
 func openORT(library string, cfg sessionConfig) (session, error) {
+	// This overrides an inherited value: "0" would turn telemetry back on.
+	if err := os.Setenv(runtimeTelemetryEnv, "1"); err != nil {
+		return nil, fmt.Errorf("turning off ONNX Runtime telemetry: %w", err)
+	}
 	getAPIBase, err := loadRuntime(library)
 	if err != nil {
 		return nil, err

@@ -29,6 +29,10 @@ future automatic runs; a run already in progress finishes and existing
 labels remain available in the reader. The setting follows the library to
 its other Macs when they next open it.
 
+Official ONNX Runtime builds send usage telemetry to Microsoft by default. The
+worker always sets `ORT_DISABLE_TELEMETRY=1` before loading the runtime, which
+also stops it creating a device identifier and an upload queue.
+
 The model's weights are not in the repository or the app: each Mac
 downloads them once, after install, into its own support directory
 ([Model download](#model-download)). Configuration (`archive.toml` or
