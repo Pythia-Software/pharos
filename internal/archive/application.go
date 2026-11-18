@@ -1006,12 +1006,19 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 			err = fmt.Errorf("Choose a library folder on your external drive.")
 			break
 		}
+		managedBirth := os.Getenv("PHAROS_EXPERIMENTAL_MANAGED_BIRTH") == "1" && location == "mac"
+		ensureParent := func(path string) error {
+			if managedBirth {
+				return teamsEnsureManagedParent(path)
+			}
+			return os.MkdirAll(path, 0700)
+		}
 		if path == "" {
 			path = filepath.Join(pharosSupportDir(), "Libraries", name)
 			if location == "" && strings.HasPrefix(m.registry.Application, "/Volumes/") {
 				path = filepath.Join(filepath.Dir(m.registry.Application), "Libraries", name)
 			}
-			err = teamsEnsureManagedParent(filepath.Dir(path))
+			err = ensureParent(filepath.Dir(path))
 		} else {
 			path = expandPath(path)
 			if !filepath.IsAbs(path) {
@@ -1019,7 +1026,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 			} else if location != "ssd" && canonical(filepath.Dir(path)) == canonical(filepath.Join(pharosSupportDir(), "Libraries")) {
 				// Editing the proposed default sends an explicit path on a fresh
 				// install. Only this managed parent may be created implicitly.
-				err = teamsEnsureManagedParent(filepath.Dir(path))
+				err = ensureParent(filepath.Dir(path))
 			} else {
 				_, err = os.Stat(filepath.Dir(path))
 			}
@@ -1033,13 +1040,25 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 		}
 		create := m.operations.begin(OperationSpec{Kind: "library.create", Subject: name, Trigger: triggerUser})
 		var config Config
-		config, err = teamsCreateManagedLibrary(r.Context(), m.registry.Application, path, name)
+		if managedBirth {
+			config, err = teamsCreateManagedLibrary(r.Context(), m.registry.Application, path, name)
+		} else {
+			config, err = InitLibrary(path, libraryVolumeIdentity)
+		}
 		create.Finish(err)
 		if err != nil {
 			break
 		}
-		if _, err = readLibraryDescriptor(config); err != nil {
+		d, e := readLibraryDescriptor(config)
+		if e != nil {
+			err = e
 			break
+		}
+		if !managedBirth {
+			d.Name = name
+			if err = durableJSON(descriptorPath(config), d); err != nil {
+				break
+			}
 		}
 		var id string
 		id, err = m.registry.register(config, name)

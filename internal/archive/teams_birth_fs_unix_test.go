@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -100,6 +101,19 @@ func TestTeamsCreateManagedLibrary(t *testing.T) {
 	if _, err = teamsCreateManagedLibrary(context.Background(), cfg.Application, target, "Fresh"); err != nil {
 		t.Fatalf("finalization retry: %v", err)
 	}
+	copyBytes, err := os.ReadFile(cfg.CatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(t.TempDir(), "copy.sqlite3")
+	if err = os.WriteFile(copyPath, copyBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	redirected := cfg
+	redirected.CatalogPath = copyPath
+	if _, _, err = teamsOpenManagedCatalog(context.Background(), redirected); err == nil {
+		t.Fatal("configured catalog copy accepted")
+	}
 	catalog, found, err := teamsOpenManagedCatalog(context.Background(), cfg)
 	if err != nil || !found {
 		t.Fatalf("managed restart: %v", err)
@@ -155,5 +169,70 @@ func TestTeamsCreateManagedLibrary(t *testing.T) {
 	}
 	if _, _, err = teamsOpenManagedCatalog(context.Background(), cfg); err == nil {
 		t.Fatal("unsafe sidecar accepted")
+	}
+}
+
+func TestTeamsBirthDoesNotClaimExistingLibrary(t *testing.T) {
+	useHost(t, "synthetic-existing-library")
+	t.Setenv("PHAROS_SUPPORT_DIR", t.TempDir())
+	override(t, &teamsBirthHardwareUUID, func() (string, error) { return "synthetic-hardware", nil })
+	parent := t.TempDir()
+	target := filepath.Join(parent, "existing")
+	app := filepath.Join(parent, "Synthetic.app")
+	cfg, err := InitLibrary(target, libraryVolumeIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Application = app
+	if _, err = teamsCreateManagedLibrary(context.Background(), app, target, "Existing"); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("existing create: %v", err)
+	}
+	if c, found, err := teamsOpenManagedCatalog(context.Background(), cfg); err != nil || found {
+		if c != nil {
+			_ = c.Close()
+		}
+		t.Fatalf("legacy library claimed: %v", err)
+	}
+}
+
+func TestTeamsBirthAbandonsUnpublishedReservation(t *testing.T) {
+	useHost(t, "synthetic-abandoned-birth")
+	t.Setenv("PHAROS_SUPPORT_DIR", t.TempDir())
+	override(t, &teamsBirthHardwareUUID, func() (string, error) { return "synthetic-hardware", nil })
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, app := filepath.Join(parent, "fresh"), filepath.Join(parent, "Synthetic.app")
+	cfg := Config{Application: app, Library: true, Path: filepath.Join(target, libraryConfigName), CatalogPath: filepath.Join(target, "catalog", "catalog.sqlite3"), ArchiveRoot: filepath.Join(target, "preserved"), StagingRoot: filepath.Join(target, "staging")}
+	store, err := teamsCredentialStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appID := installationID(app)
+	stale := teamsBirthReservation{Version: 1, Phase: "reserved", Application: appID, Path: target, Host: "synthetic-hardware", UID: os.Geteuid(), Volume: libraryVolumeIdentity(parent), LibraryID: "stale-library", InstanceID: "stale-instance"}
+	stale.Scope = teamsCheckpointScope(appID, stale.LibraryID)
+	raw, err := teamsEncodeBirthReservation(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Save(teamsBirthReservationName(appID, target), raw); err != nil {
+		t.Fatal(err)
+	}
+	created, err := teamsCreateManagedLibrary(context.Background(), app, target, "Fresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := readLibraryDescriptor(created)
+	if err != nil || d.ID == stale.LibraryID {
+		t.Fatalf("stale identity reused: %v", err)
+	}
+	tombstone, err := store.Load(teamsBirthReservationName(appID, "abandoned:"+stale.Scope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var abandoned teamsBirthReservation
+	if err = json.Unmarshal(tombstone, &abandoned); err != nil || abandoned.Phase != "abandoned" {
+		t.Fatalf("missing tombstone: %v", err)
 	}
 }

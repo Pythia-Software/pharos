@@ -815,3 +815,12 @@ startup or authorize production migrations.
 
 See [Thinking dashboards](thinking-dashboards.md) for request timing semantics,
 statistical support, URL state and the native evidence-query integration.
+
+Fresh host-bound managed-library creation remains experimental and off by
+default. For synthetic local testing only, set
+`PHAROS_EXPERIMENTAL_MANAGED_BIRTH=1` on the broker and choose a local Mac
+location. External-drive and ordinary creation retain their existing portable
+behavior. Do not enable this experiment for user libraries: held recovery,
+continuity across all entry points, and compatibility evidence remain under
+review. A new managed library begins with its source-protection baseline held;
+creation does not grant source transfer or sharing consent.

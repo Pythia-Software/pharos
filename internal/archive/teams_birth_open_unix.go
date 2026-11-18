@@ -4,6 +4,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,25 +13,72 @@ import (
 // teamsOpenManagedCatalog verifies host binding before any catalog initializer
 // or background task. found=false leaves legacy Open behavior untouched.
 func teamsOpenManagedCatalog(ctx context.Context, cfg Config) (*Catalog, bool, error) {
-	if !cfg.Library || cfg.Application == "" {
+	if !cfg.Library {
 		return nil, false, nil
 	}
-	parent, err := filepath.EvalSymlinks(filepath.Dir(filepath.Dir(cfg.Path)))
-	if err != nil {
-		return nil, false, err
+	// Legacy catalogs keep their ordinary startup even if host credential
+	// storage is unavailable. This probe is read-only and does not Initialize.
+	db, e := sql.Open("sqlite", readerDSN(cfg.CatalogPath))
+	if e != nil {
+		return nil, false, nil
+	}
+	var version string
+	e = db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='schema_version'`).Scan(&version)
+	_ = db.Close()
+	if e != nil {
+		// A damaged bound library must not fall back to the legacy opener.
+		if teamsHasRetainedBirth(cfg) {
+			return nil, true, errTeamsProtectionContinuity
+		}
+		return nil, false, nil
+	}
+	parent, e := filepath.EvalSymlinks(filepath.Dir(filepath.Dir(cfg.Path)))
+	if e != nil {
+		if version == "35" {
+			return nil, true, e
+		}
+		return nil, false, nil
 	}
 	path := filepath.Join(parent, filepath.Base(filepath.Dir(cfg.Path)))
-	store, err := teamsCredentialStore(cfg)
-	if err != nil {
-		return nil, false, err
-	}
-	appID := installationID(cfg.Application)
-	bound, r, err := teamsReadBirthReservation(store, teamsBirthReservationName(appID, path))
-	if errors.Is(err, os.ErrNotExist) {
+	if cfg.Application == "" {
+		if version == "35" {
+			return nil, true, errTeamsProtectionContinuity
+		}
 		return nil, false, nil
 	}
-	if err != nil {
-		return nil, true, err
+	store, e := teamsCredentialStore(cfg)
+	if e != nil {
+		if version == "35" {
+			return nil, true, e
+		}
+		return nil, false, nil
+	}
+	appID := installationID(cfg.Application)
+	bound, r, e := teamsReadBirthReservation(store, teamsBirthReservationName(appID, path))
+	if version != "35" {
+		// A retained birth record prevents a restored older image from being
+		// silently opened as ordinary data. A reserved unrelated path is inert.
+		if e == nil && (r.Phase == "committed" || r.Phase == "image_bound") {
+			return nil, true, errTeamsProtectionContinuity
+		}
+		return nil, false, nil
+	}
+	if errors.Is(e, os.ErrNotExist) || (e == nil && (r.Phase == "reserved" || r.Phase == "abandoned")) {
+		// Existing authenticated v35 upgrades have their own host checkpoint;
+		// verify that continuity without inventing a birth record.
+		d, e := readLibraryDescriptor(cfg)
+		if e != nil {
+			return nil, true, e
+		}
+		catalog, e := openCatalogWithDSN(cfg.CatalogPath, catalogDSN(cfg.CatalogPath)+"&mode=rw", func(c *Catalog) error { _, err := c.configureTeamsCheckpoint(ctx, cfg, d); return err })
+		return catalog, true, e
+	}
+	if e != nil {
+		return nil, true, e
+	}
+	actual, e := filepath.EvalSymlinks(cfg.CatalogPath)
+	if e != nil || actual != filepath.Join(path, "catalog", "catalog.sqlite3") {
+		return nil, true, errTeamsProtectionContinuity
 	}
 	host, err := teamsBirthHardwareUUID()
 	if err != nil || host == "" || r.Phase != "committed" || r.Path != path || r.Application != appID || r.Host != host || r.UID != os.Geteuid() || r.Volume != libraryVolumeIdentity(parent) {
@@ -46,12 +94,11 @@ func teamsOpenManagedCatalog(ctx context.Context, cfg Config) (*Catalog, bool, e
 	// mode=rw prevents accidentally replacing a missing catalog with an empty DB.
 	dsn := catalogDSN(cfg.CatalogPath) + "&mode=rw"
 	catalog, err := openCatalogWithDSN(cfg.CatalogPath, dsn, func(c *Catalog) error {
-		held, e := c.configureTeamsCheckpoint(ctx, cfg, d)
+		// A verified held checkpoint still permits the guarded local lane;
+		// proof effects remain held by the existing checkpoint policy.
+		_, e := c.configureTeamsCheckpoint(ctx, cfg, d)
 		if e != nil {
 			return e
-		}
-		if held {
-			return errTeamsProtectionContinuity
 		}
 		c.teamsCheckpoint.writer.validateBinding = func() error {
 			current, _, e := teamsReadBirthReservation(store, teamsBirthReservationName(appID, path))
@@ -67,4 +114,23 @@ func teamsOpenManagedCatalog(ctx context.Context, cfg Config) (*Catalog, bool, e
 		return nil
 	})
 	return catalog, true, err
+}
+
+// Ignore unavailable birth storage for legacy catalogs, but recognize an
+// existing bound birth even when SQLite cannot read its schema.
+func teamsHasRetainedBirth(cfg Config) bool {
+	if cfg.Application == "" {
+		return false
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(filepath.Dir(cfg.Path)))
+	if err != nil {
+		return false
+	}
+	path := filepath.Join(parent, filepath.Base(filepath.Dir(cfg.Path)))
+	store, err := teamsCredentialStore(cfg)
+	if err != nil {
+		return false
+	}
+	_, r, err := teamsReadBirthReservation(store, teamsBirthReservationName(installationID(cfg.Application), path))
+	return err == nil && (r.Phase == "committed" || r.Phase == "image_bound")
 }

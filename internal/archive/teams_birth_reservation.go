@@ -45,6 +45,8 @@ func (r teamsBirthReservation) valid() bool {
 		return r.ImageSHA256 == "" && r.Tuple == nil && r.DirectoryInode == 0 && r.CatalogInode == 0
 	case "image_bound":
 		return teamsCheckpointHex(r.ImageSHA256, 64) && teamsCheckpointTupleValid(r.Tuple) && r.Tuple.Instance == teamsCheckpointInstance(r.LibraryID, r.InstanceID) && r.DirectoryInode != 0 && r.CatalogInode != 0
+	case "abandoned":
+		return (r.ImageSHA256 == "" && r.Tuple == nil) || (teamsCheckpointHex(r.ImageSHA256, 64) && teamsCheckpointTupleValid(r.Tuple) && r.Tuple.Instance == teamsCheckpointInstance(r.LibraryID, r.InstanceID))
 	case "committed":
 		return teamsCheckpointHex(r.ImageSHA256, 64) && teamsCheckpointTupleValid(r.Tuple) && r.Tuple.Instance == teamsCheckpointInstance(r.LibraryID, r.InstanceID) && r.DirectoryInode != 0 && r.CatalogInode != 0
 	default:
@@ -73,7 +75,7 @@ func teamsReadBirthReservation(store credentialstore.Store, name string) ([]byte
 	return raw, r, nil
 }
 func teamsAdvanceBirthReservation(store credentialstore.Store, name string, oldRaw []byte, old, next teamsBirthReservation) ([]byte, error) {
-	if old.Phase == "reserved" && next.Phase != "image_bound" || old.Phase == "image_bound" && next.Phase != "committed" || old.Phase == "committed" {
+	if old.Phase == "reserved" && next.Phase != "image_bound" && next.Phase != "abandoned" || old.Phase == "image_bound" && next.Phase != "committed" && next.Phase != "abandoned" || old.Phase == "committed" || old.Phase == "abandoned" {
 		return nil, errTeamsProtectionContinuity
 	}
 	if old.Version != next.Version || old.Scope != next.Scope || old.Application != next.Application || old.Path != next.Path || old.Host != next.Host || old.Volume != next.Volume || old.UID != next.UID || old.LibraryID != next.LibraryID || old.InstanceID != next.InstanceID {

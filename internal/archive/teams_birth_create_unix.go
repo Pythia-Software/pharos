@@ -74,24 +74,83 @@ func teamsCreateManagedLibrary(ctx context.Context, application, path, name stri
 		return Config{}, err
 	}
 	reservationName := teamsBirthReservationName(appID, absolute)
+	// Serialize the whole create/recovery on this host, including image checks.
+	lock, err := fileLease(filepath.Join(parent, ".pharos-birth-"+reservationName[:24]+".lock"), true)
+	if err != nil {
+		return Config{}, err
+	}
+	defer lock.Close()
 	raw, record, err := teamsReadBirthReservation(store, reservationName)
-	if errors.Is(err, os.ErrNotExist) {
-		lib, e := teamsCheckpointRandom()
-		if e != nil {
+	if err == nil && (record.Application != appID || record.Path != absolute || record.Host != hardware || record.UID != os.Geteuid() || record.Volume != libraryVolumeIdentity(parent)) {
+		return Config{}, errTeamsProtectionContinuity
+	}
+	if err == nil && (record.Phase == "reserved" || record.Phase == "image_bound" || record.Phase == "abandoned") {
+		if _, e := os.Lstat(absolute); errors.Is(e, os.ErrNotExist) {
+			if record.Phase != "abandoned" {
+				abandoned := record
+				abandoned.Phase = "abandoned"
+				raw, e = teamsAdvanceBirthReservation(store, reservationName, raw, record, abandoned)
+				if e != nil {
+					return Config{}, e
+				}
+				record = abandoned
+			}
+			// Keep the old scope as an immutable tombstone before minting a new one.
+			tombstone := teamsBirthReservationName(appID, "abandoned:"+record.Scope)
+			if e = store.Save(tombstone, raw); e != nil {
+				if prior, loadErr := store.Load(tombstone); loadErr != nil || string(prior) != string(raw) {
+					return Config{}, e
+				}
+			}
+			lib, e := teamsCheckpointRandom()
+			if e != nil {
+				return Config{}, e
+			}
+			instance, e := teamsCheckpointRandom()
+			if e != nil {
+				return Config{}, e
+			}
+			next := teamsBirthReservation{Version: 1, Phase: "reserved", Scope: teamsCheckpointScope(appID, lib), Application: appID, Path: absolute, Host: hardware, UID: os.Geteuid(), Volume: libraryVolumeIdentity(parent), LibraryID: lib, InstanceID: instance}
+			encoded, e := teamsEncodeBirthReservation(next)
+			if e != nil {
+				return Config{}, e
+			}
+			if e = store.Replace(reservationName, raw, encoded); e != nil {
+				return Config{}, e
+			}
+			raw, record, err = encoded, next, nil
+		} else if e != nil {
 			return Config{}, e
 		}
-		instance, e := teamsCheckpointRandom()
-		if e != nil {
+	}
+	if errors.Is(err, os.ErrNotExist) || (err == nil && record.Phase == "reserved") {
+		freshReservation := errors.Is(err, os.ErrNotExist)
+		// Never reserve over an unrelated existing library. Exclusive rename
+		// still resolves a race after this check.
+		if _, e := os.Lstat(absolute); e == nil {
+			return Config{}, os.ErrExist
+		} else if !errors.Is(e, os.ErrNotExist) {
 			return Config{}, e
 		}
-		record = teamsBirthReservation{Version: 1, Phase: "reserved", Scope: teamsCheckpointScope(appID, lib), Application: appID, Path: absolute, Host: hardware, UID: os.Geteuid(), Volume: libraryVolumeIdentity(parent), LibraryID: lib, InstanceID: instance}
-		raw, e = teamsEncodeBirthReservation(record)
-		if e != nil {
-			return Config{}, e
+		if freshReservation {
+			lib, e := teamsCheckpointRandom()
+			if e != nil {
+				return Config{}, e
+			}
+			instance, e := teamsCheckpointRandom()
+			if e != nil {
+				return Config{}, e
+			}
+			record = teamsBirthReservation{Version: 1, Phase: "reserved", Scope: teamsCheckpointScope(appID, lib), Application: appID, Path: absolute, Host: hardware, UID: os.Geteuid(), Volume: libraryVolumeIdentity(parent), LibraryID: lib, InstanceID: instance}
+			raw, e = teamsEncodeBirthReservation(record)
+			if e != nil {
+				return Config{}, e
+			}
+			if e = store.Save(reservationName, raw); e != nil {
+				return Config{}, e
+			}
 		}
-		if e = store.Save(reservationName, raw); e != nil {
-			return Config{}, e
-		}
+		lib, instance := record.LibraryID, record.InstanceID
 		image, tuple, e := teamsBuildFreshImage(ctx, lib, instance)
 		if e != nil {
 			return Config{}, e
@@ -183,11 +242,6 @@ func teamsCreateManagedLibrary(ctx context.Context, application, path, name stri
 		// independently bound file identities and SQL tuple must still match.
 		if e := teamsVerifyBirthLocation(absolute, record); e != nil {
 			return Config{}, err
-		}
-		if hostRecord.Phase == "pending" {
-			if _, e := os.Lstat(cfg.CatalogPath + "-wal"); e != nil {
-				return Config{}, err
-			}
 		}
 	}
 	key, err := store.Load(teamsCheckpointKeyName(record.Scope))

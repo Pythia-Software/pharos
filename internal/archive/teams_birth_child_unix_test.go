@@ -28,6 +28,7 @@ func TestTeamsManagedChildHelper(t *testing.T) {
 func TestTeamsManagedCreateAndChildRestart(t *testing.T) {
 	slowTest(t)
 	useHost(t, "host_pharos_test")
+	t.Setenv("PHAROS_EXPERIMENTAL_MANAGED_BIRTH", "1")
 	support := t.TempDir()
 	t.Setenv("PHAROS_SUPPORT_DIR", support)
 	appPath := filepath.Join(t.TempDir(), "Synthetic.app")

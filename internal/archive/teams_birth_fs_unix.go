@@ -176,7 +176,7 @@ func teamsVerifyBirthImage(path string, r teamsBirthReservation) error {
 // and close the main file while another SQLite connection holds POSIX locks.
 func teamsVerifyBirthLocation(path string, r teamsBirthReservation) error {
 	var d, c unix.Stat_t
-	if unix.Lstat(path, &d) != nil || d.Mode&unix.S_IFMT != unix.S_IFDIR || d.Uid != uint32(os.Geteuid()) || uint64(d.Dev) != r.DirectoryDevice || d.Ino != r.DirectoryInode {
+	if unix.Lstat(path, &d) != nil || d.Mode&unix.S_IFMT != unix.S_IFDIR || d.Uid != uint32(os.Geteuid()) || d.Ino != r.DirectoryInode {
 		return errTeamsProtectionContinuity
 	}
 	cat := filepath.Join(path, "catalog")
@@ -185,7 +185,7 @@ func teamsVerifyBirthLocation(path string, r teamsBirthReservation) error {
 		return errTeamsProtectionContinuity
 	}
 	main := filepath.Join(cat, "catalog.sqlite3")
-	if unix.Lstat(main, &c) != nil || c.Mode&unix.S_IFMT != unix.S_IFREG || c.Nlink != 1 || c.Uid != uint32(os.Geteuid()) || uint64(c.Dev) != r.CatalogDevice || c.Ino != r.CatalogInode {
+	if unix.Lstat(main, &c) != nil || c.Mode&unix.S_IFMT != unix.S_IFREG || c.Nlink != 1 || c.Uid != uint32(os.Geteuid()) || c.Ino != r.CatalogInode {
 		return errTeamsProtectionContinuity
 	}
 	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
