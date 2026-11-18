@@ -413,18 +413,18 @@ func teamsCheckpointReconcileLocked(ctx context.Context, w *teamsProtectedWriter
 			}
 		}
 	}
+	raw, host, err := teamsCheckpointLoad(store, name)
+	if err != nil {
+		return err
+	}
 	if w.requireFence {
 		if err = teamsVerifyProtectionFence(ctx, tx); err != nil {
 			return err
 		}
-		compatible, e := teamsOpenContractMatches(ctx, tx)
+		compatible, e := teamsVerifyOpenContract(ctx, tx, host.PreviousUnactivated != "")
 		if e != nil || !compatible {
 			return errTeamsProtectionContinuity
 		}
-	}
-	raw, host, err := teamsCheckpointLoad(store, name)
-	if err != nil {
-		return err
 	}
 	keyID, e := teamsCheckpointKeyID(guardKey)
 	if e != nil || keyID != host.KeyID || host.Scope != scope {

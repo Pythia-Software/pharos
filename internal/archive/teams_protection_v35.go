@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"strconv"
 )
 
 // The format-34 schema remains schemaSQL(). Format 35 is an opt-in extension;
@@ -252,7 +253,11 @@ func teamsRequireFormat35HostInstance(ctx context.Context, tx *sql.Tx, w *teamsP
 		}
 	}
 	current, err := teamsCheckpointTupleFromSQL(ctx, tx)
-	if errors.Is(err, sql.ErrNoRows) && version != "35" && host.Phase == "unactivated" {
+	// Before the first activation commits, SQLite has no tuple. A pending
+	// host must still name this descriptor in Next; reconciliation verifies
+	// the authenticated previous-unactivated projection before restoring it.
+	initial := host.Phase == "unactivated" || (host.Phase == "pending" && host.PreviousUnactivated != "" && host.Previous == nil)
+	if errors.Is(err, sql.ErrNoRows) && version == strconv.Itoa(catalogSchemaVersion) && initial {
 		return nil
 	}
 	if err != nil || current.Instance != w.expectedInstance {

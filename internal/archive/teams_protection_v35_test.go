@@ -112,11 +112,29 @@ func TestTeamsProtectedFormat35Upgrade(t *testing.T) {
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
+	w.requireFence = true
+	w.expectedInstance = instance
+	// Interrupt first activation after the host arm and fail its cleanup CAS.
+	store.failReplaceAt = 1
+	if err = teamsCheckpointActivate(ctx, w, store, scope, scope, instance, key, func(tx *sql.Tx) error { return teamsVerifyProtectionFence(ctx, tx) }, func() error { return errors.New("synthetic interruption") }); !errors.Is(err, errTeamsCheckpointRetry) {
+		t.Fatalf("first activation interruption: %v", err)
+	}
+	store.failReplaceAt = 0
+	rawPending, pending, err := teamsCheckpointLoad(store, scope)
+	if err != nil || pending.Phase != "pending" || pending.PreviousUnactivated == "" {
+		t.Fatalf("first activation pending: %v", err)
+	}
+	w.expectedInstance = strings.Repeat("f", 64)
+	if err = teamsCheckpointReconcile(ctx, w, store, scope, scope, key); !errors.Is(err, errTeamsProtectionContinuity) || !bytes.Equal(rawPending, store.raw) {
+		t.Fatalf("wrong instance reconciled first activation: %v", err)
+	}
+	w.expectedInstance = instance
+	if err = teamsCheckpointReconcile(ctx, w, store, scope, scope, key); err != nil {
+		t.Fatalf("reconcile interrupted first activation: %v", err)
+	}
 	if err = teamsCheckpointActivate(ctx, w, store, scope, scope, instance, key, func(tx *sql.Tx) error { return teamsVerifyProtectionFence(ctx, tx) }, nil); err != nil {
 		t.Fatal(err)
 	}
-	w.requireFence = true
-	w.expectedInstance = instance
 	c.teamsCheckpoint = &teamsCheckpointRuntime{writer: w, store: store, name: scope, scope: scope, guardKey: key}
 	defer func() { c.teamsCheckpoint = nil }()
 	if got := teamsCompiledSchemaDigest35(); got != "548f2283f5fba965fa0d2b9deeaa5f5c7f5c3edfa52d7090d0088d7b1ef75dcf" {
