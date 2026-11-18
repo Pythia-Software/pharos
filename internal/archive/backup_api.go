@@ -7,14 +7,18 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 )
 
 // backupRuns tracks the service's backups; one runs at a time.
 type backupRuns struct {
-	mu     sync.Mutex
-	runs   []*BackupRun
-	cancel context.CancelFunc
+	// locations serializes removing a location with claiming its next run.
+	locations sync.Mutex
+	mu        sync.Mutex
+	runs      []*BackupRun
+	cancel    context.CancelFunc
+	activeID  string
 }
 
 var errBackupBusy = errors.New("a backup is already running")
@@ -26,11 +30,29 @@ func (r *backupRuns) begin(run BackupRun, cancel context.CancelFunc) error {
 		return errBackupBusy
 	}
 	r.cancel = cancel
-	r.runs = append([]*BackupRun{&run}, r.runs...)
-	if len(r.runs) > 10 {
-		r.runs = r.runs[:10]
-	}
+	r.activeID = run.ID
+	r.pushLocked(run)
 	return nil
+}
+
+func (r *backupRuns) push(run BackupRun) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pushLocked(run)
+}
+
+func (r *backupRuns) pushLocked(run BackupRun) {
+	r.runs = append([]*BackupRun{&run}, r.runs...)
+	seen := map[string]bool{}
+	kept := r.runs[:0]
+	for index, item := range r.runs {
+		if index < 10 || !seen[item.Destination] || r.cancel != nil && item.ID == r.activeID {
+			kept = append(kept, item)
+		}
+		seen[item.Destination] = true
+	}
+	clear(r.runs[len(kept):])
+	r.runs = kept
 }
 
 func (r *backupRuns) update(run BackupRun, done bool) {
@@ -41,9 +63,28 @@ func (r *backupRuns) update(run BackupRun, done bool) {
 			*item = run
 		}
 	}
-	if done {
+	if done && run.ID == r.activeID {
 		r.cancel = nil
+		r.activeID = ""
 	}
+}
+
+// recordRefused keeps a backup that could not start, as its destination's
+// latest run.
+func (r *backupRuns) recordRefused(destination string, err error) BackupRun {
+	at := now()
+	run := BackupRun{ID: randomToken(), Kind: "backup", State: "failed", Phase: "failed", Destination: destination, StartedAt: at, UpdatedAt: at, CompletedAt: at,
+		Errors: []captureError{{Error: err.Error()}}, Warnings: []string{}, Missing: []string{}}
+	r.push(run)
+	return run
+}
+
+// forget drops a removed location's runs, and with them any failure reported
+// for it.
+func (r *backupRuns) forget(destination string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.runs = slices.DeleteFunc(r.runs, func(run *BackupRun) bool { return run.Destination == destination })
 }
 
 func (r *backupRuns) stop() bool {
@@ -60,7 +101,18 @@ func (r *backupRuns) status() (bool, []BackupRun) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	runs := make([]BackupRun, 0, len(r.runs))
+	if r.cancel != nil {
+		for _, run := range r.runs {
+			if run.ID == r.activeID {
+				runs = append(runs, run.clone())
+				break
+			}
+		}
+	}
 	for _, run := range r.runs {
+		if r.cancel != nil && run.ID == r.activeID {
+			continue
+		}
 		runs = append(runs, run.clone())
 	}
 	return r.cancel != nil, runs
@@ -68,25 +120,26 @@ func (r *backupRuns) status() (bool, []BackupRun) {
 
 func (s *Server) backupStatus() map[string]any {
 	active, runs := s.backups.status()
+	history := loadBackupHistory(s.Config())
+	runs = currentBackupRuns(history, runs)
 	var latest any
 	if len(runs) > 0 {
 		latest = runs[0]
 	}
-	history := loadBackupHistory(s.Config())
 	var last any
 	if len(history.Backups) > 0 {
 		last = history.Backups[0]
 	}
 	return map[string]any{"active": active, "run": latest, "runs": runs, "last_success": last, "record": backupRecordPath(s.Config()),
-		"suggested_destination": suggestedBackupDestination(s.Config(), history)}
+		"locations": s.backupLocationsStatus(history, runs), "suggested_destination": suggestedBackupDestination(s.Config(), history)}
 }
 
-// suggestedBackupDestination is where the UI proposes to back up: the last
-// destination, or for a library on another drive a folder in this Mac's home.
-// A library or per-user catalog on this Mac's own disk has none.
+// suggestedBackupDestination is the first location the UI proposes: for a
+// library on another drive, a folder in this Mac's home. A library with a
+// location already, or on this Mac's own disk, has none.
 func suggestedBackupDestination(config Config, history backupHistory) string {
-	if len(history.Backups) > 0 {
-		return history.Backups[0].Destination
+	if len(history.locations()) > 0 {
+		return ""
 	}
 	home, err := os.UserHomeDir()
 	if !config.Library || err != nil || libraryDriveOf(config).Location == "internal" {
@@ -95,9 +148,10 @@ func suggestedBackupDestination(config Config, history backupHistory) string {
 	return filepath.Join(home, "Pharos Backup")
 }
 
-// startBackup checks the destination, then backs up in the background;
-// progress is polled with GET /api/backup, and POST /api/backup/cancel or a
-// release (before an eject) stops it between files or catalog pages.
+// startBackup checks the destination, adds it to the backup locations, then
+// backs up in the background; progress is polled with GET /api/backup, and
+// POST /api/backup/cancel or a release (before an eject) stops it between
+// files or catalog pages.
 func (s *Server) startBackup(w http.ResponseWriter, body map[string]any) {
 	destination, _ := body["destination"].(string)
 	prune, _ := body["prune"].(bool)
@@ -112,11 +166,29 @@ func (s *Server) startBackup(w http.ResponseWriter, body map[string]any) {
 	}
 	started := job.run.clone()
 	ctx, cancel := context.WithCancel(s.life.ctx)
+	s.backups.locations.Lock()
+	defer s.backups.locations.Unlock()
+	if active, _ := s.backups.status(); active {
+		cancel()
+		writeError(w, errBackupBusy, http.StatusConflict)
+		return
+	}
+	// A failed first backup stays listed, with its error, so it can be retried.
+	if err := addBackupLocation(s.Config(), started.Destination); err != nil {
+		cancel()
+		status := http.StatusInternalServerError
+		if errors.Is(err, errBackupLocationOverlap) {
+			status = http.StatusBadRequest
+		}
+		writeError(w, err, status)
+		return
+	}
 	if err := s.backups.begin(started, cancel); err != nil {
 		cancel()
 		writeError(w, err, http.StatusConflict)
 		return
 	}
+	s.forgetBackupSchedule()
 	_, handle := s.begin(s.life.ctx, OperationSpec{Kind: "backup.local", Subject: started.Destination, Trigger: triggerUser, Legacy: started.ID})
 	s.launch(handle, func(context.Context, *Op) error {
 		defer cancel()
@@ -128,6 +200,7 @@ func (s *Server) startBackup(w http.ResponseWriter, body map[string]any) {
 				run.Errors = append(run.Errors, captureError{Error: fmt.Sprintf("backup stopped: %v", value)})
 			}
 			s.backups.update(run, true)
+			s.forgetBackupSchedule()
 		}()
 		run = job.Run(ctx, func(progress BackupRun) {
 			s.backups.update(progress, false)

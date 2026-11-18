@@ -1095,7 +1095,11 @@ export const defaultApi = {
   "POST /api/work": ({ body }) => ["recent", "backfill"].includes(body?.action) ? { request_id: 9, operation_id: "op-work-9", scope: body.action, state: "queued" }
     : body?.action === "cancel" ? { cancelled: true } : { changed: true, kind: body?.kind, action: body?.action },
   "POST /api/work/settings": ({ body }) => ({ ...workBackgroundDocument, work: { ...workBackgroundDocument.work, cpu_slots: body.cpu_slots } }),
-  "GET /api/backup": { active: false, run: null, runs: [], last_success: { destination: "/Users/someone/Pharos Backup", finished_at: iso(2 * day) }, record: "/Volumes/Pharos SSD/Pharos/backups.json", suggested_destination: "/Users/someone/Pharos Backup" },
+  "GET /api/backup": { active: false, run: null, runs: [], last_success: { destination: "/Users/someone/Pharos Backup", finished_at: iso(2 * day) }, record: "/Volumes/Pharos SSD/Pharos/backups.json", suggested_destination: "",
+    locations: [
+      { path: "/Users/someone/Pharos Backup", connected: true, last_backup: { destination: "/Users/someone/Pharos Backup", finished_at: iso(2 * day), bytes_total: 4096, partial: true, missing: ["/Volumes/Preserved Archive With A Long Name/preserved"] }, last_run: null },
+      { path: "/Volumes/Backup Drive With A Long Name That Has To Wrap On A Narrow Window/Pharos Backup", connected: false, last_backup: null, last_run: { id: "backup-away", state: "failed", errors: [{ error: "The destination drive is full" }] } },
+    ] },
 
   // Findings and MCP.
   "GET /api/findings": findings,

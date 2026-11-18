@@ -1081,6 +1081,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.postCloud(w, r, body)
 	case path == "/api/backup":
 		s.startBackup(w, body)
+	case path == "/api/backup/locations/remove":
+		s.removeBackupLocationRequest(w, body)
 	case path == "/api/backup/cancel":
 		cancelled := s.backups.stop()
 		if cancelled {

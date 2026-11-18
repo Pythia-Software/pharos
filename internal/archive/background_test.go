@@ -406,7 +406,7 @@ func TestBackgroundVerificationQueueRespectsCadence(t *testing.T) {
 func TestBackgroundPlanMovesEveryItem(t *testing.T) {
 	at := time.Date(2026, 10, 29, 13, 0, 0, 0, time.Local)
 	ago := formatTime(at.Add(-48 * time.Hour))
-	in := backgroundInputs{otherSources: []string{"tl1"}, backupDestination: "/backup", bucketImports: 1, lastBackup: ago,
+	in := backgroundInputs{otherSources: []string{"tl1"}, backupLocations: []string{"/backup"}, backupConnected: 1, bucketImports: 1, lastBackup: ago,
 		upgradePending: true, writingRefinementPending: true, verificationNext: at.Add(-time.Hour), labels: true, agentEvents: true, ask: true, suggestionsStale: true,
 		pullRequestReviews: true, pullRequestsDue: 1,
 		runs: map[string]backgroundRunRow{}, deferred: map[string]deferredRow{}}
@@ -450,7 +450,7 @@ func TestBackgroundStandaloneCadencesWaitAfterCompletion(t *testing.T) {
 	at := time.Date(2026, 10, 29, 13, 0, 0, 0, time.Local)
 	for _, cadence := range cadences {
 		settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: defaultDailyAt, Temporary: map[string]temporaryCadence{}}
-		in := backgroundInputs{otherSources: []string{"tl1"}, backupDestination: "/backup", upgradePending: true,
+		in := backgroundInputs{otherSources: []string{"tl1"}, backupLocations: []string{"/backup"}, backupConnected: 1, lastBackup: formatTime(at.Add(-time.Minute)), upgradePending: true,
 			verificationNext: at.Add(-time.Hour), runs: map[string]backgroundRunRow{}}
 		for _, id := range []string{"search", "preserve", "verification", "other-sources", "upgrade", "backup"} {
 			settings.Temporary[id] = temporaryCadence{Cadence: cadence}
@@ -461,6 +461,44 @@ func TestBackgroundStandaloneCadencesWaitAfterCompletion(t *testing.T) {
 				t.Errorf("%s on %s ran again too soon: %+v", plan.ID, cadence, plan)
 			}
 		}
+	}
+}
+
+// A backup drive that returns is due even right after a pass over the others,
+// and with no drive connected nothing is due.
+func TestBackgroundBackupFollowsItsDrives(t *testing.T) {
+	at := time.Date(2026, 10, 29, 13, 0, 0, 0, time.Local)
+	settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: defaultDailyAt, Overrides: map[string]string{"backup": cadenceDaily}, Temporary: map[string]temporaryCadence{}}
+	in := backgroundInputs{backupLocations: []string{"/a", "/b"}, backupConnected: 2, lastBackup: formatTime(at.Add(-72 * time.Hour)),
+		runs: map[string]backgroundRunRow{"backup": {succeeded: formatTime(at.Add(-time.Minute))}}}
+	plan := func() itemPlan {
+		for _, plan := range backgroundPlan(settings, in, at) {
+			if plan.ID == "backup" {
+				return plan
+			}
+		}
+		t.Fatal("no backup plan")
+		return itemPlan{}
+	}
+	if got := plan(); !got.Pending || !got.Due {
+		t.Fatalf("a returned drive waits: %+v", got)
+	}
+	in.backupFailureKnown = true
+	for _, problem := range []string{errBackupBusy.Error(), context.Canceled.Error(), context.DeadlineExceeded.Error()} {
+		in.runs["backup"] = backgroundRunRow{finished: formatTime(at.Add(-time.Minute)), err: problem}
+		if got := plan(); got.Due || !got.Next.After(at) {
+			t.Fatalf("%s lost retry backoff: %+v", problem, got)
+		}
+		beforeRetry := at
+		at = at.Add(backgroundRetry)
+		if got := plan(); !got.Due {
+			t.Fatalf("%s did not become due after retry backoff: %+v", problem, got)
+		}
+		at = beforeRetry
+	}
+	in.backupConnected = 0
+	if got := plan(); got.Pending || got.Due {
+		t.Fatalf("no drive connected: %+v", got)
 	}
 }
 

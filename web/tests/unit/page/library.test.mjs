@@ -10,6 +10,15 @@ import { assets, loadClassicScript, plain } from "../helpers/classic-script.mjs"
 const script = loadClassicScript("library.js");
 const library = script.window.pharosLibrary;
 
+test('each backup location keeps its partial outcome after other backups and restarts', () => {
+  const missing = '/Volumes/Archive/preserved';
+  const partial = {path: '/Volumes/First/Backup', last_backup: {partial: true, missing: [missing]}, last_run: {state: 'partial', missing: [missing]}};
+  assert.deepEqual(plain(library.backupLocationOutcome(partial)), {partial: true, missing: [missing]});
+  assert.deepEqual(plain(library.backupLocationOutcome({...partial, last_run: null})), {partial: true, missing: [missing]});
+  assert.deepEqual(plain(library.backupLocationOutcome({last_backup: {}, last_run: {state: 'complete'}})), {partial: false, missing: []});
+  assert.deepEqual(plain(library.backupLocationOutcome({last_run: {state: 'partial'}})), {partial: true, missing: []});
+});
+
 test('app updates distinguish available releases from download and install progress', () => {
   const present = state => plain(library.appUpdatePresentation(state));
   for (const state of [null, {}, {version: '0.8.0'}, {phase: 'available'}, {version: '0.8.0', phase: 'failed'}]) {

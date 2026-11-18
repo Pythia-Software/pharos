@@ -1869,20 +1869,20 @@
       "reason": "Temporary clipboard transfer field for a copy action; removed immediately, with focus and selection restored."
     },
     {
+      "key": "06e07339b317805b:0",
+      "file": "internal/archive/assets/library.js",
+      "owner": "backupPanel",
+      "tag": "button",
+      "control": "'button', 'pharos-button primary', locations.length ? 'Add and back up' : 'Back up now'",
+      "contract": "settings",
+      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
+    },
+    {
       "key": "5435ab726331dea0:0",
       "file": "internal/archive/assets/library.js",
       "owner": "backupPanel",
       "tag": "input",
       "control": "'input'",
-      "contract": "settings",
-      "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
-    },
-    {
-      "key": "b442ca19b30b402f:0",
-      "file": "internal/archive/assets/library.js",
-      "owner": "backupPanel",
-      "tag": "button",
-      "control": "'button', 'pharos-button primary', 'Back up now'",
       "contract": "settings",
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },

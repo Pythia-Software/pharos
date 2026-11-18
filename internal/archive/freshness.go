@@ -210,6 +210,9 @@ type freshnessInput struct {
 	// backupFailed is the latest local backup run of this process, when it
 	// failed: when, and why.
 	backupFailedAt string
+	// backupLocationFailed: a location's latest backup failed, so a newer
+	// success at another location does not make the backups current.
+	backupLocationFailed bool
 }
 
 // freshnessFiles are the inputs read from the library's files rather than
@@ -219,8 +222,9 @@ type freshnessFiles struct {
 	// backupAt is the newest complete (not partial) local backup;
 	// backupKnown is false where backups.json cannot be found (the MCP
 	// process has no configuration).
-	backupAt    string
-	backupKnown bool
+	backupAt      string
+	backupKnown   bool
+	backupHistory *backupHistory
 	// captures are capturedHosts' rows: one per host and captured source.
 	// capturesUnreadable says the capture root could not be read: captures
 	// are then the last rows read, if any, and every one is unknown.
@@ -1060,7 +1064,7 @@ func (l *ledger) backups(ctx context.Context, c *Catalog) {
 	switch {
 	case l.in.files == nil || !l.in.files.backupKnown:
 		local.state = freshUnknown
-	case l.in.backupFailedAt != "" && canonicalTime(l.in.backupFailedAt) > canonicalTime(l.in.files.backupAt):
+	case l.in.backupLocationFailed, l.in.backupFailedAt != "" && canonicalTime(l.in.backupFailedAt) > canonicalTime(l.in.files.backupAt):
 		local.asOf, local.state, local.reason = l.in.files.backupAt, freshBehind, "failed"
 	case l.in.files.backupAt == "":
 		local.state, local.reason = freshUnknown, "never"

@@ -67,7 +67,7 @@ func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any 
 			library["wal_bytes"] = *size
 		}
 	}
-	document["attention"] = s.attention(ctx)
+	document["attention"] = s.attentionFor(ctx, fresh)
 	// The freshness ledger (§5), and its one-line summary for the panel.
 	freshness := s.freshness(ctx, views, fresh)
 	document["freshness"] = freshness

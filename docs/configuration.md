@@ -1557,13 +1557,51 @@ unless it completed. The service offers the same: `POST /api/backup` with
 `{"destination": "/absolute/path", "prune": false}` checks the destination
 (`400` with the reason if it is refused, `409` while a backup is running) and
 answers `202`; `GET /api/backup` reports `active`, the latest `run` with its
-`phase` and progress, recent `runs`, `last_success`, and `suggested_destination`
-(the last destination; otherwise, for a library on another drive,
+`phase` and progress, recent `runs`, `last_success`, `locations`, and
+`suggested_destination` (for a library on another drive with no location yet,
 `~/Pharos Backup` on this Mac; otherwise empty); `POST /api/backup/cancel` stops
-it.
+it. `POST /api/backup/locations/remove` with `{"path": "/absolute/path"}` removes
+a location and leaves its backup in place.
 
-Settings → Backups does the same: it shows the last backup, a
-destination field filled with the suggestion, **Back up now**, the running
+**Several locations.** A library can be backed up to any number of folders,
+usually on different drives. Each holds its own full backup. A folder joins the
+list when a backup to it starts, from Settings, `POST /api/backup` or
+`pharos backup`; the list is kept in `backups.json` under
+`locations`. A library from before the list has one location, its last backup's
+destination. A folder inside another location, or containing one, is refused.
+Registration checks this under the shared history lock, so concurrent commands
+cannot register overlapping folders. If registration fails, the backup does
+not start; a previously prepared job also rechecks overlap before writing.
+A running backup reserves its folder through copying and pruning, even if its
+location is removed meanwhile. Overlapping folders stay blocked until it
+finishes. Reservations use file locks; after a crash, the next registration or
+backup reclaims stale reservations automatically.
+
+A scheduled backup and **Run now** go through the locations one at a time, the
+one that has waited longest first. Only locations that already hold this
+library's backup are used, so a same-named folder on some other drive is never
+written to unasked. A drive that is away waits without counting as a failure and
+is due as soon as it returns. One location's failure does not stop the others,
+and a retry skips the locations that are already up to date. Stopping the backup
+ends the whole pass.
+
+Failures and stopped attempts are kept per location in `backups.json` under
+`unfinished_runs`, so restarting Pharos or backing up elsewhere does not lose
+them. A successful backup to that location, including from the command line,
+or removing it clears its earlier outcome. Removed locations are also skipped
+if another location is being backed up in the same pass. A location whose first
+backup was interrupted remains due after the retry wait. Each location shows
+any missing sources from its last partial backup, even after another succeeds
+or Pharos restarts.
+Late outcomes from a removed location, or from its earlier registration if the
+folder was added again, are ignored. Delayed outcome writes cannot replace a
+newer saved outcome. Retained history stays newest first, including the last
+records of locations that have been away for a long time.
+
+Settings → Backups does the same: it lists each location with its last backup
+and whether its drive is connected, with **Back up now** and **Remove** on each
+and **Back up all connected** when more than one is. A field adds a location and
+backs up to it. The panel also shows the running
 backup's phase and progress with **Cancel backup**, and the result, with its
 warnings (such as an unencrypted destination). A refused destination, such as
 one on the library's own drive, is shown with the reason under the field. A release before an eject also stops it, within a

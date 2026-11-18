@@ -156,7 +156,7 @@ var backgroundItems = []backgroundItem{
 	{ID: "upgrade", Label: "Library upgrade", Verb: "Upgrading the library", Feeds: "Everything, after a Pharos update", Cadence: cadenceDaily, Fixed: true,
 		Kinds: []string{"library.upgrade"}, Why: "Runs only when a Pharos update needs it."},
 	{ID: "backup", Label: "Back up", Verb: "Backing up", Feeds: "Recovery", Cadence: cadenceDaily, OptIn: true,
-		Kinds: []string{"backup.local"}, Why: "Copies the library to your last backup destination when it is connected. Each backup copies the whole library, so it is off unless you give it a schedule."},
+		Kinds: []string{"backup.local"}, Why: "Copies what changed in the library to each backup location whose drive is connected. A drive that was away catches up when it returns. It is off unless you give it a schedule."},
 	{ID: "repositories", Label: "Repositories & merges", Verb: "Linking repositories", Feeds: "Workspace pages and repository filters", Cadence: cadenceFrequent, Adaptive: true,
 		Stages: []string{"identities", "git"}, Kinds: []string{"analysis.github", "analysis.identities", "analysis.git"}, Why: "Links conversations to their repositories, and asks Git which branches merged."},
 	{ID: "tools", Label: "Tools & usage", Verb: "Updating tools and usage", Feeds: "Analyze → Tool Summary, and the usage cards", Cadence: cadenceFrequent, Adaptive: true,
@@ -897,7 +897,12 @@ type backgroundInputs struct {
 	writingRefinementPending     bool
 	upgradePending               bool
 	otherSources                 []string
-	backupDestination            string
+	// backupLocations are the library's backup folders, backupConnected how
+	// many of them can be reached now.
+	backupLocations                []string
+	backupConnected                int
+	backupFailureKnown             bool
+	backupFailureAt, backupFailure string
 	// bucketImports counts the buckets this Mac collects from.
 	bucketImports int
 	lastBackup    string
@@ -995,6 +1000,17 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 		}
 		plan := itemPlan{ID: item.ID, Cadence: settings.cadence(item)}
 		run := in.runs[item.ID]
+		if item.ID == "backup" && in.backupFailureKnown && run.err != errBackupBusy.Error() && run.err != context.Canceled.Error() && run.err != context.DeadlineExceeded.Error() {
+			// The oldest success drives the cadence, but only unresolved
+			// destination failures drive error reporting and retry backoff.
+			// Busy and cancelled passes have their own backoff even when no
+			// destination was claimed and no unfinished outcome was saved.
+			run.err = in.backupFailure
+			run.finished = run.succeeded
+			if in.backupFailureAt != "" {
+				run.finished = in.backupFailureAt
+			}
+		}
 		if value, ok := parseTime(run.succeeded); ok {
 			plan.LastDone = value
 		}
@@ -1129,12 +1145,13 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			plan.Pending = true
 			standaloneNext(&plan, settings, quiet, at)
 		case item.ID == "backup":
-			if in.backupDestination == "" {
+			// Nothing can be backed up until a location's drive is connected.
+			if in.backupConnected == 0 {
 				break
 			}
-			if last, ok := parseTime(in.lastBackup); ok {
-				plan.LastDone = maxTime(plan.LastDone, last)
-			}
+			// The location that has waited longest decides, not the last
+			// pass: a drive that returns is due even if another was just done.
+			plan.LastDone, _ = parseTime(in.lastBackup)
 			plan.Pending = true
 			standaloneNext(&plan, settings, quiet, at)
 		default:
@@ -1260,23 +1277,36 @@ type backgroundState struct {
 	// indexNow is a Run now of new conversations: the scheduled index runs
 	// once whatever the mode, power or time.
 	indexNow bool
-	// backup is the last backup's destination and time, from backups.json.
-	backup   [2]string
+	// backup is what the schedule knows of the backup locations.
+	backup   backupSchedule
 	backupAt time.Time
 }
 
-// cachedBackup is the last backup's destination and finish, read from the
-// library's backups.json at most once per costsMaxAge.
-func (s *Server) cachedBackup(config Config) (string, string) {
+// cachedBackupSchedule reads the backup locations at most once per
+// costsMaxAge. Checking them touches their drives, so it happens outside the
+// lock.
+func (s *Server) cachedBackupSchedule(config Config) backupSchedule {
+	s.background.mu.Lock()
+	schedule, at := s.background.backup, s.background.backupAt
+	s.background.mu.Unlock()
+	if !at.IsZero() && time.Since(at) <= costsMaxAge {
+		return schedule
+	}
+	schedule = readBackupSchedule(config)
+	s.background.mu.Lock()
+	// A change while the drives were checked leaves the cache empty.
+	if s.background.backupAt.Equal(at) {
+		s.background.backup, s.background.backupAt = schedule, time.Now()
+	}
+	s.background.mu.Unlock()
+	return schedule
+}
+
+// forgetBackupSchedule makes the next check read the locations again.
+func (s *Server) forgetBackupSchedule() {
 	s.background.mu.Lock()
 	defer s.background.mu.Unlock()
-	if s.background.backupAt.IsZero() || time.Since(s.background.backupAt) > costsMaxAge {
-		s.background.backup, s.background.backupAt = [2]string{}, time.Now()
-		if history := loadBackupHistory(config); len(history.Backups) > 0 {
-			s.background.backup = [2]string{history.Backups[0].Destination, history.Backups[0].FinishedAt}
-		}
-	}
-	return s.background.backup[0], s.background.backup[1]
+	s.background.backup, s.background.backupAt = backupSchedule{}, time.Time{}
 }
 
 // costsMaxAge is how long measured costs are reused: the status snapshot
@@ -1365,7 +1395,9 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 			in.otherSources = append(in.otherSources, source.Name)
 		}
 	}
-	in.backupDestination, in.lastBackup = s.cachedBackup(config)
+	backups := s.cachedBackupSchedule(config)
+	in.backupLocations, in.backupConnected, in.lastBackup = backups.locations, backups.connected, backups.lastDone
+	in.backupFailureKnown, in.backupFailureAt, in.backupFailure = backups.failureKnown, backups.failureAt, backups.failure
 	in.bucketImports = len(savedBucketImports(config))
 	in.requested = requested
 	in.power = s.cachedPower(ctx)
