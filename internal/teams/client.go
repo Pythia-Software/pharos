@@ -145,6 +145,10 @@ func (e *HTTPError) Error() string {
 // exchange never logs payloads or upstream messages. It bounds all response
 // reads, refuses redirects in Request, and leaves retry policy to the caller.
 func (c *DeviceClient) exchange(ctx context.Context, method, path string, body []byte, out any) error {
+	return c.exchangeLimit(ctx, method, path, body, out, maxDeviceBody)
+}
+
+func (c *DeviceClient) exchangeLimit(ctx context.Context, method, path string, body []byte, out any, responseLimit int) error {
 	ctx, cancel := context.WithTimeout(ctx, 35*time.Second)
 	defer cancel()
 	if len(body) > maxDeviceBody {
@@ -155,11 +159,11 @@ func (c *DeviceClient) exchange(ctx context.Context, method, path string, body [
 		return err
 	}
 	defer r.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(r.Body, maxDeviceBody+1))
+	data, err := io.ReadAll(io.LimitReader(r.Body, int64(responseLimit)+1))
 	if err != nil {
 		return err
 	}
-	if len(data) > maxDeviceBody {
+	if len(data) > responseLimit {
 		return ErrDeviceResponseTooLarge
 	}
 	if r.StatusCode < 200 || r.StatusCode >= 300 {
