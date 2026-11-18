@@ -20,6 +20,31 @@ import (
 
 // This is only for the dedicated unsigned-control, literal-loopback harness.
 // Its catalog, source data, installation key and identities are all synthetic.
+// visibleSeriesLabels reads the same displayed consent state used by Settings.
+func visibleSeriesLabels(t *testing.T, s *Server, workID string) (string, []teams.ReaderLabel) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	s.teamsWorkerHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/teams/worker", nil))
+	var status struct {
+		Items []struct {
+			WorkID string              `json:"workId"`
+			Ready  bool                `json:"labelsReady"`
+			Token  string              `json:"labelsToken"`
+			Labels *teams.ReaderLabels `json:"readerLabels"`
+		} `json:"items"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &status) != nil {
+		t.Fatal("local consent status unavailable")
+	}
+	for _, item := range status.Items {
+		if item.WorkID == workID && item.Ready && item.Token != "" && item.Labels != nil {
+			return item.Token, item.Labels.Entries
+		}
+	}
+	t.Fatal("no eligible displayed reader set for the work")
+	return "", nil
+}
+
 func TestTeamsReportSyntheticPostgres(t *testing.T)       { testTeamsReportSyntheticPostgres(t, false) }
 func TestTeamsManualSeriesSyntheticPostgres(t *testing.T) { testTeamsReportSyntheticPostgres(t, true) }
 func testTeamsReportSyntheticPostgres(t *testing.T, series bool) {
@@ -225,10 +250,11 @@ func testTeamsReportSyntheticPostgres(t *testing.T, series bool) {
 	action := func(path string, body map[string]any) {
 		t.Helper()
 		if path == "allow-source" || path == "approve-result" {
-			service.teamsWorker.mu.Lock()
-			i := service.teamsWorker.items[work.ID]
-			body["labelsToken"] = teamsReaderLabelToken(i, teamsCredentialScope(d, credential), service.teamsWorker.generation)
-			service.teamsWorker.mu.Unlock()
+			token, entries := visibleSeriesLabels(t, service, work.ID)
+			if len(entries) == 0 {
+				t.Fatal("missing displayed audience")
+			}
+			body["labelsToken"] = token
 		}
 		raw, _ := json.Marshal(body)
 		rec := httptest.NewRecorder()
