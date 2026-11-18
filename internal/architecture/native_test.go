@@ -47,6 +47,7 @@ var nativeLeaves = map[string]string{
 	"internal/archive/drive_darwin.go":                        "Darwin mount observation.",
 	"internal/archive/rename_exclusive_darwin.go":             "Atomic no-replace publication.",
 	"internal/archive/capture_export_io_unix.go":              "Confined descriptor-relative capture export I/O.",
+	"internal/archive/teams_source_walk_darwin.go":            "Bounded descriptor-relative APFS source metadata census; never reads transcript bytes.",
 	"internal/archive/capture_export_io_darwin.go":            "Darwin atomic no-replace export rename.",
 	"internal/archive/capture_export_io_linux.go":             "Linux atomic no-replace export rename.",
 	"internal/archive/capture_iopolicy_darwin.go":             "Darwin background I/O policy.",
