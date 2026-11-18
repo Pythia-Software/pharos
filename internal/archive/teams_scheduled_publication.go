@@ -249,15 +249,29 @@ func parseTeamsScheduledConfig(raw []byte) (teamsScheduledConfig, error) {
 
 // teamsScheduledDisclosure is typed display content produced only from parsed
 // consent, preserving distinct collection and report readers even if equal.
-type teamsScheduledDisplayReader struct{ ID, Label, Status string }
+type teamsScheduledDisplayReader struct {
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	Status string `json:"status"`
+}
 
 type teamsScheduledDisclosure struct {
-	CollectionReaders, ReportReaders                                 []teamsScheduledDisplayReader
-	Field, Coverage, DefaultAndOptOut, Cutoff, Inference, Withdrawal string
-	Cadence, Timezone, CatchUp, TriggerID                            string
-	DisclosureRevision                                               int
-	ResponseWindowSeconds                                            int64
-	AnchorAt, UntilAt                                                time.Time
+	CollectionReaders     []teamsScheduledDisplayReader `json:"collectionReaders"`
+	ReportReaders         []teamsScheduledDisplayReader `json:"reportReaders"`
+	Field                 string                        `json:"field"`
+	Coverage              string                        `json:"coverage"`
+	DefaultAndOptOut      string                        `json:"defaultAndOptOut"`
+	Cutoff                string                        `json:"cutoff"`
+	Inference             string                        `json:"inference"`
+	Withdrawal            string                        `json:"withdrawal"`
+	Cadence               string                        `json:"cadence"`
+	Timezone              string                        `json:"timezone"`
+	CatchUp               string                        `json:"catchUp"`
+	TriggerID             string                        `json:"triggerId"`
+	DisclosureRevision    int                           `json:"disclosureRevision"`
+	ResponseWindowSeconds int64                         `json:"responseWindowSeconds"`
+	AnchorAt              time.Time                     `json:"anchorAt"`
+	UntilAt               time.Time                     `json:"untilAt"`
 }
 
 func teamsScheduledTerms(c teamsScheduledConfig) teamsScheduledDisclosure {
@@ -331,6 +345,9 @@ func matchesTeamsScheduledPeriod(c teamsScheduledConfig, persisted, submitted te
 		return false
 	}
 	start, end, err := (teamsScheduledCalendar{Cadence: c.Schedule.Cadence, Timezone: c.Schedule.Timezone, AnchorAt: c.ScheduleBounds.AnchorAt}).Window(index)
+	if end.After(c.ScheduleBounds.UntilAt) {
+		end = c.ScheduleBounds.UntilAt
+	}
 	if err != nil || !start.Equal(persisted.StartAt) || (periodEnd != nil && !end.Equal(*periodEnd)) {
 		return false
 	}

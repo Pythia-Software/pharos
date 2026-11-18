@@ -69,30 +69,31 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			generation, workScope := s.teamsWorker.generation, s.teamsWorker.scope
 			s.teamsWorker.mu.Unlock()
 			type row struct {
-				WorkID              string                     `json:"workId"`
-				Question            string                     `json:"question"`
-				Requester           string                     `json:"requester"`
-				State               string                     `json:"state"`
-				PayloadHash         string                     `json:"payloadHash"`
-				ConfigHash          string                     `json:"configHash,omitempty"`
-				PublicationV2       json.RawMessage            `json:"publicationV2,omitempty"`
-				ScheduledTerms      *teamsScheduledDisclosure  `json:"scheduledTerms,omitempty"`
-				ScheduledAssignment *teams.ScheduledAssignment `json:"scheduledAssignment,omitempty"`
-				Readers             []string                   `json:"readers"`
-				RequesterID         string                     `json:"requesterId"`
-				RequesterFallback   string                     `json:"requesterFallback,omitempty"`
-				Labels              *teams.ReaderLabels        `json:"readerLabels,omitempty"`
-				LabelsReady         bool                       `json:"labelsReady"`
-				LabelsToken         string                     `json:"labelsToken,omitempty"`
-				LabelsExpireAt      string                     `json:"labelsExpireAt,omitempty"`
-				Generation          uint64                     `json:"generation"`
-				Payload             json.RawMessage            `json:"payload"`
-				Prompt              string                     `json:"prompt"`
-				Retention           json.RawMessage            `json:"retention"`
-				Schedule            json.RawMessage            `json:"schedule"`
-				Period              json.RawMessage            `json:"period"`
-				Exports             []teamsFeedExport          `json:"exports"`
-				Publications        []teamsReportPublication   `json:"publications"`
+				WorkID              string                       `json:"workId"`
+				Question            string                       `json:"question"`
+				Requester           string                       `json:"requester"`
+				State               string                       `json:"state"`
+				PayloadHash         string                       `json:"payloadHash"`
+				ConfigHash          string                       `json:"configHash,omitempty"`
+				PublicationV2       json.RawMessage              `json:"publicationV2,omitempty"`
+				ScheduledResult     *teamsScheduledResultDisplay `json:"scheduledResult,omitempty"`
+				ScheduledTerms      *teamsScheduledDisclosure    `json:"scheduledTerms,omitempty"`
+				ScheduledAssignment *teams.ScheduledAssignment   `json:"scheduledAssignment,omitempty"`
+				Readers             []string                     `json:"readers"`
+				RequesterID         string                       `json:"requesterId"`
+				RequesterFallback   string                       `json:"requesterFallback,omitempty"`
+				Labels              *teams.ReaderLabels          `json:"readerLabels,omitempty"`
+				LabelsReady         bool                         `json:"labelsReady"`
+				LabelsToken         string                       `json:"labelsToken,omitempty"`
+				LabelsExpireAt      string                       `json:"labelsExpireAt,omitempty"`
+				Generation          uint64                       `json:"generation"`
+				Payload             json.RawMessage              `json:"payload"`
+				Prompt              string                       `json:"prompt"`
+				Retention           json.RawMessage              `json:"retention"`
+				Schedule            json.RawMessage              `json:"schedule"`
+				Period              json.RawMessage              `json:"period"`
+				Exports             []teamsFeedExport            `json:"exports"`
+				Publications        []teamsReportPublication     `json:"publications"`
 			}
 			out := make([]row, 0, len(items))
 			for _, item := range items {
@@ -152,6 +153,7 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 					fallback = config.Requester.DisplayName
 				}
 				var scheduled *teamsScheduledDisclosure
+				var result *teamsScheduledResultDisplay
 				if item.Work.ScheduledAssignment != nil {
 					c, err := parseTeamsScheduledConfig(item.Work.Config)
 					if err != nil {
@@ -159,8 +161,9 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 					}
 					terms := teamsScheduledTerms(c)
 					scheduled = &terms
+					result = teamsScheduledResultForDisplay(item.Payload, item.PayloadHash)
 				}
-				out = append(out, row{ScheduledTerms: scheduled, ScheduledAssignment: item.Work.ScheduledAssignment, LabelsExpireAt: expires, RequesterFallback: fallback, WorkID: item.Work.ID, Question: config.Question, Prompt: config.Prompt, Retention: config.Retention, Requester: config.Requester.DisplayName, RequesterID: config.Requester.ID, Labels: item.Labels, LabelsReady: labelsForReview(item.Work, item.Labels, item.LabelsAt), LabelsToken: teamsReaderLabelToken(item, scope, generation), Generation: generation, State: item.State, PayloadHash: item.PayloadHash, ConfigHash: configHash, PublicationV2: config.PublicationV2, Readers: readers, Payload: json.RawMessage(item.Payload), Schedule: config.Schedule, Period: item.Work.Period, Exports: config.Audiences.Exports, Publications: config.Audiences.Publications})
+				out = append(out, row{ScheduledResult: result, ScheduledTerms: scheduled, ScheduledAssignment: item.Work.ScheduledAssignment, LabelsExpireAt: expires, RequesterFallback: fallback, WorkID: item.Work.ID, Question: config.Question, Prompt: config.Prompt, Retention: config.Retention, Requester: config.Requester.DisplayName, RequesterID: config.Requester.ID, Labels: item.Labels, LabelsReady: labelsForReview(item.Work, item.Labels, item.LabelsAt), LabelsToken: teamsReaderLabelToken(item, scope, generation), Generation: generation, State: item.State, PayloadHash: item.PayloadHash, ConfigHash: configHash, PublicationV2: config.PublicationV2, Readers: readers, Payload: json.RawMessage(item.Payload), Schedule: config.Schedule, Period: item.Work.Period, Exports: config.Audiences.Exports, Publications: config.Audiences.Publications})
 			}
 			var modelApproved bool
 			if e = s.Catalog.reader().QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM teams_model_permission WHERE id=1 AND library_id=? AND instance_id=? AND org_id=? AND installation_id=? AND host_id=? AND settings_revision=?)`, d.ID, d.Instance, credential.OrgID, credential.InstallationID, currentHost().ID, settings.SettingsRevision).Scan(&modelApproved); e != nil {

@@ -3,6 +3,7 @@ package archive
 import (
 	"bytes"
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"github.com/gbdubs/pharos/internal/teams"
@@ -47,4 +48,28 @@ func sameTeamsScheduledAssignment(a, b *teams.ScheduledAssignment) bool {
 func matchesTeamsSourceAuthorization(raw []byte, current *teams.ScheduledAssignment) bool {
 	var auth teams.SourceAuthorization
 	return teams.ValidUniqueJSON(raw) && json.Unmarshal(raw, &auth) == nil && sameTeamsScheduledAssignment(auth.ScheduledAssignment, current)
+}
+
+// JSON integers can exceed JavaScript's safe range. Expose the approved decimal
+// and original payload text without a float64 round trip in the review screen.
+type teamsScheduledResultDisplay struct {
+	Total       string `json:"total"`
+	SourceState string `json:"sourceState"`
+	ExactJSON   string `json:"exactJson"`
+}
+
+func teamsScheduledResultForDisplay(raw []byte, hash string) *teamsScheduledResultDisplay {
+	var payload teams.Payload
+	if len(raw) == 0 || teamsPayloadHash(raw) != hash || !teams.ValidUniqueJSON(raw) || json.Unmarshal(raw, &payload) != nil || payload.Outcome != "completed" || payload.Form != "snapshot" || len(payload.Rows) != 1 || len(payload.Rows[0].Values) != 1 || len(payload.Rows[0].Key) != 0 {
+		return nil
+	}
+	total := string(payload.Rows[0].Values["total_tokens"])
+	n, err := strconv.ParseInt(total, 10, 64)
+	if err != nil || n < 0 || strconv.FormatInt(n, 10) != total {
+		return nil
+	}
+	if payload.Coverage.SourceState != "partial" && payload.Coverage.SourceState != "complete" {
+		return nil
+	}
+	return &teamsScheduledResultDisplay{total, payload.Coverage.SourceState, string(raw)}
 }

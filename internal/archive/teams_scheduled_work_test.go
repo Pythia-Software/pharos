@@ -81,4 +81,32 @@ func TestScheduledAssignmentAtSourceReviewAndSubmission(t *testing.T) {
 	if _, err = teamsV2PlanFromWork(w); err == nil {
 		t.Fatal("different displayed period end accepted")
 	}
+	// The last collection period can end before its next calendar boundary.
+	until := start.Add(20 * time.Minute)
+	c.ScheduleBounds.UntilAt = until
+	w.Config, err = json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.ConfigSHA256 = teamsPayloadHash(w.Config)
+	w.ExpiresAt = until
+	a.DeadlineAt = until
+	period.EndAt = &until
+	w.Period, _ = json.Marshal(period)
+	if _, err = teamsV2PlanFromWork(w); err != nil {
+		t.Fatalf("final partial period rejected: %v", err)
+	}
+	period.EndAt = &end
+	w.Period, _ = json.Marshal(period)
+	if _, err = teamsV2PlanFromWork(w); err == nil {
+		t.Fatal("final period extended past consent")
+	}
+}
+
+func TestScheduledResultDisplaysExactInteger(t *testing.T) {
+	raw := []byte(`{"outcome":"completed","form":"snapshot","coverage":{"source_state":"partial"},"rows":[{"key":[],"values":{"total_tokens":9007199254740993}}]}`)
+	view := teamsScheduledResultForDisplay(raw, teamsPayloadHash(raw))
+	if view == nil || view.Total != "9007199254740993" || view.ExactJSON != string(raw) || teamsScheduledResultForDisplay(raw, "") != nil {
+		t.Fatal("result view lost an exact integer or accepted an unbound payload")
+	}
 }

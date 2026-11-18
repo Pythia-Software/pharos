@@ -5,8 +5,8 @@ import "./teams-settings.css";
 type EnrollmentStatus = { state: string; available: boolean; library: string; fingerprint: string; problem: string; optedOut?: boolean };
 type SourceAccount = { bindingId: string; provider: string; sourceName: string; accountLabel: string; host: string; root: string; identifiable: number; ambiguous: number; mode: string; exposed: boolean; unindexed?: boolean };
 type SourceStatus = { sourceRevision: number; settingsRevision: number; proofRequested: boolean; sources: SourceAccount[] };
-type ScheduledTerms = { Field: string; Coverage: string; DefaultAndOptOut: string; Cutoff: string; Inference: string; Withdrawal: string; AnchorAt: string; UntilAt: string };
-type WorkItem = { scheduledTerms?: ScheduledTerms; scheduledAssignment?: { deadline_at: string; timezone: string }; workId: string; question: string; prompt: string; retention: unknown; requester: string; requesterId: string; requesterFallback?: string; readerLabels?: {entries:{person_id:string;status:string;display_name?:string}[]}; labelsReady: boolean; labelsToken?: string; labelsExpireAt?: string; generation: number; readers: string[] | null; state: string; payloadHash: string; configHash: string; payload: unknown; publicationV2?: {schema_version:number; descriptors:{id:string;readers:{kind:string;id:string}[];outputs:{fields:{id:string;unit:string}[];coverage:string[]};destination:{kind:string};disclosures:string[]}[]} | null; schedule?: {cadence:string; timezone:string; catch_up:string; response_window_seconds:number} | null; period?: {key:string; start_at?:string; end_at?:string} | null; exports?: {id:string;kind:string;destination:string;fields:string[]}[] | null; publications?: {id:string;kind:string;readers:{kind:string;id:string}[];fields:string[];include_completeness?:boolean}[] | null };
+type ScheduledTerms = { field: string; coverage: string; defaultAndOptOut: string; cutoff: string; inference: string; withdrawal: string; anchorAt: string; untilAt: string };
+type WorkItem = { scheduledResult?: { total: string; sourceState: string; exactJson: string }; scheduledTerms?: ScheduledTerms; scheduledAssignment?: { deadline_at: string; timezone: string }; workId: string; question: string; prompt: string; retention: unknown; requester: string; requesterId: string; requesterFallback?: string; readerLabels?: {entries:{person_id:string;status:string;display_name?:string}[]}; labelsReady: boolean; labelsToken?: string; labelsExpireAt?: string; generation: number; readers: string[] | null; state: string; payloadHash: string; configHash: string; payload: unknown; publicationV2?: {schema_version:number; descriptors:{id:string;readers:{kind:string;id:string}[];outputs:{fields:{id:string;unit:string}[];coverage:string[]};destination:{kind:string};disclosures:string[]}[]} | null; schedule?: {cadence:string; timezone:string; catch_up:string; response_window_seconds:number} | null; period?: {key:string; start_at?:string; end_at?:string} | null; exports?: {id:string;kind:string;destination:string;fields:string[]}[] | null; publications?: {id:string;kind:string;readers:{kind:string;id:string}[];fields:string[];include_completeness?:boolean}[] | null };
 type WorkerStatus = { enabled: boolean; optOut: boolean; settingsRevision: number; acknowledgedPolicy: number; nextCheck: string; checking: boolean; problem: string; sourceProblem?: string; items: WorkItem[]; modelApproved: boolean };
 type ModelInspection = { provider: string; model: string; effort: string; account: string; sessionDigest: string; authDigest: string; settingsRevision: number };
 type SentItem = {workId:string; question:string; payload:unknown; sentAt:string};
@@ -62,7 +62,12 @@ function ReaderAudiences({ item, refresh }: { item: WorkItem; refresh: () => Pro
     finally { signal?.removeEventListener("abort", abort); if (current.current === controller) { setBusy(false); current.current = null; } }
   }, [item.workId, item.configHash, item.state, item.generation, refresh]);
   useEffect(() => () => current.current?.abort(), []);
-  useEffect(() => { const controller = new AbortController(); void load(controller.signal); return () => controller.abort(); }, [load]);
+  useEffect(() => {
+    if (item.labelsReady) return;
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+  }, [load, item.labelsReady]);
   useEffect(() => {
     if (!item.labelsExpireAt) return;
     const timer = window.setTimeout(() => { void load(); }, Math.max(0, Date.parse(item.labelsExpireAt!) - Date.now()));
@@ -128,10 +133,10 @@ function TeamsWork() {
 	  {item.schedule ? <><p>Repeats {item.schedule.cadence} in {item.schedule.timezone}; missed periods: {item.schedule.catch_up}. Response window: {item.schedule.response_window_seconds} seconds.</p><p>Current period: {item.period?.start_at} to {item.period?.end_at}. The token total covers all eligible history.</p></> : null}
       {item.scheduledTerms && item.scheduledAssignment ? <section aria-label="Scheduled report disclosure">
         <h5>Scheduled web report</h5>
-        <p>{item.scheduledTerms.Field}. {item.scheduledTerms.Coverage}.</p>
-        <p>{item.scheduledTerms.DefaultAndOptOut}</p>
-        <p>For this period, the report uses responses accepted by <time dateTime={item.scheduledAssignment.deadline_at}>{item.scheduledAssignment.deadline_at}</time> ({item.scheduledAssignment.timezone}). The schedule runs through {item.scheduledTerms.UntilAt}.</p>
-        <p>{item.scheduledTerms.Cutoff} {item.scheduledTerms.Inference} {item.scheduledTerms.Withdrawal}</p>
+        <p>{item.scheduledTerms.field}. {item.scheduledTerms.coverage}.</p>
+        <p>{item.scheduledTerms.defaultAndOptOut}</p>
+        <p>For this period, the report uses responses accepted by <time dateTime={item.scheduledAssignment.deadline_at}>{new Date(item.scheduledAssignment.deadline_at).toUTCString()}</time>. The schedule runs through <time dateTime={item.scheduledTerms.untilAt}>{new Date(item.scheduledTerms.untilAt).toUTCString()}</time>.</p>
+        <p>{item.scheduledTerms.cutoff} {item.scheduledTerms.inference} {item.scheduledTerms.withdrawal}</p>
       </section> : item.publicationV2?.descriptors.map(x => <section key={x.id} aria-label="Report history disclosure"><p>Report with history, published on the web. Total captured tokens ({x.outputs.fields[0]?.unit}) across all eligible captured history. Each manually refreshed snapshot includes a complete or incomplete indicator.</p><p>Each refresh adds a retained snapshot; differences between snapshots can reveal individual contributions.</p><p>Withdrawing later does not remove snapshots already published; retention and explicit invalidation still apply.</p><p>Request digest: <code>{item.configHash}</code>. Every result requires your review before sending.</p></section>)}
 	  {item.publications?.map(x => <p key={x.id}>Report readers: {x.readers.map(r => r.id).join(", ")}. Fields: {x.fields.join(", ")}. Completeness indicator: {x.include_completeness ? "included" : "not included"}. Each result requires your review before sending.</p>)}
 	  {item.exports?.map(x => <p key={x.id}>Export to {x.destination}. Fields: {x.fields.join(", ")}. Each result requires your review before sending.</p>)}
@@ -143,8 +148,13 @@ function TeamsWork() {
 	  {item.prompt && item.state === "started" ? <p>A previous attempt may have started. It will not automatically run the model again; you can decline this request.</p> : null}
 	  {item.state === "delivery_unconfirmed" ? <p>The send is being reconciled. Pharos will check for a receipt before retrying.</p> : null}
       {item.state === "awaiting_source_consent" ? <><p>{item.prompt ? "Allow source membership checks and send eligible reviewed content to your approved Claude account to prepare a draft. The answer will still require your review before it is sent." : `Allow this request${item.schedule ? " and its future scheduled periods" : ""} to check opaque source membership. This does not approve sending an answer.`}</p><button type="button" disabled={busy || !status || (!!item.publicationV2 && !item.labelsReady)} onClick={() => void act("/allow-source", { workId: item.workId, settingsRevision: status.settingsRevision, ...(item.publicationV2 ? {configHash: item.configHash, labelsToken: item.labelsToken} : {}) })}>{item.prompt ? "Allow source checks and draft" : item.scheduledTerms ? "Allow source checks for this schedule" : "Allow source checks"}</button></> : null}
-      {item.payload ? <pre>{JSON.stringify(item.payload, null, 2)}</pre> : null}
-      {item.state === "awaiting_review" ? <button type="button" disabled={busy || (!!item.publicationV2 && !item.labelsReady)} onClick={() => void act("/approve-result", { workId: item.workId, payloadHash: item.payloadHash, ...(item.publicationV2 ? {configHash: item.configHash, labelsToken: item.labelsToken} : {}) })}>Approve and send this result</button> : null}{" "}
+      {item.scheduledResult ? <section aria-label="Library result" className="teams-scheduled-result">
+        <h5>This library’s result</h5>
+        <p><strong>{item.scheduledResult.total}</strong> captured tokens</p>
+        <p>{item.scheduledResult.sourceState === "partial" ? "Partial source coverage. This total may omit activity." : "Complete source coverage."}</p>
+        <details><summary>Exact response data</summary><pre>{item.scheduledResult.exactJson}</pre></details>
+      </section> : item.payload && !item.scheduledTerms ? <pre>{JSON.stringify(item.payload, null, 2)}</pre> : null}
+      {item.state === "awaiting_review" ? <button type="button" disabled={busy || (!!item.publicationV2 && !item.labelsReady) || (!!item.scheduledTerms && !item.scheduledResult)} onClick={() => void act("/approve-result", { workId: item.workId, payloadHash: item.payloadHash, ...(item.publicationV2 ? {configHash: item.configHash, labelsToken: item.labelsToken} : {}) })}>Approve and send this result</button> : null}{" "}
       {["awaiting_source_consent", "awaiting_model_permission", "awaiting_review", "decline_pending", "started", "source_safety_waiting"].includes(item.state) ? <button type="button" disabled={busy} onClick={() => void act("/decline", { workId: item.workId })}>{item.state === "decline_pending" ? "Retry decline" : "Decline request"}</button> : null}
     </div>)}
     <section aria-label="Sent responses"><h4>Sent responses</h4><button type="button" disabled={busy} onClick={() => void loadSent()}>Show recent sends</button>

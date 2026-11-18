@@ -269,8 +269,29 @@ func reviewScheduledSyntheticWork(t *testing.T, s *Server, work teams.Work) {
 		}
 		return rec.Body.Bytes()
 	}
+	var nextLabelLookup time.Time
 	for _, state := range []string{"awaiting_source_consent", "awaiting_review"} {
+		// A poll that changes the source or draft counters deliberately invalidates
+		// the previous consent card. Let the queued coordinator visit reconstruct it.
+		var card struct {
+			Items []struct {
+				State string `json:"state"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(call(http.MethodGet, "", nil), &card); err != nil || len(card.Items) != 1 {
+			t.Fatal("missing current work card")
+		}
+		if card.Items[0].State == "pending" {
+			if _, err := s.checkTeamsWork(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// Exercise the broker's two-second per-work directory rate limit.
+		if wait := time.Until(nextLabelLookup); wait > 0 {
+			time.Sleep(wait)
+		}
 		call(http.MethodPost, "/reader-labels", map[string]string{"workId": work.ID, "configHash": work.ConfigSHA256})
+		nextLabelLookup = time.Now().Add(2 * time.Second)
 		var view struct {
 			SettingsRevision int64 `json:"settingsRevision"`
 			Items            []struct {
