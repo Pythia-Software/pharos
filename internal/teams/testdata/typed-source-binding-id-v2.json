@@ -1,0 +1,49 @@
+{
+  "status": "cross_repository_vector",
+  "scope": {
+    "org_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "person_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    "installation_id": "44444444-4444-4444-8444-444444444444",
+    "library_id": "synthetic",
+    "work_id": "33333333-3333-4333-8333-333333333333"
+  },
+  "request_without_binding_id": {
+    "snapshot_id": "11111111-1111-4111-8111-111111111111",
+    "inventory_revision": 1,
+    "inventory_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "local_revision": 1,
+    "catalog_revision": 1,
+    "evaluation_revision": 1,
+    "config_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "ownership_revision": 1,
+    "privacy_revision": 1,
+    "issued_at": 1794790800
+  },
+  "canonical_identity_json": "{\"org_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"person_id\":\"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\",\"installation_id\":\"44444444-4444-4444-8444-444444444444\",\"library_id\":\"synthetic\",\"work_id\":\"33333333-3333-4333-8333-333333333333\",\"snapshot_id\":\"11111111-1111-4111-8111-111111111111\",\"inventory_revision\":1,\"inventory_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"local_revision\":1,\"catalog_revision\":1,\"evaluation_revision\":1,\"config_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"ownership_revision\":1,\"privacy_revision\":1,\"issued_at\":1794790800}",
+  "domain": "pharos-typed-source-binding-id-v2\n",
+  "sha256": "186f50d874feb30d010d61fe8782f3554fb0e878488dbb28349f766ab852b60d",
+  "binding_id": "186f50d8-74fe-830d-810d-61fe8782f355",
+  "fresh_intent_rule": "advance issued_at monotonically per work/installation and wait if the floor exceeds authenticated server time plus five minutes; exact retry preserves original bytes",
+  "retry_horizon_seconds": 604800,
+  "max_future_skew_seconds": 300,
+  "floor_response_examples": {
+    "ready": {
+      "server_time": "2026-11-16T01:00:00Z",
+      "next_issued_at": 1794790801,
+      "retry_at": null
+    },
+    "skew_limit": {
+      "server_time": "2026-11-16T01:00:00Z",
+      "next_issued_at": 1794791101,
+      "retry_at": "2026-11-16T01:00:01Z"
+    }
+  },
+  "pruned_detail_response": {
+    "status": "superseded",
+    "floor": {
+      "server_time": "2026-11-16T01:00:00Z",
+      "next_issued_at": 1794790801,
+      "retry_at": null
+    }
+  }
+}
