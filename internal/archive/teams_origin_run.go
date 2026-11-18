@@ -300,6 +300,16 @@ func (c *Catalog) teamsRecoveryPageForScope(ctx context.Context, cfg Config, cli
 			return nil, errTeamsPilotPending
 		}
 		if scan.held {
+			if token == "batch-safety" {
+				// Retain this signed held scan, but permit a later independent
+				// status scan. No origin or receipt is changed here.
+				if e = c.writeTransaction(ctx, "teams-origin-safety-held", func(tx *sql.Tx) error {
+					_, x := tx.ExecContext(ctx, `UPDATE teams_origin_runs SET state='completed' WHERE run_key=? AND token='batch-safety' AND state='ready'`, row.key)
+					return x
+				}); e != nil {
+					return nil, e
+				}
+			}
 			return nil, errTeamsPilotPending
 		}
 		return scan, nil

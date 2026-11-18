@@ -75,8 +75,29 @@ func teamsLocalOriginStateCheckedIn(ctx context.Context, tx *sql.Tx, cfg Config,
 	if err != nil {
 		return teamsLocalOriginState{}, errTeamsConsentStale
 	}
+	if replay && !lookupOnly && v.Protection == "non_private" {
+		current, _, e := teamsLocalSourceCensusIn(ctx, tx, cfg, d, credential)
+		if e != nil {
+			return teamsLocalOriginState{}, errTeamsProtectionHeld
+		}
+		matched := false
+		for _, item := range current.Items {
+			if item.Token == v.Token && item.Witness == v.Witness && item.EvidenceRevision == v.EvidenceRevision && item.Protection == "public" && len(item.Dependencies) == len(v.Dependencies) {
+				same := true
+				for i := range item.Dependencies {
+					if item.Dependencies[i] != v.Dependencies[i] {
+						same = false
+					}
+				}
+				matched = matched || same
+			}
+		}
+		if !matched {
+			return teamsLocalOriginState{}, errTeamsProtectionHeld
+		}
+	}
 	want, err := sourcewire.ProtectionObservationID(v, credential.InstallationID, d.ID)
-	if err != nil || want != id || v.ObservationID != id || v.Token != token || v.ExpectedRevision != expected || (v.Protection != "explicit_private" && v.Protection != "unknown") {
+	if err != nil || want != id || v.ObservationID != id || v.Token != token || v.ExpectedRevision != expected || (v.Protection != "explicit_private" && v.Protection != "unknown" && v.Protection != "non_private") {
 		return teamsLocalOriginState{}, errTeamsConsentStale
 	}
 	if _, err = sourcewire.CheckRecoveryIssuance(v.IssuedAt, time.Now().UTC()); err != nil && out.state == "prepared" && !lookupOnly {
@@ -94,7 +115,7 @@ func teamsLocalOriginStateCheckedIn(ctx context.Context, tx *sql.Tx, cfg Config,
 		if item.Token != v.Token {
 			continue
 		}
-		if found || item.Kind != "codex_thread" || item.Witness != v.Witness || item.EvidenceRevision != v.EvidenceRevision || len(item.Dependencies) != len(v.Dependencies) || (v.Protection == "explicit_private" && item.Protection != "private") || (v.Protection == "unknown" && item.Protection != "unknown" && item.Protection != "public") {
+		if found || item.Kind != "codex_thread" || item.Witness != v.Witness || item.EvidenceRevision != v.EvidenceRevision || len(item.Dependencies) != len(v.Dependencies) || (v.Protection == "explicit_private" && item.Protection != "private") || (v.Protection == "unknown" && item.Protection != "unknown" && item.Protection != "public") || (v.Protection == "non_private" && item.Protection != "public") {
 			return teamsLocalOriginState{}, errTeamsConsentStale
 		}
 		for i := range item.Dependencies {

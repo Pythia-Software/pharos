@@ -129,6 +129,10 @@ func teamsValidateOriginBatchIn(ctx context.Context, tx *sql.Tx, d LibraryDescri
 	return out, nil
 }
 
+// The reviewed non-private producer remains dormant until cross-service
+// proof, replay and floor tests are complete.
+var teamsNonPrivateSourceProofEnabled = false
+
 func teamsJournalOriginIn(ctx context.Context, tx *sql.Tx, d LibraryDescriptor, credential *teams.EnrollmentCredential, work teams.Work, snapshot teamsV2Inventory, token string, scan *teamsRecoveryOriginScan, scope teamsOriginBatchScope) ([]byte, error) {
 	if scan == nil || scan.held {
 		return nil, errTeamsPilotPending
@@ -156,6 +160,15 @@ func teamsJournalOriginIn(ctx context.Context, tx *sql.Tx, d LibraryDescriptor, 
 	nextProtection := "unknown"
 	if item.Protection == "private" {
 		nextProtection = "explicit_private"
+	} else if teamsNonPrivateSourceProofEnabled && item.Protection == "public" && work.ID == "" && scope.snapshotID == "" {
+		// Only the independent local census calls this lane with a current
+		// checkpointed baseline and separately acknowledged transfer. Its
+		// public state requires the exact reviewed source evidence.
+		// An existing unknown or restrictive server floor is never cleared.
+		prior, exists := scan.byToken[item.Token]
+		if !exists || (prior.Protection == "non_private" && prior.FlagFloor != "unknown" && (!prior.Classification.Required || prior.Classification.State == "clear")) {
+			nextProtection = "non_private"
+		}
 	}
 	if protection != "" && protection != "unknown" && protection != nextProtection {
 		return nil, errTeamsSourceUnavailable

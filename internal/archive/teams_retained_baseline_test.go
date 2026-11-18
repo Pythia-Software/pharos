@@ -27,3 +27,26 @@ func TestTeamsBaselineServerFloorStaysHeld(t *testing.T) {
 		t.Fatal("expired scan accepted")
 	}
 }
+
+func TestTeamsBaselineReplacementPreservesServerFloors(t *testing.T) {
+	old := &teamsRecoveryOriginScan{last: sourcewire.RecoveryPageReceipt{UnacceptedFloor: 20}, byToken: map[string]teamsRecoveryOrigin{"t": {Token: "t", Witness: "w", Revision: 3, EvidenceRevision: "e", Protection: "flagged", FlagFloor: "unknown"}}}
+	next := &teamsRecoveryOriginScan{last: sourcewire.RecoveryPageReceipt{UnacceptedFloor: 21}, byToken: map[string]teamsRecoveryOrigin{"t": {Token: "t", Witness: "w", Revision: 4, EvidenceRevision: "e2", Protection: "flagged", FlagFloor: "unknown"}}}
+	if !teamsBaselineScanDominates(next, old) {
+		t.Fatal("monotone retained floor denied")
+	}
+	lower := *next
+	lower.last.UnacceptedFloor = 19
+	if teamsBaselineScanDominates(&lower, old) {
+		t.Fatal("floor rollback accepted")
+	}
+	clear := *next
+	clear.byToken = map[string]teamsRecoveryOrigin{"t": {Token: "t", Witness: "w", Revision: 4, EvidenceRevision: "e2", Protection: "non_private"}}
+	if teamsBaselineScanDominates(&clear, old) {
+		t.Fatal("prior flag lost")
+	}
+	missing := *next
+	missing.byToken = map[string]teamsRecoveryOrigin{}
+	if teamsBaselineScanDominates(&missing, old) {
+		t.Fatal("missing prior origin accepted")
+	}
+}

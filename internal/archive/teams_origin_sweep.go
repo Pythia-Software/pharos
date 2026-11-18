@@ -13,7 +13,7 @@ import (
 // Sweep only stale transport-only prefixes. Any retained origin observation,
 // held response, unknown/private evidence or malformed page remains held.
 func teamsSweepOriginPartialsIn(ctx context.Context, tx *sql.Tx, d LibraryDescriptor, credential *teams.EnrollmentCredential, scope teamsOriginBatchScope) (bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT run_key,state,start_receipt_json,expires_at,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=? AND token<>'baseline' AND state IN ('prepared','started','ready') ORDER BY rowid LIMIT 33`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance)
+	rows, err := tx.QueryContext(ctx, `SELECT run_key,state,start_receipt_json,expires_at,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=? AND state IN ('prepared','started','ready') ORDER BY rowid LIMIT 33`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance)
 	if err != nil {
 		return false, err
 	}
