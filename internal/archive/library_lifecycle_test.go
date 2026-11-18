@@ -804,7 +804,7 @@ func TestLibraryTransferRejectsNewerCatalogAndBusySource(t *testing.T) {
 	}
 	lock.Close()
 	c := reopenCatalog(t, a.CatalogPath)
-	_, err = c.DB.Exec("UPDATE meta SET value=? WHERE key='schema_version'", fmt.Sprint(protectedCatalogSchemaVersion+1))
+	_, err = c.DB.Exec("UPDATE meta SET value=? WHERE key='schema_version'", fmt.Sprint(teamsProtectedFormat35+1))
 	c.Close()
 	if err != nil {
 		t.Fatal(err)

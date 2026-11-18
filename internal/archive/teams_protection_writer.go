@@ -32,9 +32,11 @@ func (c *teamsProtectedConnector) Connect(ctx context.Context) (driver.Conn, err
 func (c *teamsProtectedConnector) Driver() driver.Driver { return c.driver }
 
 type teamsProtectedWriter struct {
-	db           *sql.DB
-	mu           sync.Mutex
-	requireFence bool
+	db               *sql.DB
+	mu               sync.Mutex
+	requireFence     bool
+	expectedInstance string
+	upgradePreflight bool
 	// Set only by the checkpoint protocol while it owns the writer transaction.
 	// Until that protocol is implemented, no production path grants authority.
 	authorized atomic.Bool

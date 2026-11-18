@@ -37,6 +37,7 @@ func (c *Catalog) configureTeamsCheckpoint(ctx context.Context, cfg Config, d Li
 		return false, err
 	}
 	w.requireFence = true
+	w.expectedInstance = teamsCheckpointInstance(d.ID, d.Instance)
 	err = teamsCheckpointReconcile(ctx, w, store, scope, scope, key)
 	held := errors.Is(err, errTeamsProtectionHeld)
 	if err == nil {

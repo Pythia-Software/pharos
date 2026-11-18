@@ -301,10 +301,10 @@ func (c *Catalog) checkSchemaVersion() error {
 		return err
 	}
 	version, err := strconv.Atoi(strings.TrimSpace(stored))
-	if err != nil || version > protectedCatalogSchemaVersion {
-		return fmt.Errorf("catalog %s has schema version %s, but this build of Pharos supports up to %d; open it with a newer build (the catalog was not modified)", c.Path, stored, protectedCatalogSchemaVersion)
+	if err != nil || version > teamsProtectedFormat35 {
+		return fmt.Errorf("catalog %s has schema version %s, but this build of Pharos supports up to %d; open it with a newer build (the catalog was not modified)", c.Path, stored, teamsProtectedFormat35)
 	}
-	if version == protectedCatalogSchemaVersion {
+	if version == protectedCatalogSchemaVersion || version == teamsProtectedFormat35 {
 		active, e := c.hasProtectionCheckpoint()
 		if e != nil {
 			return e

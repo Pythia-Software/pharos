@@ -912,11 +912,11 @@ func TestOpenCatalogForQuerySkipsInitialize(t *testing.T) {
 		}
 	}
 
-	setMeta("UPDATE meta SET value='" + strconv.Itoa(protectedCatalogSchemaVersion+1) + "' WHERE key='schema_version'")
-	if _, err := OpenCatalogForQuery(path); err == nil || !strings.Contains(err.Error(), "schema version "+strconv.Itoa(protectedCatalogSchemaVersion+1)) {
+	setMeta("UPDATE meta SET value='" + strconv.Itoa(teamsProtectedFormat35+1) + "' WHERE key='schema_version'")
+	if _, err := OpenCatalogForQuery(path); err == nil || !strings.Contains(err.Error(), "schema version "+strconv.Itoa(teamsProtectedFormat35+1)) {
 		t.Fatalf("a newer catalog was not refused: %v", err)
 	}
-	if got := meta("schema_version"); got != strconv.Itoa(protectedCatalogSchemaVersion+1) {
+	if got := meta("schema_version"); got != strconv.Itoa(teamsProtectedFormat35+1) {
 		t.Fatalf("a refused catalog was modified: schema_version=%q", got)
 	}
 	// Migrating an older catalog is left to the app.

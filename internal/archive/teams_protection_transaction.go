@@ -148,6 +148,9 @@ func teamsCheckpointWriteLocked(ctx context.Context, w *teamsProtectedWriter, st
 	if err != nil || keyID != host.KeyID || host.Scope != scope {
 		return errTeamsProtectionContinuity
 	}
+	if err = teamsRequireFormat35HostInstance(ctx, tx, w, host); err != nil {
+		return err
+	}
 	if host.Phase == "held" {
 		return teamsCheckpointWriteHeld(ctx, w, tx, host, run)
 	}
@@ -208,11 +211,29 @@ func teamsCheckpointWriteLocked(ctx context.Context, w *teamsProtectedWriter, st
 	if err = run(tx); err != nil {
 		return err
 	}
+	var format string
+	if err = tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='schema_version'`).Scan(&format); err != nil {
+		return err
+	}
+	if format == "35" {
+		if err = teamsPreflightOriginJournal(ctx, tx); err != nil {
+			return err
+		}
+	}
 	revision, err = teamsCheckpointFenceRevision(ctx, tx)
 	if err != nil {
 		return err
 	}
 	after, err := teamsProtectionProjection(ctx, tx)
+	// A new oversized journal candidate is not evidence of prior corruption.
+	// Undo it before any host CAS; an already-oversized prior projection still
+	// follows the conservative hold path above.
+	if errors.Is(err, errTeamsJournalProjectionBound) {
+		if _, e := tx.ExecContext(ctx, `ROLLBACK TO teams_protection_action`); e != nil {
+			return errTeamsCheckpointRetry
+		}
+		return errTeamsJournalAdmissionBound
+	}
 	if errors.Is(err, errTeamsProjectionBound) {
 		if host.Sequence >= math.MaxInt64-1 {
 			return errTeamsProtectionContinuity
@@ -289,6 +310,25 @@ func teamsCheckpointWriteHeld(ctx context.Context, w *teamsProtectedWriter, tx *
 	if host.Phase != "held" || !host.valid() {
 		return errTeamsProtectionContinuity
 	}
+	var format string
+	if err := tx.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='schema_version'").Scan(&format); err != nil {
+		return err
+	}
+	var frozen bool
+	if format == "35" {
+		err := teamsPreflightOriginJournal(ctx, tx)
+		if errors.Is(err, errTeamsJournalAdmissionBound) {
+			// A previously inadmissible journal may be too large to hash.
+			// Transaction-local triggers observe writes, including cascades,
+			// without reading or copying its protected data.
+			frozen = true
+			if err := teamsObserveHeldJournalWrites(ctx, tx, true); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+	}
 	w.authorized.Store(true)
 	defer w.authorized.Store(false)
 	guard := host.Cover[0]
@@ -300,6 +340,15 @@ func teamsCheckpointWriteHeld(ctx context.Context, w *teamsProtectedWriter, tx *
 	}
 	if err := run(tx); err != nil {
 		return err
+	}
+	if frozen {
+		if err := teamsObserveHeldJournalWrites(ctx, tx, false); err != nil {
+			return err
+		}
+	} else if format == "35" {
+		if err := teamsPreflightOriginJournal(ctx, tx); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return errTeamsCheckpointRetry
@@ -350,6 +399,20 @@ func teamsCheckpointReconcileLocked(ctx context.Context, w *teamsProtectedWriter
 		return err
 	}
 	defer tx.Rollback()
+	if w.upgradePreflight {
+		var format string
+		if err = tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='schema_version'`).Scan(&format); err != nil {
+			return err
+		}
+		if err = teamsSchemaInventoryPreflight(ctx, tx, format == "34"); err != nil {
+			return err
+		}
+		if format == "34" {
+			if _, err = teamsProtectionProjectionPreflight35(ctx, tx, teamsProtectionProjectionQueries, "pharos-teams-protection-projection-v1", teamsProjectionMaxBytes); err != nil {
+				return err
+			}
+		}
+	}
 	if w.requireFence {
 		if err = teamsVerifyProtectionFence(ctx, tx); err != nil {
 			return err
@@ -366,6 +429,9 @@ func teamsCheckpointReconcileLocked(ctx context.Context, w *teamsProtectedWriter
 	keyID, e := teamsCheckpointKeyID(guardKey)
 	if e != nil || keyID != host.KeyID || host.Scope != scope {
 		return errTeamsProtectionContinuity
+	}
+	if err = teamsRequireFormat35HostInstance(ctx, tx, w, host); err != nil {
+		return err
 	}
 	if host.Phase == "held" {
 		return errTeamsProtectionHeld
@@ -658,6 +724,9 @@ func teamsCheckpointHoldForReplacement(ctx context.Context, r *teamsCheckpointRu
 	keyID, err := teamsCheckpointKeyID(r.guardKey)
 	if err != nil || keyID != host.KeyID || host.Scope != r.scope {
 		return errTeamsProtectionContinuity
+	}
+	if err = teamsRequireFormat35HostInstance(ctx, tx, w, host); err != nil {
+		return err
 	}
 	if host.Phase == "held" {
 		return nil
