@@ -5,10 +5,12 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,16 +67,18 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 	second.BindingSHA256 = hash
 	gen := int64(1)
 	until := time.Now().UTC().Add(time.Hour)
-	floor := TypedBindingFloor{ServerTime: time.Now().UTC(), NextIssuedAt: time.Now().Unix() + 1}
+	floor := TypedBindingFloor{ServerTime: time.Unix(req.IssuedAt, 0).UTC(), NextIssuedAt: req.IssuedAt}
 	receipt := TypedBindingReceipt{Status: "issued", Binding: &b, BindingSHA256: hash, EligibilityGeneration: &gen, ValidUntil: &until}
 	mode := "ok"
 	seen := map[string]bool{}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		nonce := r.Header.Get("X-Pharos-Nonce")
+		timestamp, tsErr := strconv.ParseInt(r.Header.Get("X-Pharos-Timestamp"), 10, 64)
+		nonceBytes, nonceErr := base64.RawURLEncoding.DecodeString(nonce)
 		msg, e := signedMessage(b.InstallationID, r.Method, r.URL.EscapedPath(), r.Header.Get("X-Pharos-Timestamp"), nonce, body)
 		sig, e2 := base64.RawURLEncoding.DecodeString(r.Header.Get("X-Pharos-Signature"))
-		if e != nil || e2 != nil || seen[nonce] || r.Header.Get("X-Pharos-Installation") != b.InstallationID || !ed25519.Verify(pub, []byte(msg), sig) {
+		if e != nil || e2 != nil || tsErr != nil || time.Since(time.Unix(timestamp, 0)).Abs() > time.Minute || nonceErr != nil || len(nonceBytes) != 16 || seen[nonce] || r.Header.Get("X-Pharos-Installation") != b.InstallationID || !ed25519.Verify(pub, []byte(msg), sig) {
 			t.Error("invalid signed request")
 		}
 		seen[nonce] = true
@@ -91,7 +95,24 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 			case "old":
 				http.NotFound(w, r)
 			case "superseded":
-				json.NewEncoder(w).Encode(TypedBindingReceipt{Status: "superseded", Floor: &floor})
+				next := floor
+				next.NextIssuedAt++
+				json.NewEncoder(w).Encode(TypedBindingReceipt{Status: "superseded", Floor: &next})
+			case "issuance-expired":
+				w.WriteHeader(http.StatusConflict)
+				io.WriteString(w, `{"error":{"code":"source_issuance_expired"}}`)
+			case "multiple-profiles":
+				extra := b.Profiles[0]
+				extra.ProfileID = "future_usage"
+				v := b
+				v.Profiles = append(append([]sourcewire.ProfileReference{}, b.Profiles...), extra)
+				_, hash, e := v.Bytes()
+				if e != nil {
+					t.Fatal(e)
+				}
+				result := receipt
+				result.Binding, result.BindingSHA256 = &v, hash
+				json.NewEncoder(w).Encode(result)
 			case "stale":
 				x := receipt
 				x.Status = "stale"
@@ -114,6 +135,11 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 				expiry := time.Unix(req.IssuedAt, 0).Add(-sourcewire.RecoveryFutureSkew)
 				v.ValidUntil = &expiry
 				json.NewEncoder(w).Encode(v)
+			case "expired":
+				v := receipt
+				expiry := time.Now().Add(-time.Second)
+				v.ValidUntil = &expiry
+				json.NewEncoder(w).Encode(v)
 			case "digest":
 				v := receipt
 				v.BindingSHA256 = strings.Repeat("a", 64)
@@ -122,8 +148,17 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 				json.NewEncoder(w).Encode(receipt)
 			}
 		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, base+"/"+b.BindingID+"/profiles/"+b.Profiles[0].ProfileID+"/1/assignments/"):
+			if mode == "page-stale" {
+				w.WriteHeader(http.StatusConflict)
+				io.WriteString(w, `{"error":{"code":"stale_source_binding"}}`)
+				return
+			}
 			p := page
 			if strings.HasSuffix(r.URL.Path, "/1") {
+				if mode == "incomplete" {
+					http.NotFound(w, r)
+					return
+				}
 				p = second
 				if mode == "page" {
 					wrong := strings.Repeat("a", 64)
@@ -158,6 +193,84 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 		c.http.Transport = typedTestTransport{handler}
 	}
 	ctx := context.Background()
+	verified := func() (VerifiedTypedBinding, error) {
+		return c.IssueVerifiedTypedBinding(ctx, org, person, b.LibraryID, b.WorkID, b.WindowSHA256, req)
+	}
+	if (VerifiedTypedBinding{}).Unexpired(time.Now()) {
+		t.Fatal("zero result is valid")
+	}
+	v, err := verified()
+	if err != nil || !v.Unexpired(time.Now()) || v.Unexpired(until) {
+		t.Fatalf("verified issuance: %v", err)
+	}
+	credential := &EnrollmentCredential{Origin: origin, InstallationID: b.InstallationID, OrgID: org, PersonID: person, LibraryID: b.LibraryID, key: key}
+	if !v.MatchesCredential(credential) || (VerifiedTypedBinding{}).MatchesCredential(credential) {
+		t.Fatal("verified binding lost its credential scope")
+	}
+	credential.Origin = origin + "/"
+	if !c.MatchesCredential(credential) || !v.MatchesCredential(credential) {
+		t.Fatal("equivalent stored origin did not match")
+	}
+	credential.Origin = origin
+	_, otherKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(otherKey)
+	for _, altered := range []EnrollmentCredential{
+		{Origin: origin, InstallationID: b.InstallationID, OrgID: org, PersonID: person, LibraryID: b.LibraryID, key: otherKey},
+		{Origin: origin, InstallationID: org, OrgID: org, PersonID: person, LibraryID: b.LibraryID, key: key},
+		{Origin: origin, InstallationID: b.InstallationID, OrgID: person, PersonID: person, LibraryID: b.LibraryID, key: key},
+		{Origin: origin, InstallationID: b.InstallationID, OrgID: org, PersonID: person, LibraryID: "other", key: key},
+		{Origin: "https://other.invalid", InstallationID: b.InstallationID, OrgID: org, PersonID: person, LibraryID: b.LibraryID, key: key},
+		{Origin: origin, InstallationID: b.InstallationID, OrgID: org, PersonID: org, LibraryID: b.LibraryID, key: key},
+		{Origin: origin, InstallationID: b.InstallationID, OrgID: org, PersonID: person, LibraryID: b.LibraryID},
+	} {
+		if v.MatchesCredential(&altered) {
+			t.Fatal("accepted another credential scope")
+		}
+	}
+	requestBytes, _ := json.Marshal(req)
+	if string(v.RequestBytes()) != string(requestBytes) || v.Receipt().BindingSHA256 != hash || len(v.Pages()) != 1 || len(v.Pages()[0]) != 2 {
+		t.Fatal("verified result lost issuance or pages")
+	}
+	copyRequest, copyReceipt, copyPages := v.RequestBytes(), v.Receipt(), v.Pages()
+	copyRequest[0] = 'x'
+	copyReceipt.Binding.Profiles[0].ProfileID = "changed"
+	copyPages[0][0].Items[0].Decision = "changed"
+	if string(v.RequestBytes()) != string(requestBytes) || v.Receipt().Binding.Profiles[0].ProfileID != b.Profiles[0].ProfileID || v.Pages()[0][0].Items[0].Decision != page.Items[0].Decision {
+		t.Fatal("accessor changed verified result")
+	}
+	for _, m := range []string{"incomplete", "page", "expired", "stale", "superseded"} {
+		mode = m
+		if result, e := verified(); e == nil || result.Unexpired(time.Now()) {
+			t.Fatalf("accepted %s", m)
+		}
+	}
+	for modeName, want := range map[string]error{"expired": ErrTypedBindingExpired, "stale": ErrTypedBindingStale, "page": ErrTypedBinding, "multiple-profiles": ErrTypedBindingUnsupported, "page-stale": ErrTypedBindingStale, "issuance-expired": ErrTypedBindingExpired} {
+		mode = modeName
+		if _, e := verified(); !errors.Is(e, want) {
+			t.Fatalf("%s: %v", mode, e)
+		}
+	}
+	mode = "superseded"
+	var supersededErr *TypedBindingSuperseded
+	if _, e := verified(); !errors.As(e, &supersededErr) || supersededErr.Floor.NextIssuedAt != req.IssuedAt+1 {
+		t.Fatalf("superseded floor: %v", e)
+	}
+	mode = "ok"
+	belowFloor := floor
+	belowFloor.NextIssuedAt++
+	floor = belowFloor
+	if result, e := verified(); e != nil || !result.Unexpired(time.Now()) {
+		t.Fatalf("exact receipt replay after the issuance floor advanced: %v", e)
+	}
+	floor.NextIssuedAt--
+	wrongRequest := req
+	wrongRequest.InventoryRevision++
+	if result, e := c.IssueVerifiedTypedBinding(ctx, org, person, b.LibraryID, b.WorkID, b.WindowSHA256, wrongRequest); e == nil || result.Unexpired(time.Now()) {
+		t.Fatal("accepted request with mismatched binding identity")
+	}
 	if _, err = c.TypedBindingFloor(ctx, b.WorkID); err != nil {
 		t.Fatal(err)
 	}
