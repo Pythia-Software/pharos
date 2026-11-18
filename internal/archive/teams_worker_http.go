@@ -53,6 +53,11 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			return e
 		}
 		scope := teamsCredentialScope(d, credential)
+		s.teamsWorker.mu.Lock()
+		if s.teamsWorker.settingsValid && (s.teamsWorker.settings != settings || s.teamsWorker.viewScope != scope) {
+			s.teamsWorker.clearWorkLocked()
+		}
+		s.teamsWorker.mu.Unlock()
 		switch {
 		case r.URL.Path == "/api/teams/worker" && r.Method == http.MethodGet:
 			s.teamsWorker.mu.Lock()
@@ -89,6 +94,11 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			out := make([]row, 0, len(items))
 			for _, item := range items {
+				if workScope != scope || !settings.Enabled {
+					item.State = "offline"
+					item.Payload = nil
+					item.PayloadHash = ""
+				}
 				if item.LabelsScope != scope || !validReaderLabels(item.Work, item.Labels, item.LabelsAt, false) {
 					item.Labels = nil
 					item.LabelsAt = time.Time{}
@@ -312,6 +322,7 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			key := body.WorkID + ":" + body.ConfigHash
 			generation := s.teamsWorker.generation
+			workBinding := s.teamsWorker.workBindings[body.WorkID]
 			if s.teamsWorker.labelFlights == nil {
 				s.teamsWorker.labelFlights = map[string]bool{}
 			}
@@ -348,7 +359,7 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			s.teamsWorker.mu.Lock()
 			current, ok := s.teamsWorker.items[body.WorkID]
-			if ok && s.teamsWorker.scope == scope && s.teamsWorker.generation == generation && r.Context().Err() == nil && current.Work.ConfigSHA256 == body.ConfigHash && current.State == item.State {
+			if ok && s.teamsWorker.scope == scope && s.teamsWorker.generation == generation && s.teamsWorker.workBindings[body.WorkID] == workBinding && r.Context().Err() == nil && current.Work.ConfigSHA256 == body.ConfigHash && current.State == item.State {
 				current.Labels = &labels
 				current.LabelsAt = now
 				current.LabelsScope = scope
@@ -375,9 +386,10 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			s.teamsWorker.mu.Lock()
 			item, ok := s.teamsWorker.items[body.WorkID]
 			series := ok && teamsHasSeriesConfig(item.Work.Config)
-			tokenOK := ok && settings.Enabled && s.teamsWorker.scope == scope && body.LabelsToken != "" && body.LabelsToken == teamsReaderLabelToken(item, scope, s.teamsWorker.generation)
+			live := ok && settings.Enabled && s.teamsWorker.scope == scope
+			tokenOK := live && body.LabelsToken != "" && body.LabelsToken == teamsReaderLabelToken(item, scope, s.teamsWorker.generation)
 			s.teamsWorker.mu.Unlock()
-			if !ok || item.State != "awaiting_source_consent" {
+			if !live || item.State != "awaiting_source_consent" {
 				return errTeamsConsentStale
 			}
 			if !validTeamsSeriesReview(item.Work.Config, item.Work.ConfigSHA256, body.ConfigHash) || (series && !tokenOK) {
@@ -406,8 +418,12 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			s.teamsWorker.mu.Lock()
 			item, ok := s.teamsWorker.items[body.WorkID]
 			series := (ok && teamsHasSeriesConfig(item.Work.Config)) || (draftErr == nil && teamsHasSeriesConfig(draft.Config))
-			tokenOK := ok && item.State == "awaiting_review" && settings.Enabled && s.teamsWorker.scope == scope && body.LabelsToken != "" && body.LabelsToken == teamsReaderLabelToken(item, scope, s.teamsWorker.generation)
+			live := ok && item.State == "awaiting_review" && settings.Enabled && s.teamsWorker.scope == scope
+			tokenOK := live && body.LabelsToken != "" && body.LabelsToken == teamsReaderLabelToken(item, scope, s.teamsWorker.generation)
 			s.teamsWorker.mu.Unlock()
+			if !live {
+				return errTeamsConsentStale
+			}
 			if series && (!ok || draftErr != nil || !bytes.Equal(draft.Config, item.Work.Config) || !validTeamsSeriesReview(item.Work.Config, item.Work.ConfigSHA256, body.ConfigHash) || !tokenOK) {
 				return errTeamsConsentStale
 			}
@@ -434,8 +450,10 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			s.teamsWorker.mu.Lock()
 			item, ok := s.teamsWorker.items[body.WorkID]
+			binding := s.teamsWorker.workBindings[body.WorkID]
+			valid := s.teamsWorker.scope == scope && settings.Enabled
 			s.teamsWorker.mu.Unlock()
-			if !ok || (item.State != "awaiting_source_consent" && item.State != "awaiting_model_permission" && item.State != "awaiting_review" && item.State != "decline_pending" && item.State != "started" && item.State != "unconfirmed" && item.State != "source_safety_waiting") {
+			if !valid || !ok || (item.State != "awaiting_source_consent" && item.State != "awaiting_model_permission" && item.State != "awaiting_review" && item.State != "decline_pending" && item.State != "started" && item.State != "unconfirmed" && item.State != "source_safety_waiting") {
 				return errTeamsConsentStale
 			}
 			lease, e := s.Catalog.teamsSharingLease()
@@ -480,8 +498,10 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 				return e
 			}
 			s.teamsWorker.mu.Lock()
-			item.State = "decline_pending"
-			s.teamsWorker.items[body.WorkID] = item
+			if current, ok := s.teamsWorker.items[body.WorkID]; ok && s.teamsWorker.scope == scope && s.teamsWorker.workBindings[body.WorkID] == binding {
+				current.State = "decline_pending"
+				s.teamsWorker.items[body.WorkID] = current
+			}
 			s.teamsWorker.mu.Unlock()
 			manifest := teamsWorkerCapabilities()
 			if !teamsNumericBuildEligible(manifest) {
@@ -499,8 +519,10 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 				return e
 			}
 			s.teamsWorker.mu.Lock()
-			item.State = "declined"
-			s.teamsWorker.items[body.WorkID] = item
+			if current, ok := s.teamsWorker.items[body.WorkID]; ok && s.teamsWorker.scope == scope && s.teamsWorker.workBindings[body.WorkID] == binding {
+				current.State = "declined"
+				s.teamsWorker.items[body.WorkID] = current
+			}
 			s.teamsWorker.mu.Unlock()
 			writeJSON(w, map[string]bool{"declined": true}, 200)
 			return nil
