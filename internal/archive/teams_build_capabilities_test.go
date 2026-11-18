@@ -40,6 +40,9 @@ func TestManualSeriesAdvertisementUsesReleaseVersion(t *testing.T) {
 				t.Fatal("ordinary or source-aware capability declaration changed")
 			}
 			want := []string{"reader_labels_v1", "report_deterministic_v2"}
+			if teamsChannelReportPilotEnabled {
+				want = append(want, teamsChannelReportFeature)
+			}
 			if tc.enabled && !slices.Equal(m.V2OnlyFeatures, want) {
 				t.Fatalf("missing v2 presentation and report features: %v", m.V2OnlyFeatures)
 			}
