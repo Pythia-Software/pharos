@@ -83,6 +83,9 @@ func (c *Catalog) stageTeamsV2Result(ctx context.Context, cfg Config, d LibraryD
 	}
 	defer lease.Close()
 	err = c.writeTransaction(ctx, "teams-v2-stage-result", func(tx *sql.Tx) error {
+		if e := teamsNumericNotDeclined(ctx, tx, registration.Work.ID); e != nil {
+			return e
+		}
 		u, e := readTeamsV2Upload(ctx, tx, registration.Work.ID)
 		if e != nil {
 			return e

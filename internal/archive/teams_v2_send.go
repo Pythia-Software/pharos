@@ -39,6 +39,10 @@ func (c *Catalog) sendTeamsV2Approved(ctx context.Context, cfg Config, client *t
 		return empty, err
 	}
 	defer lease.Close()
+	declinedErr := teamsNumericNotDeclined(ctx, c.reader(), workID)
+	if declinedErr != nil && !errors.Is(declinedErr, errTeamsConsentStale) {
+		return empty, declinedErr
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	u, err := readTeamsV2Upload(ctx, c.reader(), workID)
@@ -61,10 +65,13 @@ func (c *Catalog) sendTeamsV2Approved(ctx context.Context, cfg Config, client *t
 			c.markTeamsV2Outcome(workID, "unconfirmed")
 			return empty, e
 		}
+		if declinedErr != nil {
+			return empty, declinedErr
+		}
 		if draft.State == "accepted" || !teamsReceiptDefinitelyAbsent(e) {
 			return empty, e
 		}
-	} else if draft.State != "approved" {
+	} else if declinedErr != nil || draft.State != "approved" {
 		return empty, errTeamsConsentStale
 	}
 	var savedBinding teams.SourceBinding
