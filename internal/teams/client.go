@@ -315,7 +315,7 @@ func (c *DeviceClient) Poll(ctx context.Context, in PollRequest) (PollResponse, 
 	if in.CapabilityManifest != nil {
 		previous := ""
 		for _, id := range in.CapabilityManifest.V2OnlyFeatures {
-			if (id != "reader_labels_v1" && id != "report_automatic_metrics_v1" && id != "report_deterministic_v2" && id != "source_protection_v1" && id != "source_recovery_v1") || id <= previous {
+			if (id != "reader_labels_v1" && id != "report_automatic_metrics_v1" && id != "report_deterministic_v2" && id != "report_slack_channel_v1" && id != "source_protection_v1" && id != "source_recovery_v1") || id <= previous {
 				return out, errors.New("invalid v2-only capability")
 			}
 			previous = id

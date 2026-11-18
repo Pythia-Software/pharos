@@ -598,6 +598,100 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("matching series review was rejected: %d %s", rec.Code, rec.Body.String())
 	}
+	// Exercise both real local review handlers with the distinct channel arm.
+	override(t, &teamsChannelReportPilotEnabled, true)
+	var channelConfig map[string]json.RawMessage
+	if err = json.Unmarshal(seriesConfig, &channelConfig); err != nil {
+		t.Fatal(err)
+	}
+	channelArm, err := os.ReadFile("testdata/channel_report.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	channelConfig["publication_v2"] = channelArm
+	channelRaw, err := json.Marshal(channelConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	channelHash := teamsPayloadHash(channelRaw)
+	if _, err = c.DB.Exec(`UPDATE teams_v2_results SET config=?,state='awaiting_review' WHERE work_id=?`, channelRaw, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.DB.Exec(`UPDATE teams_v2_uploads SET config_sha256=? WHERE work_id=?`, channelHash, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	channelWork := w
+	channelWork.Config, channelWork.ConfigSHA256 = channelRaw, channelHash
+	currentSettings, err = readTeamsSettings(ctx, c.reader())
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewGen, err = readCacheGenerations(ctx, c.reader())
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewKey, err = service.teamsWorkViewBinding(ctx, teamsCredentialScope(d, credential), channelWork, currentSettings, viewSource, viewPrivacy, viewGen.all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.teamsWorker.mu.Lock()
+	item = service.teamsWorker.items[w.ID]
+	item.Work = channelWork
+	item.State = "awaiting_source_consent"
+	item.Labels = &teams.ReaderLabels{Version: 1, ConfigSHA256: channelHash, Entries: []teams.ReaderLabel{{PersonID: "0c000000-0000-4000-8000-000000000001", Status: "active", DisplayName: "Synthetic"}}}
+	item.LabelsAt = time.Now()
+	item.LabelsScope = teamsCredentialScope(d, credential)
+	service.teamsWorker.scope = item.LabelsScope
+	service.teamsWorker.items[w.ID] = item
+	service.teamsWorker.bindings[w.ID] = viewKey
+	token = teamsReaderLabelToken(item, item.LabelsScope, service.teamsWorker.generation)
+	service.teamsWorker.mu.Unlock()
+	if token == "" {
+		t.Fatal("channel collection labels unavailable")
+	}
+	badBody, _ := json.Marshal(map[string]any{"workId": w.ID, "settingsRevision": currentSettings.SettingsRevision, "configHash": strings.Repeat("0", 64), "labelsToken": token})
+	badRec := httptest.NewRecorder()
+	service.teamsWorkerHTTP(badRec, httptest.NewRequest(http.MethodPost, "/api/teams/worker/allow-source", bytes.NewReader(badBody)))
+	if badRec.Code != http.StatusConflict {
+		t.Fatal("channel source review accepted a changed config")
+	}
+	body, _ = json.Marshal(map[string]any{"workId": w.ID, "settingsRevision": currentSettings.SettingsRevision, "configHash": channelHash, "labelsToken": token})
+	rec = httptest.NewRecorder()
+	service.teamsWorkerHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/teams/worker/allow-source", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("channel source review: %d %s", rec.Code, rec.Body.String())
+	}
+	currentSettings, err = readTeamsSettings(ctx, c.reader())
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewGen, err = readCacheGenerations(ctx, c.reader())
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewKey, err = service.teamsWorkViewBinding(ctx, teamsCredentialScope(d, credential), channelWork, currentSettings, viewSource, viewPrivacy, viewGen.all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.teamsWorker.mu.Lock()
+	item = service.teamsWorker.items[w.ID]
+	item.State = "awaiting_review"
+	service.teamsWorker.items[w.ID] = item
+	service.teamsWorker.bindings[w.ID] = viewKey
+	token = teamsReaderLabelToken(item, item.LabelsScope, service.teamsWorker.generation)
+	service.teamsWorker.mu.Unlock()
+	badBody, _ = json.Marshal(map[string]any{"workId": w.ID, "payloadHash": draft.PayloadHash, "configHash": strings.Repeat("0", 64), "labelsToken": token})
+	badRec = httptest.NewRecorder()
+	service.teamsWorkerHTTP(badRec, httptest.NewRequest(http.MethodPost, "/api/teams/worker/approve-result", bytes.NewReader(badBody)))
+	if badRec.Code != http.StatusConflict {
+		t.Fatal("channel result review accepted a changed config")
+	}
+	body, _ = json.Marshal(map[string]any{"workId": w.ID, "payloadHash": draft.PayloadHash, "configHash": channelHash, "labelsToken": token})
+	rec = httptest.NewRecorder()
+	service.teamsWorkerHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/teams/worker/approve-result", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("channel result review: %d %s", rec.Code, rec.Body.String())
+	}
 	if _, err = c.DB.Exec(`UPDATE teams_v2_results SET config=?,state='accepted' WHERE work_id=?`, config, w.ID); err != nil {
 		t.Fatal(err)
 	}

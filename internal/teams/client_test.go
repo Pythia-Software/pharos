@@ -362,3 +362,50 @@ func TestPollDropsScheduledAssignmentOnContentAndDifferentWork(t *testing.T) {
 		}
 	}
 }
+
+func TestChannelFeatureUsesSignedV2CarrierOnly(t *testing.T) {
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "a4c09e42-d0a6-45f0-89ef-2a03b7cff630"
+	seen := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		message, e := signedMessage(id, r.Method, r.URL.EscapedPath(), r.Header.Get("X-Pharos-Timestamp"), r.Header.Get("X-Pharos-Nonce"), raw)
+		signature, e2 := base64.RawURLEncoding.DecodeString(r.Header.Get("X-Pharos-Signature"))
+		if e != nil || e2 != nil || !ed25519.Verify(key.Public().(ed25519.PublicKey), []byte(message), signature) {
+			t.Error("invalid signed request")
+		}
+		switch r.URL.Path {
+		case "/v1/device/capabilities":
+			json.NewEncoder(w).Encode(map[string]any{"manifest_schema_versions": []int{1, 2}})
+		case "/v1/device/poll":
+			var body struct {
+				Manifest CapabilityManifest `json:"capability_manifest"`
+			}
+			if json.Unmarshal(raw, &body) != nil {
+				t.Error("invalid poll")
+			}
+			if body.Manifest.SchemaVersion != 2 || !slices.Contains(body.Manifest.Features, "report_slack_channel_v1") {
+				t.Error("channel feature not negotiated on v2")
+			}
+			seen = true
+			json.NewEncoder(w).Encode(PollResponse{Work: []Work{}, Cancellations: []Cancellation{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	client, err := NewDeviceClient(srv.URL, id, key, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := PollRequest{AppVersion: "0.10.0", LibraryIDs: []string{}, CapabilityManifest: &CapabilityManifest{SchemaVersion: 1, AppVersion: "0.10.0", Capabilities: []string{"deterministic_query_v1", "source_snapshot_v2"}, V2OnlyFeatures: []string{"reader_labels_v1", "report_slack_channel_v1"}}}
+	if _, err = client.Poll(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if !seen {
+		t.Fatal("no signed poll")
+	}
+}

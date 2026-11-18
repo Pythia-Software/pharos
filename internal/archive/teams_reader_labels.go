@@ -44,17 +44,25 @@ func validReaderLabels(w teams.Work, labels *teams.ReaderLabels, fetched time.Ti
 				ID string `json:"id"`
 			} `json:"response_readers"`
 		} `json:"audiences"`
-		Publication *teamsReportSeries `json:"publication_v2"`
+		Publication json.RawMessage `json:"publication_v2"`
 	}
-	if json.Unmarshal(w.Config, &config) != nil || config.Publication == nil || len(config.Publication.Descriptors) != 1 {
+	if json.Unmarshal(w.Config, &config) != nil || len(config.Publication) == 0 {
 		return false
 	}
 	ids := map[string]bool{}
 	for _, r := range config.Audiences.ResponseReaders {
 		ids[r.ID] = true
 	}
-	for _, r := range config.Publication.Descriptors[0].Readers {
-		ids[r.ID] = true
+	if _, err := parseTeamsChannelReportPublication(config.Publication); err == nil && teamsChannelReportPilotEnabled {
+		// Channel membership is a report audience, never a person label.
+	} else {
+		var series teamsReportSeries
+		if json.Unmarshal(config.Publication, &series) != nil || len(series.Descriptors) != 1 {
+			return false
+		}
+		for _, r := range series.Descriptors[0].Readers {
+			ids[r.ID] = true
+		}
 	}
 	keys := make([]string, 0, len(ids))
 	for id := range ids {

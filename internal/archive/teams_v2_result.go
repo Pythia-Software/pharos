@@ -232,5 +232,12 @@ func validTeamsSeriesReview(config []byte, boundHash, displayedHash string) bool
 		return false
 	}
 	_, err := parseTeamsReportSeries(raw)
+	if err == nil {
+		return true
+	}
+	if !teamsChannelReportPilotEnabled {
+		return false
+	}
+	_, err = parseTeamsChannelReportPublication(raw)
 	return err == nil
 }

@@ -99,8 +99,14 @@ func teamsNumericWorkEligible(w teams.Work, m teamsCapabilityManifest) bool {
 	if len(c.ScheduleBounds) > 0 {
 		return false
 	}
-	if len(c.PublicationV2) > 0 && (!teamsBuildEligible(m, "report_deterministic_v2") || p.Key != "once") {
-		return false
+	if len(c.PublicationV2) > 0 {
+		if _, err := parseTeamsChannelReportPublication(c.PublicationV2); err == nil {
+			if !teamsChannelReportPilotEnabled || !teamsBuildEligible(m, teamsChannelReportFeature) || !teamsBuildEligible(m, "reader_labels_v1") || p.Key != "once" {
+				return false
+			}
+		} else if !teamsBuildEligible(m, "report_deterministic_v2") || p.Key != "once" {
+			return false
+		}
 	}
 	if len(c.Audiences.Publications) > 0 && !teamsBuildEligible(m, "report_deterministic_v1") {
 		return false

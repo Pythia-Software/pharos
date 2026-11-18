@@ -31,6 +31,10 @@ func teamsChannelDecode(raw []byte, out any) bool {
 
 const teamsChannelReportFeature = "report_slack_channel_v1"
 
+// This is only set by synthetic integration tests until the full channel
+// publication and delivery path is reviewed and explicitly enabled.
+var teamsChannelReportPilotEnabled = teamsChannelReportPilotBuild
+
 // teamsChannelTarget binds a report to a single installation and visibility class.
 // Names can change and are never used to decide access.
 type teamsChannelTarget struct {
