@@ -150,6 +150,11 @@ func (c *DeviceClient) IssueTypedBinding(ctx context.Context, orgID, personID, l
 
 // TypedAssignments returns a complete verified profile chain, never a prefix.
 func (c *DeviceClient) TypedAssignments(ctx context.Context, workID string, receipt TypedBindingReceipt, profileID string, profileVersion int) ([]sourcewire.TypedAssignmentPage, error) {
+	totalBytes := 0
+	return c.typedAssignments(ctx, workID, receipt, profileID, profileVersion, &totalBytes)
+}
+
+func (c *DeviceClient) typedAssignments(ctx context.Context, workID string, receipt TypedBindingReceipt, profileID string, profileVersion int, totalBytes *int) ([]sourcewire.TypedAssignmentPage, error) {
 	b := receipt.Binding
 	if !validDeviceID(workID) || receipt.Status != "issued" || b == nil || b.WorkID != workID || b.InstallationID != c.installation || receipt.EligibilityGeneration == nil || *receipt.EligibilityGeneration < 0 || receipt.ValidUntil == nil || receipt.ValidUntil.IsZero() || receipt.Floor != nil {
 		return nil, errTypedBinding
@@ -169,15 +174,14 @@ func (c *DeviceClient) TypedAssignments(ctx context.Context, workID string, rece
 		return nil, errTypedBinding
 	}
 	pages := make([]sourcewire.TypedAssignmentPage, 0, ref.AssignmentPageCount)
-	totalBytes := 0
 	for i := 0; i < ref.AssignmentPageCount; i++ {
 		path := fmt.Sprintf("/v1/device/work/%s/typed-source-bindings/%s/profiles/%s/%d/assignments/%d", workID, b.BindingID, profileID, profileVersion, i)
 		var raw json.RawMessage
 		if err := c.exchange(ctx, http.MethodGet, path, nil, &raw); err != nil {
 			return nil, err
 		}
-		totalBytes += len(raw)
-		if totalBytes > 8<<20 {
+		*totalBytes += len(raw)
+		if *totalBytes > 8<<20 {
 			return nil, errTypedBinding
 		}
 		var page sourcewire.TypedAssignmentPage
@@ -190,4 +194,87 @@ func (c *DeviceClient) TypedAssignments(ctx context.Context, workID string, rece
 		return nil, errTypedBinding
 	}
 	return pages, nil
+}
+
+// VerifiedTypedBinding is an issuance and all of its verified assignment chains.
+// Its zero value is invalid. Its accessors return independent copies.
+type VerifiedTypedBinding struct {
+	request []byte
+	receipt []byte
+	pages   [][]sourcewire.TypedAssignmentPage
+}
+
+// Valid reports whether the verified issuance remains usable at now.
+func (v VerifiedTypedBinding) Valid(now time.Time) bool {
+	if len(v.request) == 0 || len(v.receipt) == 0 || v.pages == nil {
+		return false
+	}
+	var receipt TypedBindingReceipt
+	return json.Unmarshal(v.receipt, &receipt) == nil && receipt.Status == "issued" && receipt.ValidUntil != nil && now.Before(*receipt.ValidUntil)
+}
+
+// RequestBytes returns the exact bytes signed for issuance.
+func (v VerifiedTypedBinding) RequestBytes() []byte { return bytes.Clone(v.request) }
+
+// Receipt returns a copy of the validated issuance, including its canonical binding hash.
+func (v VerifiedTypedBinding) Receipt() TypedBindingReceipt {
+	var receipt TypedBindingReceipt
+	_ = json.Unmarshal(v.receipt, &receipt)
+	return receipt
+}
+
+// Pages returns the verified chains in the order of the receipt's profiles.
+func (v VerifiedTypedBinding) Pages() [][]sourcewire.TypedAssignmentPage {
+	if v.pages == nil {
+		return nil
+	}
+	raw, _ := json.Marshal(v.pages)
+	var pages [][]sourcewire.TypedAssignmentPage
+	_ = json.Unmarshal(raw, &pages)
+	return pages
+}
+
+// IssueVerifiedTypedBinding obtains a fresh issuance and every committed profile
+// chain from this device's signed endpoints. A stale, superseded, expired, or
+// incomplete issuance never produces a verified result.
+func (c *DeviceClient) IssueVerifiedTypedBinding(ctx context.Context, orgID, personID, libraryID, workID, windowSHA256 string, request sourcewire.TypedBindingRequest) (VerifiedTypedBinding, error) {
+	var zero VerifiedTypedBinding
+	if c == nil {
+		return zero, errTypedBinding
+	}
+	floor, err := c.TypedBindingFloor(ctx, workID)
+	if err != nil {
+		return zero, err
+	}
+	if request.IssuedAt < floor.NextIssuedAt || (floor.RetryAt != nil && time.Now().Before(*floor.RetryAt)) {
+		return zero, errTypedBinding
+	}
+	receipt, err := c.IssueTypedBinding(ctx, orgID, personID, libraryID, workID, windowSHA256, request)
+	if err != nil {
+		return zero, err
+	}
+	if receipt.Status != "issued" || receipt.ValidUntil == nil || !time.Now().Before(*receipt.ValidUntil) {
+		return zero, errTypedBinding
+	}
+	pages := make([][]sourcewire.TypedAssignmentPage, 0, len(receipt.Binding.Profiles))
+	totalBytes := 0
+	for _, profile := range receipt.Binding.Profiles {
+		chain, err := c.typedAssignments(ctx, workID, receipt, profile.ProfileID, profile.ProfileVersion, &totalBytes)
+		if err != nil {
+			return zero, err
+		}
+		pages = append(pages, chain)
+	}
+	if !time.Now().Before(*receipt.ValidUntil) {
+		return zero, errTypedBinding
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		return zero, err
+	}
+	raw, err := json.Marshal(receipt)
+	if err != nil {
+		return zero, err
+	}
+	return VerifiedTypedBinding{request: body, receipt: raw, pages: pages}, nil
 }

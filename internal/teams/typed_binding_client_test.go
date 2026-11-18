@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,16 +66,18 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 	second.BindingSHA256 = hash
 	gen := int64(1)
 	until := time.Now().UTC().Add(time.Hour)
-	floor := TypedBindingFloor{ServerTime: time.Now().UTC(), NextIssuedAt: time.Now().Unix() + 1}
+	floor := TypedBindingFloor{ServerTime: time.Unix(req.IssuedAt, 0).UTC(), NextIssuedAt: req.IssuedAt}
 	receipt := TypedBindingReceipt{Status: "issued", Binding: &b, BindingSHA256: hash, EligibilityGeneration: &gen, ValidUntil: &until}
 	mode := "ok"
 	seen := map[string]bool{}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		nonce := r.Header.Get("X-Pharos-Nonce")
+		timestamp, tsErr := strconv.ParseInt(r.Header.Get("X-Pharos-Timestamp"), 10, 64)
+		nonceBytes, nonceErr := base64.RawURLEncoding.DecodeString(nonce)
 		msg, e := signedMessage(b.InstallationID, r.Method, r.URL.EscapedPath(), r.Header.Get("X-Pharos-Timestamp"), nonce, body)
 		sig, e2 := base64.RawURLEncoding.DecodeString(r.Header.Get("X-Pharos-Signature"))
-		if e != nil || e2 != nil || seen[nonce] || r.Header.Get("X-Pharos-Installation") != b.InstallationID || !ed25519.Verify(pub, []byte(msg), sig) {
+		if e != nil || e2 != nil || tsErr != nil || time.Since(time.Unix(timestamp, 0)).Abs() > time.Minute || nonceErr != nil || len(nonceBytes) != 16 || seen[nonce] || r.Header.Get("X-Pharos-Installation") != b.InstallationID || !ed25519.Verify(pub, []byte(msg), sig) {
 			t.Error("invalid signed request")
 		}
 		seen[nonce] = true
@@ -91,7 +94,9 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 			case "old":
 				http.NotFound(w, r)
 			case "superseded":
-				json.NewEncoder(w).Encode(TypedBindingReceipt{Status: "superseded", Floor: &floor})
+				next := floor
+				next.NextIssuedAt++
+				json.NewEncoder(w).Encode(TypedBindingReceipt{Status: "superseded", Floor: &next})
 			case "stale":
 				x := receipt
 				x.Status = "stale"
@@ -114,6 +119,11 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 				expiry := time.Unix(req.IssuedAt, 0).Add(-sourcewire.RecoveryFutureSkew)
 				v.ValidUntil = &expiry
 				json.NewEncoder(w).Encode(v)
+			case "expired":
+				v := receipt
+				expiry := time.Now().Add(-time.Second)
+				v.ValidUntil = &expiry
+				json.NewEncoder(w).Encode(v)
 			case "digest":
 				v := receipt
 				v.BindingSHA256 = strings.Repeat("a", 64)
@@ -124,6 +134,10 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, base+"/"+b.BindingID+"/profiles/"+b.Profiles[0].ProfileID+"/1/assignments/"):
 			p := page
 			if strings.HasSuffix(r.URL.Path, "/1") {
+				if mode == "incomplete" {
+					http.NotFound(w, r)
+					return
+				}
 				p = second
 				if mode == "page" {
 					wrong := strings.Repeat("a", 64)
@@ -158,6 +172,46 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 		c.http.Transport = typedTestTransport{handler}
 	}
 	ctx := context.Background()
+	verified := func() (VerifiedTypedBinding, error) {
+		return c.IssueVerifiedTypedBinding(ctx, org, person, b.LibraryID, b.WorkID, b.WindowSHA256, req)
+	}
+	if (VerifiedTypedBinding{}).Valid(time.Now()) {
+		t.Fatal("zero result is valid")
+	}
+	v, err := verified()
+	if err != nil || !v.Valid(time.Now()) || v.Valid(until) {
+		t.Fatalf("verified issuance: %v", err)
+	}
+	requestBytes, _ := json.Marshal(req)
+	if string(v.RequestBytes()) != string(requestBytes) || v.Receipt().BindingSHA256 != hash || len(v.Pages()) != 1 || len(v.Pages()[0]) != 2 {
+		t.Fatal("verified result lost issuance or pages")
+	}
+	copyRequest, copyReceipt, copyPages := v.RequestBytes(), v.Receipt(), v.Pages()
+	copyRequest[0] = 'x'
+	copyReceipt.Binding.Profiles[0].ProfileID = "changed"
+	copyPages[0][0].Items[0].Decision = "changed"
+	if string(v.RequestBytes()) != string(requestBytes) || v.Receipt().Binding.Profiles[0].ProfileID != b.Profiles[0].ProfileID || v.Pages()[0][0].Items[0].Decision != page.Items[0].Decision {
+		t.Fatal("accessor changed verified result")
+	}
+	for _, m := range []string{"incomplete", "page", "expired", "stale", "superseded"} {
+		mode = m
+		if result, e := verified(); e == nil || result.Valid(time.Now()) {
+			t.Fatalf("accepted %s", m)
+		}
+	}
+	mode = "ok"
+	belowFloor := floor
+	belowFloor.NextIssuedAt++
+	floor = belowFloor
+	if result, e := verified(); e == nil || result.Valid(time.Now()) {
+		t.Fatal("accepted request below issuance floor")
+	}
+	floor.NextIssuedAt--
+	wrongRequest := req
+	wrongRequest.InventoryRevision++
+	if result, e := c.IssueVerifiedTypedBinding(ctx, org, person, b.LibraryID, b.WorkID, b.WindowSHA256, wrongRequest); e == nil || result.Valid(time.Now()) {
+		t.Fatal("accepted request with mismatched binding identity")
+	}
 	if _, err = c.TypedBindingFloor(ctx, b.WorkID); err != nil {
 		t.Fatal(err)
 	}
