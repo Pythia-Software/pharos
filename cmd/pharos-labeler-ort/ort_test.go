@@ -74,13 +74,14 @@ func kestrelHello(t *testing.T, dir string) labeler.Hello {
 		t.Fatal(err)
 	}
 	var manifest struct {
-		SHA256 map[string]string `json:"sha256"`
+		SHA256 map[string]string   `json:"sha256"`
+		Inputs []labeler.InputSpec `json:"inputs"`
 	}
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		t.Fatal(err)
 	}
 	return labeler.Hello{Protocol: []int{1}, Model: filepath.Join(dir, "model.int8.onnx"), ModelSHA256: manifest.SHA256["model.int8.onnx"],
-		Threads: 4, VocabSize: 50368, MaxBatch: 32, MaxSeq: 512}
+		Inputs: manifest.Inputs, Threads: 4, VocabSize: 50368, MaxBatch: 32, MaxSeq: 512}
 }
 
 func TestORTParity(t *testing.T) {
@@ -241,6 +242,28 @@ func TestORTWorkerProcess(t *testing.T) {
 			long = append(long, c.InputIDs)
 		}
 	}
+
+	t.Run("telemetry stays off", func(t *testing.T) {
+		// An inherited "0" must not turn it back on. The runtime keeps its device
+		// identifier and upload queue under the home directory.
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("CFFIXED_USER_HOME", home)
+		t.Setenv(runtimeTelemetryEnv, "0")
+		h, cmd := start(t, library)
+		h.sendJSON(labeler.FrameHello, kestrelHello(t, dir))
+		if kind, payload := h.recv(); kind != labeler.FrameReady {
+			t.Fatalf("frame %q %s", kind, payload)
+		}
+		h.in.Close()
+		waitExit(t, cmd)
+		filepath.WalkDir(home, func(path string, entry os.DirEntry, err error) error {
+			if err == nil && entry.Name() == ".onnxruntime" {
+				t.Errorf("the runtime created %s", path)
+			}
+			return err
+		})
+	})
 
 	t.Run("serves", func(t *testing.T) {
 		h, cmd := start(t, library)
