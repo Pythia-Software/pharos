@@ -17,9 +17,9 @@ import (
 )
 
 type teamsBirthStage struct {
-	parent, leaf, stage, catalog int
-	stageName, leafName          string
-	dirStat, catalogStat         unix.Stat_t
+	parent, stage, catalog int
+	stageName, leafName    string
+	dirStat, catalogStat   unix.Stat_t
 }
 
 func (s *teamsBirthStage) close() {

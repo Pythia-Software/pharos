@@ -81,6 +81,25 @@ func TestTeamsCreateManagedLibrary(t *testing.T) {
 	if err != nil || host.Phase != "current" || *host.Current != *reservation.Tuple {
 		t.Fatalf("host checkpoint: %v", err)
 	}
+	// Model a crash after host finalization and before reservation CAS. The
+	// exact installed catalog can finish without minting another identity.
+	reservationKey := teamsBirthReservationName(appID, filepath.Dir(cfg.Path))
+	committedBytes, _, err := teamsReadBirthReservation(store, reservationKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interrupted := reservation
+	interrupted.Phase = "image_bound"
+	interruptedBytes, err := teamsEncodeBirthReservation(interrupted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Replace(reservationKey, committedBytes, interruptedBytes); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = teamsCreateManagedLibrary(context.Background(), cfg.Application, target, "Fresh"); err != nil {
+		t.Fatalf("finalization retry: %v", err)
+	}
 	catalog, found, err := teamsOpenManagedCatalog(context.Background(), cfg)
 	if err != nil || !found {
 		t.Fatalf("managed restart: %v", err)
