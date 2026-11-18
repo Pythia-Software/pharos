@@ -162,9 +162,9 @@ func testTeamsReportSyntheticPostgres(t *testing.T, series bool) {
 		PublicationID string `json:"publication_id"`
 	}
 	control("/_test/send-report", map[string]string{"library_id": library}, &issued)
-	manifest := teams.CapabilityManifest{SchemaVersion: 1, AppVersion: "0.10.0", Capabilities: []string{"deterministic_query_v1", "report_deterministic_v1", "source_snapshot_v2"}}
+	override(t, &pushVersion, "0.10.0")
+	manifest := teamsBuildCapabilities()
 	if series {
-		manifest.V2OnlyFeatures = []string{"reader_labels_v1", "report_deterministic_v2"}
 		old := manifest
 		old.V2OnlyFeatures = []string{"report_deterministic_v2"}
 		legacy, e := client.Poll(ctx, teams.PollRequest{AppVersion: old.AppVersion, LibraryIDs: []string{library}, CapabilityManifest: &old})
@@ -216,7 +216,6 @@ func testTeamsReportSyntheticPostgres(t *testing.T, series bool) {
 		}
 	}
 
-	override(t, &teamsWorkerCapabilities, func() teamsCapabilityManifest { return manifest })
 	override(t, &teamsLoadSourceConfig, func(string) (Config, error) { return cfg, nil })
 	service := testServer(t, cfg, c)
 	settings, err = readTeamsSettings(ctx, c.reader())

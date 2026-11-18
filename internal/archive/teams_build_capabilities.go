@@ -9,13 +9,9 @@ type teamsCapabilityManifest = teams.CapabilityManifest
 
 const teamsFeatureBuildMinimum = "0.10.0"
 
-// Keep advertisement off until the matched service release and signed
-// two-contributor publication path have passed end-to-end verification.
-const teamsManualReportSeriesReady = false
-
 func teamsBuildCapabilities() teamsCapabilityManifest {
 	m := teamsCapabilityManifest{SchemaVersion: 1, AppVersion: pushVersion, Capabilities: []string{"deterministic_query_v1", "export_deterministic_v1", "recurring_deterministic_v1", "report_deterministic_v1", "scoped_artifact_v1", "source_snapshot_v2"}}
-	if teamsManualReportSeriesReady {
+	if teamsVersionAtLeast(pushVersion, teamsFeatureBuildMinimum) {
 		m.V2OnlyFeatures = []string{"reader_labels_v1", "report_deterministic_v2"}
 	}
 	return m
