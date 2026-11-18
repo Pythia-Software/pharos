@@ -110,6 +110,11 @@ func decodePollResponse(raw []byte, out *PollResponse) error {
 	return nil
 }
 
+// ErrInvalidDeviceResponse distinguishes authenticated malformed data from a
+// transport failure, so durable recovery journals can park instead of spin.
+var ErrInvalidDeviceResponse = errors.New("invalid Teams response")
+var ErrDeviceResponseTooLarge = errors.New("Teams response exceeds size limit")
+
 type HTTPError struct {
 	Status int
 	Code   string
@@ -140,7 +145,7 @@ func (c *DeviceClient) exchange(ctx context.Context, method, path string, body [
 		return err
 	}
 	if len(data) > maxDeviceBody {
-		return errors.New("Teams response exceeds size limit")
+		return ErrDeviceResponseTooLarge
 	}
 	if r.StatusCode < 200 || r.StatusCode >= 300 {
 		var e struct {
@@ -167,7 +172,7 @@ func (c *DeviceClient) exchange(ctx context.Context, method, path string, body [
 		return decodePollResponse(data, poll)
 	}
 	if !validUniqueJSON(data) {
-		return errors.New("invalid Teams response")
+		return ErrInvalidDeviceResponse
 	}
 	if _, ok := out.(*ReaderLabels); ok {
 		d := json.NewDecoder(bytes.NewReader(data))
@@ -178,7 +183,7 @@ func (c *DeviceClient) exchange(ctx context.Context, method, path string, body [
 		return nil
 	}
 	if err = json.Unmarshal(data, out); err != nil {
-		return errors.New("invalid Teams response")
+		return ErrInvalidDeviceResponse
 	}
 	return nil
 }
@@ -291,7 +296,7 @@ func (c *DeviceClient) Poll(ctx context.Context, in PollRequest) (PollResponse, 
 	if in.CapabilityManifest != nil {
 		previous := ""
 		for _, id := range in.CapabilityManifest.V2OnlyFeatures {
-			if (id != "reader_labels_v1" && id != "report_deterministic_v2") || id <= previous {
+			if (id != "reader_labels_v1" && id != "report_deterministic_v2" && id != "source_protection_v1" && id != "source_recovery_v1") || id <= previous {
 				return out, errors.New("invalid v2-only capability")
 			}
 			previous = id
@@ -392,6 +397,7 @@ func (c *DeviceClient) Poll(ctx context.Context, in PollRequest) (PollResponse, 
 		filtered = append(filtered, w)
 	}
 	out.Work = filtered
+	out.NegotiatedManifestV2 = v2
 	return out, nil
 }
 func (c *DeviceClient) RegisterSources(ctx context.Context, workID string, m Manifest) (SourcesResponse, error) {

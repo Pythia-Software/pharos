@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"github.com/gbdubs/pharos/internal/teams"
 	"net/http"
 	"path/filepath"
@@ -127,6 +128,16 @@ func TestTeamsProtectionPolicyLocalSettingsAction(t *testing.T) {
 	}
 	if n := countRows(t, c, `SELECT count(*) FROM teams_protection_baseline WHERE state='held'`); n != 1 {
 		t.Fatal("acknowledgement cleared hold")
+	}
+	transfer, err := readTeamsSourceTransferAcknowledgement(context.Background(), c.reader(), d, credential)
+	if err != nil || transfer {
+		t.Fatalf("local-only acknowledgement granted transfer: %v %v", transfer, err)
+	}
+	if !strings.Contains(teamsSourceTransferDisclosure(credential), credential.Origin) || !strings.Contains(teamsSourceTransferDisclosure(credential), credential.OrgID) {
+		t.Fatal("transfer disclosure omitted exact destination")
+	}
+	if err = c.setTeamsSourceTransferChoice(context.Background(), d, credential, settings.SettingsRevision, true); !errors.Is(err, errTeamsProtectionHeld) {
+		t.Fatalf("format 34 allowed source transfer: %v", err)
 	}
 	if err = c.writeTransaction(context.Background(), "synthetic scope change", func(tx *sql.Tx) error {
 		_, e := tx.Exec(`UPDATE teams_local_settings SET instance_id='different-instance' WHERE id=1`)

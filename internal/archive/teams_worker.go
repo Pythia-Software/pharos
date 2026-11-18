@@ -39,6 +39,7 @@ type teamsWorkerState struct {
 	next                  time.Time
 	checking              bool
 	problem               string
+	sourceProblem         string
 	reconcileAfter        string
 	contentReconcileAfter string
 }
@@ -149,6 +150,7 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 	}
 	s.teamsWorker.checking = true
 	s.teamsWorker.problem = ""
+	s.teamsWorker.sourceProblem = ""
 	s.teamsWorker.mu.Unlock()
 	defer func() { s.teamsWorker.mu.Lock(); s.teamsWorker.checking = false; s.teamsWorker.mu.Unlock() }()
 	var active bool
@@ -310,6 +312,22 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 			s.teamsWorker.mu.Lock()
 			s.teamsWorker.problem = "This Pharos build needs an update before it can process Teams requests."
 			s.teamsWorker.mu.Unlock()
+		}
+		if teamsSourcePilotEnabled {
+			pilotErr := s.Catalog.teamsRunIndependentSourcePilot(ctx, s.Config(), client, d, credential, manifest, poll.NegotiatedManifestV2 && poll.CapabilityStatus != "needs_update")
+			if pilotErr != nil {
+				s.teamsWorker.mu.Lock()
+				if errors.Is(pilotErr, errTeamsPilotMore) {
+					s.teamsWorker.sourceProblem = "Source protection is progressing."
+					active = true
+				} else if errors.Is(pilotErr, errTeamsPilotRetry) {
+					s.teamsWorker.sourceProblem = "Source protection is waiting to retry a connection."
+					active = true
+				} else {
+					s.teamsWorker.sourceProblem = "Source protection is waiting for verified evidence or reconciliation. You can continue using this library."
+				}
+				s.teamsWorker.mu.Unlock()
+			}
 		}
 		count := min(len(sweep), 5)
 		visits := sweep[:count]

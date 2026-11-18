@@ -41,6 +41,13 @@ func (c *DeviceClient) Destroy() {
 	}
 }
 
+// MatchesCredential binds a caller's transport to the exact currently loaded
+// installation and origin. A similarly named installation at another origin
+// or a rotated signing key is a different device authority.
+func (c *DeviceClient) MatchesCredential(credential *EnrollmentCredential) bool {
+	return c != nil && credential != nil && c.origin != nil && c.origin.String() == credential.Origin && c.installation == credential.InstallationID && len(c.key) == ed25519.PrivateKeySize && len(credential.key) == ed25519.PrivateKeySize && bytes.Equal(c.key.Public().(ed25519.PublicKey), credential.key.Public().(ed25519.PublicKey))
+}
+
 func validDeviceID(id string) bool {
 	if len(id) != 36 {
 		return false

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -293,5 +294,56 @@ func TestPollResponseWorkBoundBeforeFiltering(t *testing.T) {
 		if (err != nil) != (count > 200) {
 			t.Fatalf("%d items: %v", count, err)
 		}
+	}
+}
+
+func TestPollSourceCarrierUsesOnlyNegotiatedV2(t *testing.T) {
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v2 := range []bool{false, true} {
+		t.Run(fmt.Sprintf("v2-%t", v2), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/v1/device/capabilities" {
+					versions := []int{1}
+					if v2 {
+						versions = append(versions, 2)
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"manifest_schema_versions": versions})
+					return
+				}
+				var body struct {
+					Manifest struct {
+						SchemaVersion int                 `json:"schema_version"`
+						Features      []string            `json:"features"`
+						Capabilities  []string            `json:"capabilities"`
+						Profiles      []CapabilityProfile `json:"profiles"`
+					} `json:"capability_manifest"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+					return
+				}
+				if v2 {
+					if body.Manifest.SchemaVersion != 2 || !slices.Contains(body.Manifest.Features, "source_protection_v1") || !slices.Contains(body.Manifest.Features, "source_recovery_v1") || len(body.Manifest.Profiles) != 0 {
+						t.Errorf("unexpected v2 source carrier: %+v", body.Manifest)
+					}
+				} else if body.Manifest.SchemaVersion != 1 || slices.Contains(body.Manifest.Capabilities, "source_protection_v1") || slices.Contains(body.Manifest.Capabilities, "source_recovery_v1") {
+					t.Errorf("source features leaked to v1: %+v", body.Manifest)
+				}
+				_ = json.NewEncoder(w).Encode(PollResponse{Work: []Work{}, Cancellations: []Cancellation{}})
+			}))
+			defer server.Close()
+			client, e := NewDeviceClient(server.URL, "a4c09e42-d0a6-45f0-89ef-2a03b7cff630", key, true)
+			if e != nil {
+				t.Fatal(e)
+			}
+			m := CapabilityManifest{SchemaVersion: 1, AppVersion: "0.10.0", Capabilities: []string{"source_snapshot_v2"}, V2OnlyFeatures: []string{"source_protection_v1", "source_recovery_v1"}}
+			out, e := client.Poll(context.Background(), PollRequest{AppVersion: m.AppVersion, LibraryIDs: []string{}, CapabilityManifest: &m})
+			if e != nil || out.NegotiatedManifestV2 != v2 {
+				t.Fatalf("negotiated=%t err=%v", out.NegotiatedManifestV2, e)
+			}
+		})
 	}
 }

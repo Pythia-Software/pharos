@@ -45,6 +45,8 @@ type PollResponse struct {
 	MetricsDefault   MetricsDefault `json:"metrics_default"`
 	NextPollSeconds  int            `json:"next_poll_seconds"`
 	CapabilityStatus string         `json:"capability_status,omitempty"`
+	// Set by Poll only after successful v2 negotiation, never by server JSON.
+	NegotiatedManifestV2 bool `json:"-"`
 }
 type PollRequest struct {
 	AppVersion         string              `json:"app_version"`

@@ -6,7 +6,7 @@ type EnrollmentStatus = { state: string; available: boolean; library: string; fi
 type SourceAccount = { bindingId: string; provider: string; sourceName: string; accountLabel: string; host: string; root: string; identifiable: number; ambiguous: number; mode: string; exposed: boolean; unindexed?: boolean };
 type SourceStatus = { sourceRevision: number; settingsRevision: number; proofRequested: boolean; sources: SourceAccount[] };
 type WorkItem = { workId: string; question: string; prompt: string; retention: unknown; requester: string; requesterId: string; requesterFallback?: string; readerLabels?: {entries:{person_id:string;status:string;display_name?:string}[]}; labelsReady: boolean; labelsToken?: string; labelsExpireAt?: string; generation: number; readers: string[] | null; state: string; payloadHash: string; configHash: string; payload: unknown; publicationV2?: {schema_version:number; descriptors:{id:string;readers:{kind:string;id:string}[];outputs:{fields:{id:string;unit:string}[];coverage:string[]};destination:{kind:string};disclosures:string[]}[]} | null; schedule?: {cadence:string; timezone:string; catch_up:string; response_window_seconds:number} | null; period?: {key:string; start_at?:string; end_at?:string} | null; exports?: {id:string;kind:string;destination:string;fields:string[]}[] | null; publications?: {id:string;kind:string;readers:{kind:string;id:string}[];fields:string[];include_completeness?:boolean}[] | null };
-type WorkerStatus = { enabled: boolean; optOut: boolean; settingsRevision: number; acknowledgedPolicy: number; nextCheck: string; checking: boolean; problem: string; items: WorkItem[]; modelApproved: boolean };
+type WorkerStatus = { enabled: boolean; optOut: boolean; settingsRevision: number; acknowledgedPolicy: number; nextCheck: string; checking: boolean; problem: string; sourceProblem?: string; items: WorkItem[]; modelApproved: boolean };
 type ModelInspection = { provider: string; model: string; effort: string; account: string; sessionDigest: string; authDigest: string; settingsRevision: number };
 type SentItem = {workId:string; question:string; payload:unknown; sentAt:string};
 type OrgPolicy = { value: boolean; policyVersion: number; settingsRevision: number };
@@ -120,6 +120,7 @@ function TeamsWork() {
         <button type="button" disabled={busy} onClick={() => { void act("/model/approve", model).then(() => setModel(null)); }}>Allow this account and model</button>{" "}<button type="button" disabled={busy} onClick={() => setModel(null)}>Cancel</button></> : null}
     </section> : null}
     {status?.problem ? <p role="status">{status.problem}</p> : null}
+    {status?.sourceProblem ? <p role="status">{status.sourceProblem}</p> : null}
     {status?.items.map(item => <div className="teams-source" key={item.workId}>
       <h4>{item.question}</h4><p>Requested by {item.requester || "your organization"}.{!item.publicationV2 ? ` Readers: ${item.readers?.map(id => id === item.requesterId && item.requesterFallback ? `${item.requesterFallback} (request name; ${id})` : id).join(", ") || "none listed"}.` : ""}</p>
       {status.enabled && item.publicationV2 && ["awaiting_source_consent", "awaiting_review"].includes(item.state) ? <ReaderAudiences item={item} refresh={refresh} /> : null}
