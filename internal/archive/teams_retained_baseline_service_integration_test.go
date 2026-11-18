@@ -247,4 +247,37 @@ func TestTeamsRetainedBaselineSyntheticLoopback(t *testing.T) {
 	if positive != 2 || private != 1 {
 		t.Fatalf("signed protections public=%d private=%d", positive, private)
 	}
+	var id string
+	if err = c.DB.QueryRow(`SELECT id FROM conversations WHERE native_id=?`, "00000000-0000-4000-8000-000000001001").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.setTeamsPrivate(ctx, id, true); err != nil {
+		t.Fatal(err)
+	}
+	for turn := 0; turn < 8; turn++ {
+		err = c.teamsRunIndependentSourcePilot(ctx, cfg, client, d, credential, manifest, true)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		var accepted, prepared, held, ready, completed int
+		_ = c.DB.QueryRow(`SELECT count(*) FROM teams_origin_outbox WHERE state='accepted'`).Scan(&accepted)
+		_ = c.DB.QueryRow(`SELECT count(*) FROM teams_origin_outbox WHERE state='prepared'`).Scan(&prepared)
+		_ = c.DB.QueryRow(`SELECT count(*) FROM teams_origin_runs WHERE state='held'`).Scan(&held)
+		_ = c.DB.QueryRow(`SELECT count(*) FROM teams_origin_runs WHERE state='ready'`).Scan(&ready)
+		_ = c.DB.QueryRow(`SELECT count(*) FROM teams_origin_runs WHERE state='completed'`).Scan(&completed)
+		t.Fatalf("tightened recovery: %v accepted=%d prepared=%d held=%d ready=%d completed=%d", err, accepted, prepared, held, ready, completed)
+	}
+	if err = c.DB.QueryRow(`SELECT count(*) FROM teams_origin_outbox WHERE state='accepted' AND json_extract(observation_json,'$.protection')='explicit_private'`).Scan(&private); err != nil || private != 2 {
+		t.Fatalf("tightened receipts: %d %v", private, err)
+	}
+	var state string
+	var receiptCount int
+	if err = c.DB.QueryRow(`SELECT state FROM teams_protection_baseline WHERE id=1`).Scan(&state); err != nil || state != "current" {
+		t.Fatalf("baseline did not settle: %s %v", state, err)
+	}
+	if err = c.DB.QueryRow(`SELECT count(*) FROM teams_origin_outbox WHERE state='accepted' AND receipt_json IS NOT NULL`).Scan(&receiptCount); err != nil || receiptCount != 4 {
+		t.Fatalf("receipt history: %d %v", receiptCount, err)
+	}
 }

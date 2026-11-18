@@ -119,6 +119,37 @@ func (c *Catalog) teamsRecoveryPageForScope(ctx context.Context, cfg Config, cli
 				return e
 			}
 		}
+		if errors.Is(e, sql.ErrNoRows) && token == "baseline" && workID == "" && scope.snapshotID == "" {
+			// Reuse the last fully accepted safety view when local evidence
+			// changed but the remote generation has not. A new contributor
+			// start in that same live generation would conflict.
+			var priorKey string
+			e = tx.QueryRowContext(ctx, `SELECT run_key,start_json,start_receipt_json,expires_at FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=? AND token='batch-safety' AND state='completed' AND expires_at>? ORDER BY rowid DESC LIMIT 1`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, time.Now().UTC().Unix()).Scan(&priorKey, &row.start, &row.startReceipt, &row.expires)
+			if e == nil {
+				nonce, x := teamsCheckpointRandom()
+				if x != nil {
+					return x
+				}
+				row.key = teamsPayloadHash([]byte("safety-baseline-alias:" + priorKey + ":" + nonce))
+				row.state = "ready"
+				_, x = tx.ExecContext(ctx, `INSERT INTO teams_origin_runs(run_key,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,token,start_json,start_receipt_json,expires_at,state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'baseline',?,?,?,'ready')`, row.key, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, workID, scope.snapshotID, scope.inventoryHash, scope.settingsRevision, scope.sourceRevision, scope.privacyRevision, scope.generation, row.start, row.startReceipt, row.expires)
+				if x != nil {
+					return x
+				}
+				result, x := tx.ExecContext(ctx, `INSERT INTO teams_origin_run_pages(run_key,page_index,request_json,receipt_json) SELECT ?,page_index,request_json,receipt_json FROM teams_origin_run_pages WHERE run_key=? AND receipt_json IS NOT NULL ORDER BY page_index`, row.key, priorKey)
+				if x != nil {
+					return x
+				}
+				n, x := result.RowsAffected()
+				if x != nil || n < 1 || n > teamsRecoveryMaxOriginPages {
+					return errTeamsProtectionHeld
+				}
+				return nil
+			}
+			if !errors.Is(e, sql.ErrNoRows) {
+				return e
+			}
+		}
 		var otherActive bool
 		if e = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=? AND state IN ('prepared','started','ready'))`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance).Scan(&otherActive); e != nil {
 			return e

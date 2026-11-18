@@ -138,6 +138,13 @@ func teamsRetireRedundantOriginRunsIn(ctx context.Context, tx *sql.Tx, d Library
 		if !ownValid || own == 0 || len(matched) != len(scan.byToken) {
 			continue
 		}
+		otherFloor, err := teamsRetainedRecoveryFloorIn(ctx, tx, d, credential, v.key)
+		if err != nil {
+			return retired, err
+		}
+		if scan.last.UnacceptedFloor > otherFloor {
+			continue
+		}
 		result, err := tx.ExecContext(ctx, `DELETE FROM teams_origin_runs WHERE run_key=? AND state='completed'`, v.key)
 		if err != nil {
 			return retired, err

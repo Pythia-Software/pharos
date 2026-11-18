@@ -18,6 +18,12 @@ import (
 // and every current local protection under the caller's capture lease. It does
 // not release a hold or grant any transfer authority.
 func teamsRetainedBaselineDraft(ctx context.Context, tx *sql.Tx, cfg Config, d LibraryDescriptor, credential *teams.EnrollmentCredential) (teamsV2Inventory, teamsOriginBatchScope, error) {
+	return teamsRetainedBaselineDraftAllowAttempt(ctx, tx, cfg, d, credential, "")
+}
+
+// The only unsettled row allowed during a tightening send is the exact
+// locally prepared restrictive observation whose bytes are being checked.
+func teamsRetainedBaselineDraftAllowAttempt(ctx context.Context, tx *sql.Tx, cfg Config, d LibraryDescriptor, credential *teams.EnrollmentCredential, allowAttempt string) (teamsV2Inventory, teamsOriginBatchScope, error) {
 	var empty teamsV2Inventory
 	var scope teamsOriginBatchScope
 	if !d.ManagedBirth || credential == nil || credential.LibraryID != d.ID {
@@ -48,7 +54,7 @@ func teamsRetainedBaselineDraft(ctx context.Context, tx *sql.Tx, cfg Config, d L
 	var unsafe bool
 	// Retained history outside the live roster cannot be inferred away. This
 	// narrow first lane never clears recovery guards or any earlier 031 outcome.
-	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM teams_protection_recovery_guards) OR EXISTS(SELECT 1 FROM teams_origin_outbox WHERE state<>'accepted' OR receipt_json IS NULL) OR EXISTS(SELECT 1 FROM teams_protection_assertions a WHERE a.active=1 AND NOT EXISTS(SELECT 1 FROM conversations c WHERE a.provider<>'' AND a.account<>'' AND a.native_id<>'' AND c.provider=a.provider AND c.account=a.account AND c.native_id=a.native_id))`).Scan(&unsafe)
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM teams_protection_recovery_guards) OR EXISTS(SELECT 1 FROM teams_origin_outbox WHERE (state<>'accepted' OR receipt_json IS NULL) AND NOT (observation_id=? AND state='prepared' AND receipt_json IS NULL)) OR EXISTS(SELECT 1 FROM teams_protection_assertions a WHERE a.active=1 AND NOT EXISTS(SELECT 1 FROM conversations c WHERE a.provider<>'' AND a.account<>'' AND a.native_id<>'' AND c.provider=a.provider AND c.account=a.account AND c.native_id=a.native_id))`, allowAttempt).Scan(&unsafe)
 	if err != nil {
 		return empty, scope, err
 	}
@@ -89,13 +95,17 @@ func teamsRetainedBaselineDraft(ctx context.Context, tx *sql.Tx, cfg Config, d L
 // An authenticated complete scan must preserve its monotone, retained floor.
 // Its contents are reconciled with both local evidence and accepted receipts.
 func teamsBaselineServerClear(scan *teamsRecoveryOriginScan, now time.Time) bool {
-	return scan != nil && !scan.held && len(scan.byToken) == len(scan.byWitness) && scan.start.UnacceptedFloor >= 0 && scan.last.UnacceptedFloor >= scan.start.UnacceptedFloor && scan.last.UnacceptedFloor <= scan.last.ServerTime && scan.last.NextCursor == "" && now.UTC().Unix() < scan.start.ExpiresAt
+	return scan != nil && !scan.held && len(scan.byToken) == len(scan.byWitness) && scan.start.UnacceptedFloor >= 0 && scan.last.UnacceptedFloor >= scan.start.UnacceptedFloor && scan.last.NextCursor == "" && now.UTC().Unix() < scan.start.ExpiresAt
 }
 
 // A local baseline may not erase a server floor or prior accepted receipt.
 // Every server origin must match one local witness and a retained accepted
 // receipt; extra, ambiguous or less restrictive evidence stays held.
 func teamsBaselineReconcileHistory(ctx context.Context, tx *sql.Tx, d LibraryDescriptor, credential *teams.EnrollmentCredential, snapshot teamsV2Inventory, scan *teamsRecoveryOriginScan) error {
+	return teamsBaselineReconcileHistoryMode(ctx, tx, d, credential, snapshot, scan, false)
+}
+
+func teamsBaselineReconcileHistoryMode(ctx context.Context, tx *sql.Tx, d LibraryDescriptor, credential *teams.EnrollmentCredential, snapshot teamsV2Inventory, scan *teamsRecoveryOriginScan, tightening bool) error {
 	if credential == nil || scan == nil {
 		return errTeamsProtectionHeld
 	}
@@ -108,8 +118,15 @@ func teamsBaselineReconcileHistory(ctx context.Context, tx *sql.Tx, d LibraryDes
 	}
 	for token, origin := range scan.byToken {
 		item, ok := local[token]
-		if !ok || item.Witness != origin.Witness || item.EvidenceRevision != origin.EvidenceRevision {
+		if !ok || item.Witness != origin.Witness {
 			return fmt.Errorf("origin evidence: %w", errTeamsProtectionHeld)
+		}
+		stronger := (origin.Protection == "non_private" && (item.Protection == "private" || item.Protection == "unknown")) || (origin.Protection == "unknown" && item.Protection == "private")
+		if item.EvidenceRevision != origin.EvidenceRevision && !(tightening && stronger) {
+			return fmt.Errorf("origin evidence: %w", errTeamsProtectionHeld)
+		}
+		if tightening && stronger {
+			continue
 		}
 		switch item.Protection {
 		case "private":
@@ -189,7 +206,7 @@ func teamsBaselineReconcileHistory(ctx context.Context, tx *sql.Tx, d LibraryDes
 func teamsCheckRetainedBaselineFloor(ctx context.Context, tx *sql.Tx, scan *teamsRecoveryOriginScan) error {
 	var key string
 	var raw []byte
-	if err := tx.QueryRowContext(ctx, `SELECT r.run_key,r.start_receipt_json FROM teams_protection_baseline b JOIN teams_origin_runs r ON r.run_key=b.proposal_sha256 AND r.token='baseline' AND r.state='completed' WHERE b.id=1 AND b.state='current'`).Scan(&key, &raw); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT r.run_key,r.start_receipt_json FROM teams_protection_baseline b JOIN teams_origin_runs r ON r.run_key=b.proposal_sha256 AND r.token='baseline' AND r.state='completed' WHERE b.id=1 AND b.state IN ('current','held')`).Scan(&key, &raw); err != nil {
 		return errTeamsProtectionHeld
 	}
 	var start sourcewire.RecoveryStartReceipt
@@ -420,6 +437,12 @@ func (c *Catalog) teamsProduceRetainedBaseline(ctx context.Context, cfg Config, 
 	if !teamsBaselineServerClear(scan, time.Now()) {
 		return errTeamsProtectionHeld
 	}
+	if attempted, e := c.teamsTightenRetainedOrigin(ctx, cfg, client, d, credential, snapshot, scope, scan, check); attempted || e != nil {
+		if e != nil {
+			return e
+		}
+		return errTeamsPilotMore
+	}
 	lease, err = c.teamsSharingLease()
 	if err != nil {
 		return err
@@ -435,6 +458,9 @@ func (c *Catalog) teamsProduceRetainedBaseline(ctx context.Context, cfg Config, 
 	}
 	return c.writeTransaction(censusCtx, "teams-retained-baseline", func(tx *sql.Tx) error {
 		if e := check(censusCtx, tx); e != nil {
+			return e
+		}
+		if e := teamsRequireRetainedRecoveryFloorIn(censusCtx, tx, d, credential, scan); e != nil {
 			return e
 		}
 		if e := teamsBaselineReconcileHistory(censusCtx, tx, d, credential, snapshot, scan); e != nil {

@@ -135,7 +135,7 @@ func (c *Catalog) teamsRunIndependentSourcePilot(ctx context.Context, cfg Config
 			release()
 			return e
 		}
-		if prior != nil && !prior.held {
+		if prior != nil && !prior.held && teamsRequireRetainedRecoveryFloorIn(censusCtx, tx, d, credential, prior) == nil {
 			safetyAlreadyProved = true
 			for _, a := range accepted {
 				observation, e := sourcewire.DecodeProtectionObservation(a.state.body)
@@ -232,6 +232,9 @@ func (c *Catalog) teamsRunIndependentSourcePilot(ctx context.Context, cfg Config
 		}
 		e = c.writeTransaction(lockedCtx, "teams-origin-safety-retire", func(tx *sql.Tx) error {
 			if e := check(lockedCtx, tx); e != nil {
+				return e
+			}
+			if e := teamsRequireRetainedRecoveryFloorIn(lockedCtx, tx, d, credential, scan); e != nil {
 				return e
 			}
 			var run string

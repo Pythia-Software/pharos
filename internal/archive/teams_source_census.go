@@ -153,6 +153,9 @@ func (c *Catalog) journalTeamsLocalOriginBatch(ctx context.Context, cfg Config, 
 			return errTeamsSnapshotChanged
 		}
 		if teamsNonPrivateSourceProofEnabled {
+			if e = teamsRequireRetainedRecoveryFloorIn(ctx, tx, d, credential, scan); e != nil {
+				return e
+			}
 			if e = teamsCheckRetainedBaselineFloor(ctx, tx, scan); e != nil {
 				return e
 			}

@@ -12,6 +12,11 @@ func TestTeamsBaselineServerFloorStaysHeld(t *testing.T) {
 	if !teamsBaselineServerClear(&clear, now) {
 		t.Fatal("empty current scan denied")
 	}
+	future := clear
+	future.last.UnacceptedFloor = 150
+	if !teamsBaselineServerClear(&future, now) {
+		t.Fatal("valid future floor denied")
+	}
 	cases := []teamsRecoveryOriginScan{clear, clear, clear, clear, clear}
 	cases[0].held = true
 	cases[1].start.UnacceptedFloor = -1

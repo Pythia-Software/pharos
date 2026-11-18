@@ -28,6 +28,7 @@ func (c *Catalog) journalTeamsOrigin(ctx context.Context, d LibraryDescriptor, c
 
 type teamsOriginBatchScope struct {
 	snapshotID, inventoryHash                                     string
+	tightening                                                    bool
 	settingsRevision, sourceRevision, privacyRevision, generation int64
 }
 
@@ -160,7 +161,7 @@ func teamsJournalOriginIn(ctx context.Context, tx *sql.Tx, d LibraryDescriptor, 
 	nextProtection := "unknown"
 	if item.Protection == "private" {
 		nextProtection = "explicit_private"
-	} else if teamsNonPrivateSourceProofEnabled && item.Protection == "public" && work.ID == "" && scope.snapshotID == "" {
+	} else if teamsNonPrivateSourceProofEnabled && !scope.tightening && item.Protection == "public" && work.ID == "" && scope.snapshotID == "" {
 		// Only the independent local census calls this lane with a current
 		// checkpointed baseline and separately acknowledged transfer. Its
 		// public state requires the exact reviewed source evidence.
@@ -170,7 +171,11 @@ func teamsJournalOriginIn(ctx context.Context, tx *sql.Tx, d LibraryDescriptor, 
 			nextProtection = "non_private"
 		}
 	}
-	if protection != "" && protection != "unknown" && protection != nextProtection {
+	if scope.tightening {
+		if !((protection == "non_private" && (nextProtection == "unknown" || nextProtection == "explicit_private")) || (protection == "unknown" && nextProtection == "explicit_private")) {
+			return nil, errTeamsProtectionHeld
+		}
+	} else if protection != "" && protection != "unknown" && protection != nextProtection {
 		return nil, errTeamsSourceUnavailable
 	}
 	now := time.Now().UTC()

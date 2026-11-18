@@ -50,7 +50,15 @@ func teamsLocalOriginStateCheckedIn(ctx context.Context, tx *sql.Tx, cfg Config,
 			return out, errTeamsConsentStale
 		}
 	} else if !checked {
-		current, fresh, e := teamsLocalSourceCensusIn(ctx, tx, cfg, d, credential)
+		var current teamsV2Inventory
+		var fresh teamsOriginBatchScope
+		var e error
+		if scope.tightening {
+			current, fresh, e = teamsRetainedBaselineDraftAllowAttempt(ctx, tx, cfg, d, credential, id)
+			fresh.tightening = true
+		} else {
+			current, fresh, e = teamsLocalSourceCensusIn(ctx, tx, cfg, d, credential)
+		}
 		if e != nil {
 			return out, e
 		}
@@ -74,6 +82,9 @@ func teamsLocalOriginStateCheckedIn(ctx context.Context, tx *sql.Tx, cfg Config,
 	v, err := sourcewire.DecodeProtectionObservation(out.body)
 	if err != nil {
 		return teamsLocalOriginState{}, errTeamsConsentStale
+	}
+	if scope.tightening && v.Protection != "explicit_private" && v.Protection != "unknown" {
+		return teamsLocalOriginState{}, errTeamsProtectionHeld
 	}
 	if replay && !lookupOnly && v.Protection == "non_private" {
 		current, _, e := teamsLocalSourceCensusIn(ctx, tx, cfg, d, credential)
@@ -296,6 +307,15 @@ func (c *Catalog) sendTeamsLocalOrigin(ctx context.Context, cfg Config, client *
 		}
 		if n != 1 {
 			return errTeamsConsentStale
+		}
+		// A baseline recovery scan used for a restrictive observation is stale
+		// once accepted. Complete it even after exact replay so the next scan
+		// obtains the advanced authenticated generation.
+		if receipt.Status == "accepted" {
+			_, e = tx.ExecContext(ctx, `UPDATE teams_origin_runs SET state='completed' WHERE state='ready' AND token='baseline' AND origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=? AND json_extract(start_receipt_json,'$.run_id')=(SELECT run_id FROM teams_origin_outbox WHERE observation_id=?)`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, id)
+			if e != nil {
+				return e
+			}
 		}
 		return nil
 	})
