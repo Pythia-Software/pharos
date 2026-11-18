@@ -274,6 +274,29 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 	item.Work, item.State = seriesWork, "awaiting_source_consent"
 	service.teamsWorker.items[w.ID] = item
 	service.teamsWorker.mu.Unlock()
+	missingSource, _ := json.Marshal(map[string]any{"workId": w.ID, "settingsRevision": s.SettingsRevision, "configHash": seriesHash})
+	missingRec := httptest.NewRecorder()
+	service.teamsWorkerHTTP(missingRec, httptest.NewRequest(http.MethodPost, "/api/teams/worker/allow-source", bytes.NewReader(missingSource)))
+	if missingRec.Code != http.StatusConflict {
+		t.Fatal("source consent accepted missing labels")
+	}
+	service.teamsWorker.mu.Lock()
+	item = service.teamsWorker.items[w.ID]
+	item.Labels = &teams.ReaderLabels{Version: 1, ConfigSHA256: seriesHash, Entries: []teams.ReaderLabel{{PersonID: "0b000000-0000-4000-8000-000000000001", Status: "active", DisplayName: "Reader"}, {PersonID: "0c000000-0000-4000-8000-000000000001", Status: "active", DisplayName: "Synthetic"}}}
+	item.LabelsAt = time.Now()
+	item.LabelsScope = teamsCredentialScope(d, credential)
+	service.teamsWorker.scope = item.LabelsScope
+	service.teamsWorker.items[w.ID] = item
+	if teamsReaderLabelToken(item, item.LabelsScope, service.teamsWorker.generation) == "" {
+		t.Fatal("valid source labels not ready")
+	}
+	service.teamsWorker.mu.Unlock()
+	staleSource, _ := json.Marshal(map[string]any{"workId": w.ID, "settingsRevision": s.SettingsRevision, "configHash": seriesHash, "labelsToken": "stale"})
+	staleRec := httptest.NewRecorder()
+	service.teamsWorkerHTTP(staleRec, httptest.NewRequest(http.MethodPost, "/api/teams/worker/allow-source", bytes.NewReader(staleSource)))
+	if staleRec.Code != http.StatusConflict {
+		t.Fatal("source consent accepted stale labels")
+	}
 	for _, path := range []string{"/api/teams/worker/allow-source", "/api/teams/worker/approve-result"} {
 		for _, hash := range []string{"", strings.Repeat("0", 64), teamsPayloadHash(config)} {
 			body, _ := json.Marshal(map[string]any{"workId": w.ID, "settingsRevision": s.SettingsRevision, "payloadHash": draft.PayloadHash, "configHash": hash})
@@ -292,8 +315,66 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 	if err = c.reviewTeamsV2Draft(ctx, d, w.ID, draft.PayloadHash); !errors.Is(err, errTeamsConsentStale) {
 		t.Fatalf("legacy review accepted series: %v", err)
 	}
+	service.teamsWorker.mu.Lock()
+	item = service.teamsWorker.items[w.ID]
+	item.State = "awaiting_review"
+	item.Labels = nil
+	item.LabelsAt = time.Time{}
+	item.LabelsScope = ""
+	service.teamsWorker.scope = teamsCredentialScope(d, credential)
+	service.teamsWorker.items[w.ID] = item
+	service.teamsWorker.mu.Unlock()
 	body, _ := json.Marshal(map[string]any{"workId": w.ID, "payloadHash": draft.PayloadHash, "configHash": seriesHash})
 	rec := httptest.NewRecorder()
+	service.teamsWorkerHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/teams/worker/approve-result", bytes.NewReader(body)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("missing reader labels accepted: %d", rec.Code)
+	}
+	service.teamsWorker.mu.Lock()
+	item = service.teamsWorker.items[w.ID]
+	item.State = "awaiting_review"
+	item.Labels = &teams.ReaderLabels{Version: 1, ConfigSHA256: seriesHash, Entries: []teams.ReaderLabel{{PersonID: "0b000000-0000-4000-8000-000000000001", Status: "active", DisplayName: "Reader"}, {PersonID: "0c000000-0000-4000-8000-000000000001", Status: "active", DisplayName: "Synthetic"}}}
+	item.LabelsAt = time.Now()
+	item.LabelsScope = teamsCredentialScope(d, credential)
+	service.teamsWorker.scope = item.LabelsScope
+	service.teamsWorker.items[w.ID] = item
+	token := teamsReaderLabelToken(item, item.LabelsScope, service.teamsWorker.generation)
+	service.teamsWorker.mu.Unlock()
+	wrong, _ := json.Marshal(map[string]any{"workId": w.ID, "configHash": strings.Repeat("0", 64)})
+	denied := httptest.NewRecorder()
+	service.teamsWorkerHTTP(denied, httptest.NewRequest(http.MethodPost, "/api/teams/worker/reader-labels", bytes.NewReader(wrong)))
+	if denied.Code != http.StatusConflict {
+		t.Fatalf("stale lookup accepted: %d", denied.Code)
+	}
+	service.teamsWorker.mu.Lock()
+	unchanged := teamsReaderLabelToken(service.teamsWorker.items[w.ID], teamsCredentialScope(d, credential), service.teamsWorker.generation)
+	service.teamsWorker.mu.Unlock()
+	if unchanged != token {
+		t.Fatal("stale lookup erased current labels")
+	}
+	service.teamsWorker.mu.Lock()
+	item = service.teamsWorker.items[w.ID]
+	item.Labels.Entries[0].DisplayName = "Renamed"
+	service.teamsWorker.items[w.ID] = item
+	service.teamsWorker.mu.Unlock()
+	staleBody, _ := json.Marshal(map[string]any{"workId": w.ID, "payloadHash": draft.PayloadHash, "configHash": seriesHash, "labelsToken": token})
+	denied = httptest.NewRecorder()
+	service.teamsWorkerHTTP(denied, httptest.NewRequest(http.MethodPost, "/api/teams/worker/approve-result", bytes.NewReader(staleBody)))
+	if denied.Code != http.StatusConflict {
+		t.Fatal("stale displayed names accepted")
+	}
+	service.teamsWorker.mu.Lock()
+	item = service.teamsWorker.items[w.ID]
+	token = teamsReaderLabelToken(item, teamsCredentialScope(d, credential), service.teamsWorker.generation)
+	service.teamsWorker.mu.Unlock()
+	omitted, _ := json.Marshal(map[string]any{"workId": w.ID, "payloadHash": draft.PayloadHash, "labelsToken": token})
+	denied = httptest.NewRecorder()
+	service.teamsWorkerHTTP(denied, httptest.NewRequest(http.MethodPost, "/api/teams/worker/approve-result", bytes.NewReader(omitted)))
+	if denied.Code != http.StatusConflict {
+		t.Fatal("series approval accepted without config hash")
+	}
+	body, _ = json.Marshal(map[string]any{"workId": w.ID, "payloadHash": draft.PayloadHash, "configHash": seriesHash, "labelsToken": token})
+	rec = httptest.NewRecorder()
 	service.teamsWorkerHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/teams/worker/approve-result", bytes.NewReader(body)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("matching series review was rejected: %d %s", rec.Code, rec.Body.String())

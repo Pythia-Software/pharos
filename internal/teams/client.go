@@ -166,6 +166,14 @@ func (c *DeviceClient) exchange(ctx context.Context, method, path string, body [
 	if !validUniqueJSON(data) {
 		return errors.New("invalid Teams response")
 	}
+	if _, ok := out.(*ReaderLabels); ok {
+		d := json.NewDecoder(bytes.NewReader(data))
+		d.DisallowUnknownFields()
+		if d.Decode(out) != nil {
+			return errors.New("invalid Teams response")
+		}
+		return nil
+	}
 	if err = json.Unmarshal(data, out); err != nil {
 		return errors.New("invalid Teams response")
 	}
@@ -280,7 +288,7 @@ func (c *DeviceClient) Poll(ctx context.Context, in PollRequest) (PollResponse, 
 	if in.CapabilityManifest != nil {
 		previous := ""
 		for _, id := range in.CapabilityManifest.V2OnlyFeatures {
-			if id != "report_deterministic_v2" || id <= previous {
+			if (id != "reader_labels_v1" && id != "report_deterministic_v2") || id <= previous {
 				return out, errors.New("invalid v2-only capability")
 			}
 			previous = id
@@ -484,4 +492,15 @@ func (c *DeviceClient) Receipt(ctx context.Context, workID, payloadSHA, submissi
 		return Receipt{}, ErrReceiptMismatch
 	}
 	return out, nil
+}
+
+// ReaderLabels reads only the signed work's server-derived audience.
+func (c *DeviceClient) ReaderLabels(ctx context.Context, workID string) (ReaderLabels, error) {
+	var out ReaderLabels
+	path, err := WorkPath(workID, "reader-labels")
+	if err != nil {
+		return out, err
+	}
+	err = c.exchange(ctx, http.MethodGet, path, nil, &out)
+	return out, err
 }

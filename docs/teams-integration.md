@@ -38,3 +38,5 @@ interval so the service can scale to zero. A locally known active request,
 foreground action, or explicit Check now may wake it sooner. A request created
 remotely while the Mac is idle waits until the next poll unless a separately
 designed push channel is available; the UI must show that latency honestly.
+
+The manual report series client remains dormant behind `teamsManualReportSeriesReady = false`. A future matched pilot must enable that switch only after the service route and v3 capability gate are deployed, and use an actual release version of at least `0.10.0`. Enabled builds declare both `reader_labels_v1` and `report_deterministic_v2` in the v2 manifest alongside the deterministic and source snapshot capabilities. A v1 fallback does not declare either v2-only feature. The directory read supplies presentation labels only; signed audience IDs and the exact config and payload hashes remain the consent bindings.
