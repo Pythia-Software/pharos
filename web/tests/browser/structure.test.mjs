@@ -2467,6 +2467,23 @@ test('Teams model permission displays the account and requires a separate action
   assert.deepEqual(approved,inspection);
 });
 
+test('Teams waiting for source safety can be declined', { skip }, async t => {
+  let declined;
+  const item={workId:'synthetic-work',question:'Synthetic question',prompt:'Synthetic prompt',requester:'Synthetic',readers:[],state:'source_safety_waiting',payloadHash:'',payload:null};
+  const app=await open(t,{url:'/settings/teams',ready:'#teamsSettingsPage .teams-settings',api:{
+    'GET /api/teams/enrollment':{state:'connected_paused',available:true,library:'Synthetic',fingerprint:'',problem:''},
+    'GET /api/teams/worker':{enabled:true,optOut:true,settingsRevision:4,acknowledgedPolicy:1,nextCheck:'',checking:false,problem:'',items:[item],modelApproved:true},
+    'GET /api/teams/source-accounts':{sourceRevision:0,settingsRevision:4,proofRequested:true,sources:[]},
+    'POST /api/teams/worker/decline':({body})=>{declined=body;return {updated:true}},
+  }});
+  await app.page.getByText('Status: Checking source safety.').waitFor();
+  await app.page.getByText(/check again shortly/).waitFor();
+  const response=app.page.waitForResponse(res=>res.url().endsWith('/api/teams/worker/decline'));
+  await app.page.getByRole('button',{name:'Decline request'}).click();
+  await response;
+  assert.deepEqual(declined,{workId:'synthetic-work'});
+});
+
 test('Teams sent log opens an exact local response', { skip }, async t => {
   const app=await open(t,{url:'/settings/teams',ready:'#teamsSettingsPage .teams-settings',api:{
     'GET /api/teams/enrollment':{state:'connected_paused',available:true,library:'Synthetic',fingerprint:'',problem:''},

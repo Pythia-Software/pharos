@@ -40,6 +40,10 @@ func readTeamsV2Upload(ctx context.Context, q interface {
 // a fresh signed watermark. It commits identity exposure and exact page bytes
 // before the first possible emission. It does not itself send anything.
 func (c *Catalog) prepareTeamsV2Upload(ctx context.Context, w teams.Work, d LibraryDescriptor, credential *teams.EnrollmentCredential, snapshot teamsV2Inventory, policy teams.MetricsDefault, watermark teams.SourceWatermark, manifest teams.CapabilityManifest) (teamsV2Upload, error) {
+	return c.prepareTeamsV2UploadAt(ctx, w, d, credential, snapshot, policy, watermark, manifest, time.Now())
+}
+
+func (c *Catalog) prepareTeamsV2UploadAt(ctx context.Context, w teams.Work, d LibraryDescriptor, credential *teams.EnrollmentCredential, snapshot teamsV2Inventory, policy teams.MetricsDefault, watermark teams.SourceWatermark, manifest teams.CapabilityManifest, now time.Time) (teamsV2Upload, error) {
 	var out teamsV2Upload
 	if credential == nil || credential.LibraryID != d.ID || w.LibraryID != d.ID {
 		return out, errTeamsQueryUnsupported
@@ -48,7 +52,7 @@ func (c *Catalog) prepareTeamsV2Upload(ctx context.Context, w teams.Work, d Libr
 		if !teamsBuildEligible(manifest, "source_snapshot_v2") || !teamsBuildEligible(manifest, "scoped_artifact_v1") || !snapshot.Complete {
 			return out, errTeamsQueryUnsupported
 		}
-		if _, err := teamsLLMFromWork(w, manifest.AppVersion); err != nil {
+		if _, err := teamsLLMFromWorkAt(w, manifest.AppVersion, now); err != nil {
 			return out, err
 		}
 	} else {
@@ -64,7 +68,7 @@ func (c *Catalog) prepareTeamsV2Upload(ctx context.Context, w teams.Work, d Libr
 	if _, err = teams.WorkPath(w.VersionID, "status"); err != nil {
 		return out, err
 	}
-	if w.EvaluationRevision < 1 || !w.ExpiresAt.After(time.Now()) || len(snapshot.values) == 0 || snapshot.Items == nil {
+	if w.EvaluationRevision < 1 || !w.ExpiresAt.After(now) || len(snapshot.values) == 0 || snapshot.Items == nil {
 		return out, errTeamsSourceUnavailable
 	}
 	var config struct {

@@ -39,6 +39,15 @@ func teamsIdleDelay() time.Duration {
 	}
 	return 10*time.Minute + time.Duration(binary.BigEndian.Uint64(raw[:])%uint64(5*time.Minute))
 }
+
+// Retry scheduling may wake immediately once at startup, but a completed
+// check never requests a zero-delay loop, even when work was not processed.
+func teamsDelayAfterCheck(active bool) time.Duration {
+	if active {
+		return 30 * time.Second
+	}
+	return teamsIdleDelay()
+}
 func (s *Server) wakeTeams() {
 	select {
 	case s.teamsWorker.wake <- struct{}{}:
@@ -50,6 +59,9 @@ func (s *Server) wakeTeams() {
 // next jittered check unless this Mac receives a separate local wake action.
 func (s *Server) teamsLoop(ctx context.Context) {
 	delay := teamsIdleDelay()
+	if retryDelay, ok := s.teamsStartupRetryDelay(ctx, time.Now().UTC()); ok && retryDelay < delay {
+		delay = retryDelay
+	}
 	for {
 		s.teamsWorker.mu.Lock()
 		s.teamsWorker.next = time.Now().Add(delay)
@@ -82,11 +94,7 @@ func (s *Server) teamsLoop(ctx context.Context) {
 			pass.worked(1, "check")
 		}
 		pass.end(err)
-		if active {
-			delay = 30 * time.Second
-		} else {
-			delay = teamsIdleDelay()
-		}
+		delay = teamsDelayAfterCheck(active)
 	}
 }
 
@@ -225,7 +233,10 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 				continue
 			}
 			if work.Kind == "llm" {
-				items[work.ID] = s.checkTeamsContentWork(ctx, client, d, credential, work, manifest)
+				items[work.ID] = s.checkTeamsContentWork(ctx, client, d, credential, work, manifest, poll.ServerTime)
+				if items[work.ID].State == "source_safety_waiting" {
+					active = true
+				}
 				continue
 			}
 			prior, priorErr := readTeamsV2Draft(ctx, s.Catalog.reader(), work.ID)

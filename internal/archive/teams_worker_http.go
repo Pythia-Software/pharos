@@ -325,7 +325,7 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			s.teamsWorker.mu.Lock()
 			item, ok := s.teamsWorker.items[body.WorkID]
 			s.teamsWorker.mu.Unlock()
-			if !ok || (item.State != "awaiting_source_consent" && item.State != "awaiting_model_permission" && item.State != "awaiting_review" && item.State != "decline_pending" && item.State != "started" && item.State != "unconfirmed") {
+			if !ok || (item.State != "awaiting_source_consent" && item.State != "awaiting_model_permission" && item.State != "awaiting_review" && item.State != "decline_pending" && item.State != "started" && item.State != "unconfirmed" && item.State != "source_safety_waiting") {
 				return errTeamsConsentStale
 			}
 			lease, e := s.Catalog.teamsSharingLease()

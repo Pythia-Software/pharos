@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/gbdubs/pharos/internal/teams"
 )
@@ -12,12 +13,15 @@ import (
 // Content work always requires an explicit source grant, a separate model
 // account permission and a final exact-answer review. No standing or blind
 // content permission is inferred by this initial path.
-func (s *Server) checkTeamsContentWork(ctx context.Context, client *teams.DeviceClient, d LibraryDescriptor, credential *teams.EnrollmentCredential, work teams.Work, manifest teams.CapabilityManifest) teamsWorkerItem {
+func (s *Server) checkTeamsContentWork(ctx context.Context, client *teams.DeviceClient, d LibraryDescriptor, credential *teams.EnrollmentCredential, work teams.Work, manifest teams.CapabilityManifest, serverTime time.Time) teamsWorkerItem {
 	item := teamsWorkerItem{Work: work, State: "needs_update"}
 	if !teamsBuildEligible(manifest, "scoped_artifact_v1") {
 		return item
 	}
-	if _, err := teamsLLMFromWork(work, manifest.AppVersion); err != nil {
+	if serverTime.IsZero() {
+		serverTime = time.Now()
+	}
+	if _, err := teamsLLMFromWorkAt(work, manifest.AppVersion, serverTime); err != nil {
 		return item
 	}
 	run, err := readTeamsContentRun(ctx, s.Catalog.reader(), work.ID)
@@ -115,6 +119,9 @@ func (s *Server) checkTeamsContentWork(ctx context.Context, client *teams.Device
 	reg, err := s.Catalog.registerTeamsContent(ctx, s.Config(), client, d, credential, work, inv, manifest)
 	if err != nil {
 		item.State = "unavailable"
+		if errors.Is(err, errTeamsContentRetryWaiting) {
+			item.State = "source_safety_waiting"
+		}
 		return item
 	}
 	if err = s.generateTeamsContent(ctx, s.Config(), client, d, credential, reg, manifest); err != nil {
