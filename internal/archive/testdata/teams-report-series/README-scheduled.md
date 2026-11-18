@@ -6,8 +6,8 @@ SHA-256:
 - assignment: `903fec474c9bd1d704ac31628229df97a4c3418006b84e43f74e1b2c5f73dd7a`
 - calendar: `f937b814e159721e49135f06fa1b905c7a04ec7aaab7680d30d1fe2a4a9562d0`
 - timing: `52a6852318ef37678601885a4aad74fd087feb718cd945eba3e8bcb9a141a26f`
-- rejection: `ed061cb46678328ae94a7eb30fa089f27fbb5ea54fedd855557328f408d381e1`
-- equivalent link encodings: `f10eee4869b69d5dac4f4122efb1d5de3a8c653f9eaecdf68b5512458bd2879e`
+- rejection: `093a602fda732f27d8e54af2c2a25cdb63a0d5d0ac3851eb14c173262b0076c1`
+- equivalent link encodings: `51c3fbd1063828ad9f85078c22dfd8d7ca502680b8d31883f6dc534f9fbb2b0b`
 - schedule and zone validation: `fb362531c6b2151758d077c681643679be23f8c2c781be82bd2e10a39b39f2c3`
 - IANA zone-name inventory: `8725722643bf1f4ff4fc4b22268ade98b6fae047a86897219c3a13d4c4ced93d`
 
