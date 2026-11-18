@@ -281,3 +281,17 @@ func TestPollLegacyDiscoveryUsesOnlyV1Capabilities(t *testing.T) {
 		t.Fatalf("legacy poll: %v, calls=%d", err, polls)
 	}
 }
+
+func TestPollResponseWorkBoundBeforeFiltering(t *testing.T) {
+	for _, count := range []int{200, 201} {
+		raw, err := json.Marshal(map[string]any{"work": make([]any, count)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response PollResponse
+		err = decodePollResponse(raw, &response)
+		if (err != nil) != (count > 200) {
+			t.Fatalf("%d items: %v", count, err)
+		}
+	}
+}

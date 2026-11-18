@@ -255,6 +255,70 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 	if err != nil || draft.State != "accepted" || !strings.Contains(string(draft.Payload), `"total_tokens":123`) {
 		t.Fatalf("draft: %v", err)
 	}
+	// Offline non-series actions must reject even when the underlying work and
+	// draft are otherwise valid for the same live account.
+	if _, err = c.DB.Exec(`UPDATE teams_v2_results SET state='awaiting_review' WHERE work_id=?`, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	currentSettings, err := readTeamsSettings(ctx, c.reader())
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.teamsWorker.mu.Lock()
+	service.teamsWorker.settings = currentSettings
+	service.teamsWorker.settingsValid = true
+	service.teamsWorker.viewScope = teamsCredentialScope(d, credential)
+	itemOffline := service.teamsWorker.items[w.ID]
+	itemOffline.Work = w
+	itemOffline.State = "awaiting_source_consent"
+	service.teamsWorker.items[w.ID] = itemOffline
+	service.teamsWorker.scope = ""
+	service.teamsWorker.mu.Unlock()
+	offlineSource, _ := json.Marshal(map[string]any{"workId": w.ID, "settingsRevision": currentSettings.SettingsRevision})
+	recOffline := httptest.NewRecorder()
+	service.teamsWorkerHTTP(recOffline, httptest.NewRequest(http.MethodPost, "/api/teams/worker/allow-source", bytes.NewReader(offlineSource)))
+	if recOffline.Code == http.StatusOK {
+		t.Fatal("offline source consent accepted")
+	}
+	service.teamsWorker.mu.Lock()
+	itemOffline.State = "awaiting_review"
+	service.teamsWorker.items[w.ID] = itemOffline
+	service.teamsWorker.mu.Unlock()
+	offlineApprove, _ := json.Marshal(map[string]any{"workId": w.ID, "payloadHash": draft.PayloadHash})
+	recOffline = httptest.NewRecorder()
+	service.teamsWorkerHTTP(recOffline, httptest.NewRequest(http.MethodPost, "/api/teams/worker/approve-result", bytes.NewReader(offlineApprove)))
+	if recOffline.Code == http.StatusOK {
+		t.Fatal("offline result approval accepted")
+	}
+	var afterOffline string
+	if err = c.DB.QueryRow(`SELECT state FROM teams_v2_results WHERE work_id=?`, w.ID).Scan(&afterOffline); err != nil || afterOffline != "awaiting_review" {
+		t.Fatalf("offline approval changed draft: %q %v", afterOffline, err)
+	}
+	service.teamsWorker.mu.Lock()
+	service.teamsWorker.scope = teamsCredentialScope(d, credential)
+	itemOffline.State = "awaiting_source_consent"
+	service.teamsWorker.items[w.ID] = itemOffline
+	service.teamsWorker.mu.Unlock()
+	liveSource := httptest.NewRecorder()
+	service.teamsWorkerHTTP(liveSource, httptest.NewRequest(http.MethodPost, "/api/teams/worker/allow-source", bytes.NewReader(offlineSource)))
+	if liveSource.Code != http.StatusOK {
+		t.Fatalf("live source consent denied: %d %s", liveSource.Code, liveSource.Body.String())
+	}
+	if _, err = c.DB.Exec(`DELETE FROM teams_request_grants WHERE version_id=?`, w.VersionID); err != nil {
+		t.Fatal(err)
+	}
+	service.teamsWorker.mu.Lock()
+	itemOffline.State = "awaiting_review"
+	service.teamsWorker.items[w.ID] = itemOffline
+	service.teamsWorker.mu.Unlock()
+	liveApproval := httptest.NewRecorder()
+	service.teamsWorkerHTTP(liveApproval, httptest.NewRequest(http.MethodPost, "/api/teams/worker/approve-result", bytes.NewReader(offlineApprove)))
+	if liveApproval.Code != http.StatusOK {
+		t.Fatalf("live approval denied: %d %s", liveApproval.Code, liveApproval.Body.String())
+	}
+	if _, err = c.DB.Exec(`UPDATE teams_v2_results SET state='accepted' WHERE work_id=?`, w.ID); err != nil {
+		t.Fatal(err)
+	}
 	// Both real review handlers must reject stale displayed series configs.
 	seriesConfig, err := os.ReadFile("testdata/teams-report-series/manual_series_config.json")
 	if err != nil {

@@ -95,10 +95,10 @@ func teamsReaderLabelToken(item teamsWorkerItem, scope string, generation uint64
 		return ""
 	}
 	b, err := json.Marshal(struct {
-		Scope, Work, Config, State string
-		Generation                 uint64
-		Labels                     *teams.ReaderLabels
-	}{scope, item.Work.ID, item.Work.ConfigSHA256, item.State, generation, item.Labels})
+		Scope, Work, Config, State, Binding string
+		Generation                          uint64
+		Labels                              *teams.ReaderLabels
+	}{scope, item.Work.ID, item.Work.ConfigSHA256, item.State, teamsWorkDigest(item.Work), generation, item.Labels})
 	if err != nil {
 		return ""
 	}
@@ -117,4 +117,12 @@ func teamsHasSeriesConfig(raw []byte) bool {
 		}
 	}
 	return false
+}
+
+func teamsWorkDigest(work teams.Work) string {
+	b, e := json.Marshal(work)
+	if e != nil {
+		return ""
+	}
+	return teamsPayloadHash(b)
 }

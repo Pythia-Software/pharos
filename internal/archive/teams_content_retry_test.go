@@ -207,16 +207,32 @@ func TestTeamsWaitingContentDeclineHandler(t *testing.T) {
 	var mu sync.Mutex
 	var paths []string
 	var failStatus bool
+	var pollStatus int
 	var advertised teams.Work
+	var statusEntered, statusRelease chan struct{}
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		paths = append(paths, r.URL.Path)
 		fail := failStatus
+		status := pollStatus
 		work := advertised
+		entered, release := statusEntered, statusRelease
 		mu.Unlock()
+		if r.URL.Path == "/v1/device/capabilities" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"manifest_schema_versions": []int{1}})
+			return
+		}
 		if r.URL.Path == "/v1/device/poll" {
+			if status != 0 {
+				w.WriteHeader(status)
+				return
+			}
 			json.NewEncoder(w).Encode(teams.PollResponse{ServerTime: time.Now().UTC(), Work: []teams.Work{work}, Cancellations: []teams.Cancellation{}, NextPollSeconds: 900})
 			return
+		}
+		if entered != nil {
+			close(entered)
+			<-release
 		}
 		if fail {
 			http.Error(w, "synthetic unavailable", http.StatusServiceUnavailable)
@@ -235,6 +251,32 @@ func TestTeamsWaitingContentDeclineHandler(t *testing.T) {
 	workID := "a4c09e42-d0a6-45f0-89ef-2a03b7cff630"
 	service.teamsWorker.mu.Lock()
 	service.teamsWorker.items = map[string]teamsWorkerItem{workID: {Work: teams.Work{ID: workID, ConfigSHA256: "synthetic"}, State: "source_safety_waiting"}}
+	service.teamsWorker.scope = teamsCredentialScope(d, credential)
+	service.teamsWorker.workBindings = map[string]string{workID: "first"}
+	service.teamsWorker.mu.Unlock()
+	// An offline non-series card is display-only and cannot grant or approve.
+	service.teamsWorker.mu.Lock()
+	service.teamsWorker.scope = ""
+	service.teamsWorker.items[workID] = teamsWorkerItem{Work: teams.Work{ID: workID, ConfigSHA256: "synthetic"}, State: "awaiting_source_consent"}
+	service.teamsWorker.mu.Unlock()
+	grantBody, _ := json.Marshal(map[string]any{"workId": workID, "settingsRevision": 1})
+	offlineGrant := httptest.NewRecorder()
+	service.teamsWorkerHTTP(offlineGrant, httptest.NewRequest(http.MethodPost, "/api/teams/worker/allow-source", bytes.NewReader(grantBody)))
+	if offlineGrant.Code == http.StatusOK {
+		t.Fatal("offline grant accepted")
+	}
+	service.teamsWorker.mu.Lock()
+	service.teamsWorker.items[workID] = teamsWorkerItem{Work: teams.Work{ID: workID, ConfigSHA256: "synthetic"}, State: "awaiting_review"}
+	service.teamsWorker.mu.Unlock()
+	approveBody, _ := json.Marshal(map[string]string{"workId": workID, "payloadHash": "synthetic"})
+	offlineApproval := httptest.NewRecorder()
+	service.teamsWorkerHTTP(offlineApproval, httptest.NewRequest(http.MethodPost, "/api/teams/worker/approve-result", bytes.NewReader(approveBody)))
+	if offlineApproval.Code == http.StatusOK {
+		t.Fatal("offline approval accepted")
+	}
+	service.teamsWorker.mu.Lock()
+	service.teamsWorker.scope = teamsCredentialScope(d, credential)
+	service.teamsWorker.items[workID] = teamsWorkerItem{Work: teams.Work{ID: workID, ConfigSHA256: "synthetic"}, State: "source_safety_waiting"}
 	service.teamsWorker.mu.Unlock()
 	body, _ := json.Marshal(map[string]string{"workId": workID})
 	rec := httptest.NewRecorder()
@@ -261,6 +303,7 @@ func TestTeamsWaitingContentDeclineHandler(t *testing.T) {
 	mu.Unlock()
 	service.teamsWorker.mu.Lock()
 	service.teamsWorker.items[failedID] = teamsWorkerItem{Work: work, State: "source_safety_waiting"}
+	service.teamsWorker.workBindings[failedID] = "second"
 	service.teamsWorker.mu.Unlock()
 	body, _ = json.Marshal(map[string]string{"workId": failedID})
 	rec = httptest.NewRecorder()
@@ -294,6 +337,91 @@ func TestTeamsWaitingContentDeclineHandler(t *testing.T) {
 	if after != before {
 		t.Fatal("registration contacted the service after local decline")
 	}
+	// A poll invalidation during the status POST must not reinsert stale work.
+	raceID := "a4c09e42-d0a6-45f0-89ef-2a03b7cff632"
+	mu.Lock()
+	failStatus = false
+	statusEntered = make(chan struct{})
+	statusRelease = make(chan struct{})
+	entered, release := statusEntered, statusRelease
+	mu.Unlock()
+	service.teamsWorker.mu.Lock()
+	service.teamsWorker.items[raceID] = teamsWorkerItem{Work: teams.Work{ID: raceID, ConfigSHA256: "race"}, State: "awaiting_model_permission"}
+	service.teamsWorker.workBindings[raceID] = "race"
+	service.teamsWorker.mu.Unlock()
+	raceBody, _ := json.Marshal(map[string]string{"workId": raceID})
+	done := make(chan int, 1)
+	go func() {
+		rr := httptest.NewRecorder()
+		service.teamsWorkerHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/teams/worker/decline", bytes.NewReader(raceBody)))
+		done <- rr.Code
+	}()
+	<-entered
+	service.teamsWorker.mu.Lock()
+	service.teamsWorker.clearWorkLocked()
+	service.teamsWorker.mu.Unlock()
+	close(release)
+	if code := <-done; code != http.StatusOK {
+		t.Fatalf("race decline status %d", code)
+	}
+	service.teamsWorker.mu.Lock()
+	_, exists := service.teamsWorker.items[raceID]
+	service.teamsWorker.mu.Unlock()
+	if exists {
+		t.Fatal("decline reinserted invalidated work")
+	}
+	mu.Lock()
+	statusEntered, statusRelease = nil, nil
+	before = len(paths)
+	mu.Unlock()
+	// A transient poll outage retains the review, but makes it non-actionable.
+	mu.Lock()
+	pollStatus = http.StatusServiceUnavailable
+	mu.Unlock()
+	service.teamsWorker.mu.Lock()
+	service.teamsWorker.items = map[string]teamsWorkerItem{workID: {Work: teams.Work{ID: workID, Config: json.RawMessage(`{}`), ConfigSHA256: "synthetic"}, State: "awaiting_review"}}
+	service.teamsWorker.scope = teamsCredentialScope(d, credential)
+	service.teamsWorker.viewScope = service.teamsWorker.scope
+	service.teamsWorker.mu.Unlock()
+	if _, e := service.checkTeamsWork(t.Context()); e == nil {
+		t.Fatal("503 poll unexpectedly succeeded")
+	}
+	service.teamsWorker.mu.Lock()
+	retained, ok := service.teamsWorker.items[workID]
+	offline := service.teamsWorker.scope == ""
+	service.teamsWorker.mu.Unlock()
+	if !ok || retained.State != "awaiting_review" || !offline {
+		t.Fatal("503 lost the offline review")
+	}
+	rr := httptest.NewRecorder()
+	service.teamsWorkerHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/teams/worker/approve-result", bytes.NewReader(approveBody)))
+	if rr.Code == http.StatusOK {
+		t.Fatal("503 left approval actionable")
+	}
+	// Definitive device authorization failures remove retained card details.
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		mu.Lock()
+		pollStatus = status
+		mu.Unlock()
+		service.teamsWorker.mu.Lock()
+		service.teamsWorker.items = map[string]teamsWorkerItem{"old": {State: "awaiting_review"}}
+		service.teamsWorker.scope = teamsCredentialScope(d, credential)
+		service.teamsWorker.viewScope = service.teamsWorker.scope
+		service.teamsWorker.mu.Unlock()
+		if _, e := service.checkTeamsWork(t.Context()); e == nil {
+			t.Fatalf("poll %d unexpectedly succeeded", status)
+		}
+		service.teamsWorker.mu.Lock()
+		n := len(service.teamsWorker.items)
+		service.teamsWorker.mu.Unlock()
+		if n != 0 {
+			t.Fatalf("poll %d retained cards", status)
+		}
+	}
+	mu.Lock()
+	pollStatus = 0
+	before = len(paths)
+	mu.Unlock()
 	// A database failure in the decline gate must also fail before network.
 	if _, err = c.DB.Exec(`DROP TABLE teams_v2_declines`); err != nil {
 		t.Fatal(err)

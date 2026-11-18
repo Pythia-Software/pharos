@@ -26,8 +26,14 @@ type teamsWorkerState struct {
 	mu                    sync.Mutex
 	wake                  chan struct{}
 	items                 map[string]teamsWorkerItem
+	sweep                 []string
+	bindings              map[string]string
+	workBindings          map[string]string
+	settings              teamsLocalSettings
+	settingsValid         bool
 	generation            uint64
 	scope                 string
+	viewScope             string
 	labelFlights          map[string]bool
 	labelLast             map[string]time.Time
 	next                  time.Time
@@ -48,6 +54,16 @@ func (w *teamsWorkerState) clearReaderLabelsLocked() {
 		item.LabelsScope = ""
 		w.items[id] = item
 	}
+}
+
+func (w *teamsWorkerState) clearWorkLocked() {
+	w.clearReaderLabelsLocked()
+	w.items = nil
+	w.sweep = nil
+	w.bindings = nil
+	w.workBindings = nil
+	w.settingsValid = false
+	w.viewScope = ""
 }
 
 var teamsWorkerCapabilities = teamsBuildCapabilities
@@ -102,6 +118,9 @@ func (s *Server) teamsLoop(ctx context.Context) {
 		}
 		settings, settingsErr := readTeamsSettings(ctx, s.Catalog.reader())
 		if settingsErr == nil && (!settings.Enabled || settings.LibraryID == "" || settings.InstallationID == "") {
+			s.teamsWorker.mu.Lock()
+			s.teamsWorker.clearWorkLocked()
+			s.teamsWorker.mu.Unlock()
 			delay = teamsIdleDelay()
 			continue
 		}
@@ -131,14 +150,16 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 	s.teamsWorker.mu.Unlock()
 	defer func() { s.teamsWorker.mu.Lock(); s.teamsWorker.checking = false; s.teamsWorker.mu.Unlock() }()
 	var active bool
+	authorityLoaded := false
 	err := s.withTeamsLibraryClient(ctx, func(client *teams.DeviceClient, d LibraryDescriptor, credential *teams.EnrollmentCredential) error {
+		authorityLoaded = true
 		settings, e := readTeamsSettings(ctx, s.Catalog.reader())
 		if e != nil {
 			return e
 		}
 		if !settings.Enabled {
 			s.teamsWorker.mu.Lock()
-			s.teamsWorker.clearReaderLabelsLocked()
+			s.teamsWorker.clearWorkLocked()
 			s.teamsWorker.mu.Unlock()
 			return nil
 		}
@@ -179,6 +200,9 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 			s.teamsWorker.reconcileAfter = toReconcile[len(toReconcile)-1]
 		}
 		s.teamsWorker.mu.Unlock()
+		if len(toReconcile) == 100 {
+			active = true
+		}
 		for _, id := range toReconcile {
 			_, reconcileErr := s.Catalog.reconcileTeamsV2Receipt(ctx, client, d, credential, id)
 			if errors.Is(reconcileErr, teams.ErrReceiptMismatch) {
@@ -216,6 +240,9 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 			s.teamsWorker.contentReconcileAfter = pendingContent[len(pendingContent)-1]
 		}
 		s.teamsWorker.mu.Unlock()
+		if len(pendingContent) == 100 {
+			active = true
+		}
 		for _, id := range pendingContent {
 			_, _ = s.Catalog.reconcileTeamsContent(ctx, client, d, credential, id)
 		}
@@ -223,33 +250,84 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 		if e != nil {
 			return e
 		}
-		if len(poll.Work) > 100 {
+		if len(poll.Work) > 200 {
 			return errors.New("too many Teams work items")
 		}
+		// The full signed work and local revision inputs bind every retained view.
+		var sourceRev, privacyRev int64
+		if e = s.Catalog.reader().QueryRowContext(ctx, `SELECT revision FROM teams_source_revision WHERE id=1`).Scan(&sourceRev); e != nil {
+			return e
+		}
+		if e = s.Catalog.reader().QueryRowContext(ctx, `SELECT revision FROM teams_privacy_revision WHERE id=1`).Scan(&privacyRev); e != nil {
+			return e
+		}
+		generations, e := readCacheGenerations(ctx, s.Catalog.reader())
+		if e != nil {
+			return e
+		}
+		cancelled := make(map[string]bool, len(poll.Cancellations))
+		for _, x := range poll.Cancellations {
+			cancelled[x.WorkID] = true
+		}
 		items := make(map[string]teamsWorkerItem, len(poll.Work))
+		keys := make(map[string]string, len(poll.Work))
+		workKeys := make(map[string]string, len(poll.Work))
+		ordered := make([]string, 0, len(poll.Work))
+		seen := make(map[string]bool, len(poll.Work))
+		scope := teamsCredentialScope(d, credential)
 		for _, work := range poll.Work {
-			if work.LibraryID != d.ID {
+			if work.LibraryID != d.ID || seen[work.ID] {
 				return errTeamsConsentStale
 			}
+			seen[work.ID] = true
+			if cancelled[work.ID] || (!poll.ServerTime.IsZero() && !work.ExpiresAt.After(poll.ServerTime)) {
+				continue
+			}
+			key, e := s.teamsWorkViewBinding(ctx, scope, work, settings, sourceRev, privacyRev, generations.all)
+			if e != nil {
+				return e
+			}
+			workBinding, e := json.Marshal(struct {
+				Scope string
+				Work  teams.Work
+			}{scope, work})
+			if e != nil {
+				return e
+			}
+			workKeys[work.ID] = teamsPayloadHash(workBinding)
+			keys[work.ID] = key
+			ordered = append(ordered, work.ID)
 			items[work.ID] = teamsWorkerItem{Work: work, State: "pending"}
 		}
+		s.teamsWorker.mu.Lock()
+		oldItems, oldKeys := s.teamsWorker.items, s.teamsWorker.bindings
+		sweep := teamsMergeWorkSweep(s.teamsWorker.sweep, oldKeys, keys, s.teamsWorker.workBindings, workKeys, ordered, oldItems, items)
+		s.teamsWorker.mu.Unlock()
+
 		if poll.CapabilityStatus == "needs_update" {
 			s.teamsWorker.mu.Lock()
 			s.teamsWorker.problem = "This Pharos build needs an update before it can process Teams requests."
 			s.teamsWorker.mu.Unlock()
 		}
-		processed := 0
-		for _, work := range poll.Work {
-			if processed >= 5 {
-				active = true
-				break
-			}
-			processed++
-			item := items[work.ID]
+		count := min(len(sweep), 5)
+		visits := sweep[:count]
+		sweep = append([]string(nil), sweep[count:]...)
+		if len(sweep) > 0 {
+			active = true
+		}
+		runnable := make(map[string]bool)
+		for _, id := range visits {
+			item := items[id]
+			item.Payload = nil
+			item.PayloadHash = ""
+			work := item.Work
 			if handled, declineErr := s.retryTeamsDecline(ctx, client, d, credential, work, manifest.AppVersion); handled {
 				if declineErr != nil {
 					item.State = "decline_pending"
-					active = true
+					if !errors.Is(declineErr, errTeamsConsentStale) {
+						active = true
+						runnable[id] = true
+					}
 				} else {
 					item.State = "declined"
 				}
@@ -351,17 +429,110 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 			}
 			items[work.ID] = item
 		}
+		// Serialize publication with local decline transactions. A decline that
+		// committed while this check was running must win over its older view.
+		publicationLease, e := s.Catalog.teamsSharingLease()
+		if e != nil {
+			return e
+		}
+		defer publicationLease.Close()
+		ids, e := json.Marshal(ordered)
+		if e != nil {
+			return e
+		}
+		declines, e := s.Catalog.reader().QueryContext(ctx, `SELECT work_id,config_hash,state FROM teams_v2_declines WHERE work_id IN (SELECT value FROM json_each(?)) AND library_id=? AND instance_id=? AND org_id=? AND installation_id=? LIMIT 201`, string(ids), d.ID, d.Instance, credential.OrgID, credential.InstallationID)
+		if e != nil {
+			return e
+		}
+		for declines.Next() {
+			var id, hash, state string
+			if e = declines.Scan(&id, &hash, &state); e != nil {
+				declines.Close()
+				return e
+			}
+			item, ok := items[id]
+			if !ok || item.Work.ConfigSHA256 != hash {
+				continue
+			}
+			item.Payload = nil
+			item.PayloadHash = ""
+			item.State = "decline_pending"
+			if state == "sent" {
+				item.State = "declined"
+			}
+			items[id] = item
+		}
+		if e = declines.Err(); e != nil {
+			declines.Close()
+			return e
+		}
+		if e = declines.Close(); e != nil {
+			return e
+		}
+
+		// Visits can create durable drafts or receipts. Bind their views to the
+		// post-visit local state, so the next poll does not invalidate them itself.
+		latest, e := readTeamsSettings(ctx, s.Catalog.reader())
+		if e != nil {
+			return e
+		}
+		if latest != settings {
+			return errTeamsConsentStale
+		}
+		if e = s.Catalog.reader().QueryRowContext(ctx, `SELECT revision FROM teams_source_revision WHERE id=1`).Scan(&sourceRev); e != nil {
+			return e
+		}
+		if e = s.Catalog.reader().QueryRowContext(ctx, `SELECT revision FROM teams_privacy_revision WHERE id=1`).Scan(&privacyRev); e != nil {
+			return e
+		}
+		generations, e = readCacheGenerations(ctx, s.Catalog.reader())
+		if e != nil {
+			return e
+		}
+		for _, id := range visits {
+			keys[id], e = s.teamsWorkViewBinding(ctx, scope, items[id].Work, settings, sourceRev, privacyRev, generations.all)
+			if e != nil {
+				return e
+			}
+		}
+		sweep = teamsAppendRunnable(sweep, visits, items, runnable)
 		s.teamsWorker.mu.Lock()
+		stable := s.teamsWorker.scope == scope
+		for id := range keys {
+			if s.teamsWorker.workBindings[id] != workKeys[id] {
+				continue
+			}
+			// A foreground lookup may have completed while this poll processed.
+			if live, ok := s.teamsWorker.items[id]; ok && live.LabelsScope == scope && validReaderLabels(items[id].Work, live.Labels, live.LabelsAt, false) {
+				item := items[id]
+				item.Labels, item.LabelsAt, item.LabelsScope = live.Labels, live.LabelsAt, live.LabelsScope
+				items[id] = item
+			}
+		}
 		s.teamsWorker.items = items
-		s.teamsWorker.scope = teamsCredentialScope(d, credential)
-		s.teamsWorker.generation++
-		s.teamsWorker.labelLast = nil
+		s.teamsWorker.sweep = sweep
+		s.teamsWorker.bindings = keys
+		s.teamsWorker.workBindings = workKeys
+		s.teamsWorker.settings = settings
+		s.teamsWorker.settingsValid = true
+		s.teamsWorker.scope = scope
+		s.teamsWorker.viewScope = scope
+		if !stable {
+			s.teamsWorker.generation++
+			s.teamsWorker.labelLast = nil
+		}
 		s.teamsWorker.mu.Unlock()
 		return nil
 	})
 	if err != nil {
 		s.teamsWorker.mu.Lock()
-		s.teamsWorker.clearReaderLabelsLocked()
+		var response *teams.HTTPError
+		denied := errors.As(err, &response) && (response.Status == 401 || response.Status == 403)
+		if !authorityLoaded || denied || errors.Is(err, errTeamsNotEnrolled) {
+			s.teamsWorker.clearWorkLocked()
+		} else {
+			s.teamsWorker.clearReaderLabelsLocked()
+		}
 		if !errors.Is(err, errTeamsNotEnrolled) {
 			s.teamsWorker.problem = "The Teams check could not complete. Try again."
 		}
@@ -371,6 +542,68 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 		}
 	}
 	return active, err
+}
+
+func (s *Server) teamsWorkViewBinding(ctx context.Context, scope string, work teams.Work, settings teamsLocalSettings, sourceRev, privacyRev, generation int64) (string, error) {
+	var local string
+	err := s.Catalog.reader().QueryRowContext(ctx, `SELECT json_array(
+		(SELECT json_array(library_id,instance_id,org_id,installation_id,host_id,provider,model,effort,session_digest,auth_digest,settings_revision,granted_at) FROM teams_model_permission WHERE id=1),
+		(SELECT json_array(library_id,instance_id,org_id,installation_id,config_hash,settings_revision,granted_at) FROM teams_request_grants WHERE version_id=?),
+		(SELECT json_array(state,payload_sha256,decision_id,approved_at,receipt_json) FROM teams_v2_results WHERE work_id=?),
+		(SELECT json_array(state,payload_sha256,approval_id,approved_at,receipt_json) FROM teams_content_runs WHERE work_id=?),
+		(SELECT json_array(library_id,instance_id,org_id,installation_id,config_hash,state) FROM teams_v2_declines WHERE work_id=?))`, work.VersionID, work.ID, work.ID, work.ID).Scan(&local)
+	if err != nil {
+		return "", err
+	}
+	body, err := json.Marshal(struct {
+		Scope, Local           string
+		Work                   teams.Work
+		Settings               teamsLocalSettings
+		Source, Privacy, Cache int64
+	}{scope, local, work, settings, sourceRev, privacyRev, generation})
+	if err != nil {
+		return "", err
+	}
+	return teamsPayloadHash(body), nil
+}
+
+func teamsAppendRunnable(sweep, visits []string, items map[string]teamsWorkerItem, runnable map[string]bool) []string {
+	for _, id := range visits {
+		if items[id].State == "ownership_pending" || items[id].State == "source_safety_waiting" || runnable[id] {
+			sweep = append(sweep, id)
+		}
+	}
+	return sweep
+}
+
+// teamsMergeWorkSweep retains the unvisited suffix when fresh work changes.
+// Changed or new bindings join behind that suffix, and stale views are dropped.
+func teamsMergeWorkSweep(previous []string, oldKeys, keys, oldWorkKeys, workKeys map[string]string, ordered []string, oldItems, items map[string]teamsWorkerItem) []string {
+	var sweep []string
+	queued := make(map[string]bool, len(ordered))
+	for _, id := range previous {
+		if keys[id] != "" && workKeys[id] == oldWorkKeys[id] && !queued[id] {
+			sweep = append(sweep, id)
+			queued[id] = true
+		}
+	}
+	for _, id := range ordered {
+		if keys[id] == oldKeys[id] {
+			if old, ok := oldItems[id]; ok {
+				old.Work = items[id].Work
+				items[id] = old
+			}
+		}
+		_, hadView := oldItems[id]
+		if (keys[id] != oldKeys[id] || !hadView) && !queued[id] {
+			sweep = append(sweep, id)
+			queued[id] = true
+		}
+	}
+	if len(sweep) == 0 {
+		sweep = append(sweep, ordered...)
+	}
+	return sweep
 }
 
 func bytesClone(b []byte) []byte { return append([]byte(nil), b...) }

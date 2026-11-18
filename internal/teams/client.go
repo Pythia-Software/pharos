@@ -72,6 +72,9 @@ func decodePollResponse(raw []byte, out *PollResponse) error {
 		if json.Unmarshal(v, &items) != nil {
 			return errors.New("invalid Teams response")
 		}
+		if len(items) > 200 {
+			return errors.New("too many Teams work items")
+		}
 		delete(fields, "work")
 	}
 	shell, err := json.Marshal(fields)
