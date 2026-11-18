@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -1116,6 +1117,8 @@ func libraryStorageOverlaps(source, target Config) bool {
 	return false
 }
 
+var errTeamsTransferJournal = errors.New("protected journal needs reconciliation before this library can be transferred")
+
 func TransferLibrary(ctx context.Context, source, target Config, move bool, progress func(string)) (libraryTransferReceipt, error) {
 	var receipt libraryTransferReceipt
 	if libraryStorageOverlaps(source, target) {
@@ -1147,6 +1150,45 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 			return receipt, err
 		}
 		locks = append(locks, lock)
+	}
+	// Repeat compatibility while both exclusive use leases are held; the
+	// earlier check is only a fast refusal and cannot fence a concurrent upgrade.
+	for _, config := range []Config{source, target} {
+		if err := checkCatalogCompatibility(config.CatalogPath); err != nil {
+			return receipt, err
+		}
+		db, err := openReadOnlySQLite(config.CatalogPath)
+		if err != nil {
+			return receipt, err
+		}
+		var hasMeta, hasExtensions bool
+		err = db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'),EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name IN ('teams_origin_attempts','teams_origin_runs','teams_origin_run_pages','teams_source_transfer_ack'))`).Scan(&hasMeta, &hasExtensions)
+		var marker string
+		present := false
+		if err == nil && hasMeta {
+			err = db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='schema_version'`).Scan(&marker)
+			if errors.Is(err, sql.ErrNoRows) {
+				err = nil
+			} else if err == nil {
+				present = true
+			}
+		}
+		closeErr := db.Close()
+		if err != nil {
+			return receipt, err
+		}
+		if closeErr != nil {
+			return receipt, closeErr
+		}
+		if hasExtensions {
+			return receipt, errTeamsTransferJournal
+		}
+		if present {
+			version, e := strconv.Atoi(strings.TrimSpace(marker))
+			if e != nil || version >= teamsProtectedFormat35 {
+				return receipt, errTeamsTransferJournal
+			}
+		}
 	}
 	a, err := ensureLibraryDescriptor(source, "")
 	if err != nil {

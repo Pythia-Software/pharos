@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/platform/filelock"
 )
 
 func TestTeamsProtectionFenceCatalogInputs(t *testing.T) {
@@ -701,5 +704,307 @@ func TestTeamsRecoveryPreviousProtectedSchema(t *testing.T) {
 	defer recovered.Close()
 	if n := countRows(t, recovered, `SELECT count(*) FROM teams_protection_assertions WHERE conversation_id='' AND kind='legacy_hold' AND evidence='unproved_recovery' AND active=1`); n != 1 {
 		t.Fatal("previous v34 recovery lost unknown hold")
+	}
+}
+
+func TestTeamsCheckpointFormat35TransferStopsBeforeEffects(t *testing.T) {
+	for _, protectedTarget := range []bool{false, true} {
+		for _, move := range []bool{false, true} {
+			t.Run(fmt.Sprintf("target=%t/move=%t", protectedTarget, move), func(t *testing.T) {
+				useHost(t, "synthetic-host")
+				source, target := lifecycleLibraries(t)
+				cfg := source
+				if protectedTarget {
+					cfg = target
+				}
+				cfg.Application = filepath.Join(t.TempDir(), "Synthetic.app")
+				d, err := readLibraryDescriptor(cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				c := reopenCatalog(t, cfg.CatalogPath)
+				execTx(t, c.DB, `INSERT INTO teams_origin_outbox(observation_id,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,run_id,run_generation,expires_at,token,expected_revision,observation_json,observation_sha256,state) VALUES('o','origin','org','person','install','library','instance','work','snapshot','hash',1,1,1,1,'run',1,1,'token',0,'{}','hash','held')`)
+				w, err := teamsOpenProtectedWriter(c.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tx, err := teamsBeginProtectedWrite(t.Context(), w)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = teamsInstallProtectionFence(t.Context(), tx); err != nil {
+					t.Fatal(err)
+				}
+				w.authorized.Store(true)
+				err = teamsCaptureOpenContract(t.Context(), tx)
+				w.authorized.Store(false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = tx.Commit(); err != nil {
+					t.Fatal(err)
+				}
+				scope := teamsCheckpointScope(installationID(cfg.Application), d.ID)
+				key := bytes.Repeat([]byte{42}, 32)
+				host := &teamsCheckpointTestStore{}
+				if err = teamsCheckpointActivate(t.Context(), w, host, scope, scope, teamsCheckpointInstance(d.ID, d.Instance), key, func(tx *sql.Tx) error { return teamsVerifyProtectionFence(t.Context(), tx) }, nil); err != nil {
+					t.Fatal(err)
+				}
+				w.requireFence = true
+				w.expectedInstance = teamsCheckpointInstance(d.ID, d.Instance)
+				c.teamsCheckpoint = &teamsCheckpointRuntime{writer: w, store: host, name: scope, scope: scope, guardKey: key}
+				exclusive, e := fileLease(libraryUseLock(cfg), true)
+				if e != nil {
+					t.Fatal(e)
+				}
+				e = c.teamsUpgradeProtectedFormat35(t.Context(), cfg, d, func(*sql.Tx) error { return nil }, nil)
+				exclusive.Close()
+				if !errors.Is(e, filelock.ErrContended) {
+					t.Fatalf("upgrade crossed transfer lease: %v", e)
+				}
+				if err = c.teamsUpgradeProtectedFormat35(t.Context(), cfg, d, func(*sql.Tx) error { return nil }, nil); err != nil {
+					t.Fatal(err)
+				}
+				txProjection, err := c.DB.BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				protectedDigest, err := teamsProtectionProjection(t.Context(), txProjection)
+				if err != nil {
+					t.Fatal(err)
+				}
+				txProjection.Rollback()
+				c.teamsCheckpoint = nil
+				if err = w.db.Close(); err != nil {
+					t.Fatal(err)
+				}
+				// Keep a real SQLite connection open so the just-committed
+				// v35 schema remains visible through the WAL during preflight.
+				if err = c.DB.Ping(); err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				wal, err := os.Stat(cfg.CatalogPath + "-wal")
+				if err != nil || wal.Size() == 0 {
+					t.Fatalf("missing upgrade WAL: %v", err)
+				}
+				// An immutable reader ignores WAL; prove the protected upgrade has
+				// not already been checkpointed into the main file.
+				mainOnly, err := sql.Open("sqlite", "file:"+cfg.CatalogPath+"?mode=ro&immutable=1")
+				if err != nil {
+					t.Fatal(err)
+				}
+				var mainVersion string
+				err = mainOnly.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&mainVersion)
+				mainOnly.Close()
+				if err != nil || strings.TrimSpace(mainVersion) == "35" {
+					t.Fatalf("v35 not isolated in WAL: version=%q err=%v", mainVersion, err)
+				}
+				digests := make([]string, 2)
+				for i, p := range []string{source.CatalogPath, target.CatalogPath} {
+					db, e := openReadOnlySQLite(p)
+					if e != nil {
+						t.Fatal(e)
+					}
+					digests[i], e = historyDigest(t.Context(), db)
+					db.Close()
+					if e != nil {
+						t.Fatal(e)
+					}
+				}
+				unprotected := target
+				if protectedTarget {
+					unprotected = source
+				}
+				if err = os.Remove(descriptorPath(unprotected)); err != nil {
+					t.Fatal(err)
+				}
+				stage := filepath.Join(filepath.Dir(source.CatalogPath), ".pharos-transfer-source-synthetic")
+				if err = os.MkdirAll(stage, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(filepath.Join(stage, ".pharos-transfer-stage"), []byte("pharos-transfer-source-v1\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				pending := pendingDeliveryPath(source)
+				if err = os.MkdirAll(filepath.Dir(pending), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(pending, []byte("synthetic pending"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				progress := 0
+				_, err = TransferLibrary(t.Context(), source, target, move, func(string) { progress++ })
+				if !errors.Is(err, errTeamsTransferJournal) || progress != 0 {
+					t.Fatalf("transfer began: %v progress=%d", err, progress)
+				}
+				for i, p := range []string{source.CatalogPath, target.CatalogPath} {
+					db, e := openReadOnlySQLite(p)
+					if e != nil {
+						t.Fatal(e)
+					}
+					after, e := historyDigest(t.Context(), db)
+					db.Close()
+					if e != nil || after != digests[i] {
+						t.Fatalf("catalog changed: %v", e)
+					}
+				}
+				db, e := openReadOnlySQLite(cfg.CatalogPath)
+				if e != nil {
+					t.Fatal(e)
+				}
+				readTx, e := db.BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
+				if e != nil {
+					t.Fatal(e)
+				}
+				afterProjection, e := teamsProtectionProjection(t.Context(), readTx)
+				readTx.Rollback()
+				db.Close()
+				if e != nil || afterProjection != protectedDigest {
+					t.Fatalf("protected custody changed: %v", e)
+				}
+				if _, e = os.Stat(descriptorPath(unprotected)); !errors.Is(e, os.ErrNotExist) {
+					t.Fatalf("descriptor created: %v", e)
+				}
+				if _, e = os.Stat(filepath.Join(stage, ".pharos-transfer-stage")); e != nil {
+					t.Fatalf("stale stage removed: %v", e)
+				}
+				got, e := os.ReadFile(pending)
+				if e != nil || string(got) != "synthetic pending" {
+					t.Fatalf("pending receipt changed: %v", e)
+				}
+				if _, err = os.Stat(filepath.Join(target.CaptureRoot, ".imports")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("destination import created: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestTeamsTransferAllowsLegacyCatalogWithoutVersionMarker(t *testing.T) {
+	source, target := lifecycleLibraries(t)
+	c := reopenCatalog(t, source.CatalogPath)
+	if _, err := c.DB.Exec(`DELETE FROM meta WHERE key='schema_version'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := TransferLibrary(t.Context(), source, target, false, nil); err != nil {
+		t.Fatalf("legacy catalog transfer: %v", err)
+	}
+}
+
+func TestTeamsTransferRechecksFormatUnderLeases(t *testing.T) {
+	for _, marker := range []string{"35", "36", "malformed"} {
+		t.Run(marker, func(t *testing.T) {
+			source, target := lifecycleLibraries(t)
+			steps := 0
+			realLock := lockFileLease
+			override(t, &lockFileLease, func(f *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+				if mode == filelock.Exclusive && (f.Name() == libraryUseLock(source) || f.Name() == libraryUseLock(target)) {
+					steps++
+					if steps == 2 {
+						db, err := sql.Open("sqlite", catalogDSN(source.CatalogPath))
+						if err != nil {
+							t.Fatal(err)
+						}
+						if _, err = db.Exec(`UPDATE meta SET value=? WHERE key='schema_version'`, marker); err != nil {
+							t.Fatal(err)
+						}
+						db.Close()
+					}
+				}
+				return realLock(f, mode, wait)
+			})
+			progress := 0
+			_, err := TransferLibrary(t.Context(), source, target, true, func(string) { progress++ })
+			if err == nil || steps != 2 || progress != 0 {
+				t.Fatalf("unsafe transfer: err=%v leases=%d progress=%d", err, steps, progress)
+			}
+			if _, err = os.Stat(filepath.Join(target.CaptureRoot, ".imports")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("destination import created: %v", err)
+			}
+		})
+	}
+}
+
+func TestTeamsTransferRejectsJournalWithLostVersionMarker(t *testing.T) {
+	source, target := lifecycleLibraries(t)
+	c := reopenCatalog(t, source.CatalogPath)
+	if _, err := c.DB.Exec(`CREATE TABLE teams_origin_runs (synthetic INTEGER); DELETE FROM meta WHERE key='schema_version'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := TransferLibrary(t.Context(), source, target, false, nil); !errors.Is(err, errTeamsTransferJournal) {
+		t.Fatalf("journal with missing marker: %v", err)
+	}
+}
+
+func TestTeamsTransferToProtected34RetainsHold(t *testing.T) {
+	support := t.TempDir()
+	t.Setenv("PHAROS_SUPPORT_DIR", support)
+	source, target := lifecycleLibraries(t)
+	target.Application = filepath.Join(support, "Synthetic.app")
+	sourceCatalog := reopenCatalog(t, source.CatalogPath)
+	execTx(t, sourceCatalog.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','test','local','w','Synthetic','2026-01-01')`, `INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','test','local','n')`)
+	if err := sourceCatalog.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d, err := readLibraryDescriptor(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := reopenCatalog(t, target.CatalogPath)
+	store, err := teamsCredentialStore(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := teamsCheckpointScope(installationID(target.Application), d.ID)
+	key := bytes.Repeat([]byte{42}, 32)
+	if err = store.Save(teamsCheckpointKeyName(scope), key); err != nil {
+		t.Fatal(err)
+	}
+	w, err := teamsOpenProtectedWriter(c.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := teamsBeginProtectedWrite(t.Context(), w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = teamsInstallProtectionFence(t.Context(), tx); err != nil {
+		t.Fatal(err)
+	}
+	w.authorized.Store(true)
+	err = teamsCaptureOpenContract(t.Context(), tx)
+	w.authorized.Store(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err = teamsCheckpointActivate(t.Context(), w, store, scope, scope, teamsCheckpointInstance(d.ID, d.Instance), key, func(tx *sql.Tx) error { return teamsVerifyProtectionFence(t.Context(), tx) }, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = w.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = TransferLibrary(t.Context(), source, target, false, nil); err != nil {
+		t.Fatalf("v34 target transfer: %v", err)
+	}
+	raw, err := store.Load(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := teamsParseCheckpoint(raw)
+	if err != nil || host.Phase != "held" {
+		t.Fatalf("v34 target checkpoint not held: %v", err)
 	}
 }

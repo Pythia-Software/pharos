@@ -273,6 +273,13 @@ func (c *Catalog) teamsUpgradeProtectedFormat35(ctx context.Context, cfg Config,
 	if c == nil || c.teamsCheckpoint == nil || cfg.Application == "" || cfg.CatalogPath != c.Path || d.ID == "" || d.Instance == "" || verify == nil {
 		return errTeamsProtectionContinuity
 	}
+	// A transfer holds this lease exclusively across its preflight and all
+	// subsequent effects; a format upgrade must not race that decision.
+	use, err := fileLease(libraryUseLock(cfg), false)
+	if err != nil {
+		return err
+	}
+	defer use.Close()
 	r := c.teamsCheckpoint
 	expectedScope := teamsCheckpointScope(installationID(cfg.Application), d.ID)
 	instance := teamsCheckpointInstance(d.ID, d.Instance)
