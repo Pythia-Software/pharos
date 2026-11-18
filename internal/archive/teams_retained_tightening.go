@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/gbdubs/pharos/internal/teams"
 	"github.com/gbdubs/pharos/internal/teams/sourcewire"
@@ -84,7 +85,9 @@ func (c *Catalog) teamsTightenRetainedOrigin(ctx context.Context, cfg Config, cl
 	if err != nil {
 		return true, err
 	}
-	err = c.sendTeamsLocalOrigin(ctx, cfg, client, d, credential, snapshot, scope, observation.ObservationID, false)
+	sendCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	err = c.sendTeamsLocalOrigin(sendCtx, cfg, client, d, credential, snapshot, scope, observation.ObservationID, false)
 	if errors.Is(err, errTeamsPilotPending) {
 		return true, err
 	}

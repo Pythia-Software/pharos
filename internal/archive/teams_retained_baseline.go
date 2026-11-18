@@ -299,6 +299,22 @@ func teamsPruneSupersededBaselineRuns(ctx context.Context, tx *sql.Tx, d Library
 		return err
 	}
 	for _, old := range candidates {
+		if len(old.start) == 0 {
+			// A definitive restart response before a start receipt carries no
+			// server floor. Retire only the exact empty completed attempt.
+			result, e := tx.ExecContext(ctx, `DELETE FROM teams_origin_runs WHERE run_key=? AND token=? AND state='completed' AND start_receipt_json IS NULL AND NOT EXISTS(SELECT 1 FROM teams_origin_run_pages WHERE run_key=?)`, old.key, token, old.key)
+			if e != nil {
+				return e
+			}
+			n, e := result.RowsAffected()
+			if e != nil {
+				return e
+			}
+			if n != 1 {
+				return errTeamsProtectionHeld
+			}
+			continue
+		}
 		var start sourcewire.RecoveryStartReceipt
 		if !teams.ValidUniqueJSON(old.start) || json.Unmarshal(old.start, &start) != nil {
 			return errTeamsProtectionHeld
@@ -309,6 +325,7 @@ func teamsPruneSupersededBaselineRuns(ctx context.Context, tx *sql.Tx, d Library
 		}
 		var requests []sourcewire.RecoveryPageRequest
 		var receipts []sourcewire.RecoveryPageReceipt
+		pending := false
 		for pages.Next() {
 			var i int
 			var request, receipt []byte
@@ -318,17 +335,52 @@ func teamsPruneSupersededBaselineRuns(ctx context.Context, tx *sql.Tx, d Library
 			}
 			req, e := sourcewire.DecodeRecoveryPage(request)
 			var res sourcewire.RecoveryPageReceipt
-			if i != len(requests) || e != nil || !teams.ValidUniqueJSON(receipt) || json.Unmarshal(receipt, &res) != nil {
+			if i != len(requests) || e != nil || pending {
 				pages.Close()
 				return errTeamsProtectionHeld
 			}
 			requests = append(requests, req)
+			if len(receipt) == 0 {
+				pending = true
+				continue
+			}
+			if !teams.ValidUniqueJSON(receipt) || json.Unmarshal(receipt, &res) != nil {
+				pages.Close()
+				return errTeamsProtectionHeld
+			}
 			receipts = append(receipts, res)
 		}
 		err = pages.Err()
 		pages.Close()
 		if err != nil {
 			return err
+		}
+		if pending {
+			expected := ""
+			if len(receipts) > 0 {
+				expected = receipts[len(receipts)-1].NextCursor
+			}
+			if requests[len(requests)-1].Cursor != expected || (len(receipts) > 0 && expected == "") {
+				return errTeamsProtectionHeld
+			}
+			requests = requests[:len(receipts)]
+		}
+		if len(receipts) == 0 {
+			if start.Held || scan.held || scan.last.UnacceptedFloor < start.UnacceptedFloor {
+				return errTeamsProtectionHeld
+			}
+			if _, e := tx.ExecContext(ctx, `DELETE FROM teams_origin_runs WHERE run_key=? AND token=? AND state='completed'`, old.key, token); e != nil {
+				return e
+			}
+			continue
+		}
+		// A complete newer scan can dominate an authenticated old prefix.
+		// The original continuation remains intact until this deletion.
+		if last := receipts[len(receipts)-1]; last.NextCursor != "" {
+			if len(last.Items) == 0 {
+				return errTeamsProtectionHeld
+			}
+			receipts[len(receipts)-1].NextCursor = ""
 		}
 		previous, e := teamsBuildRecoveryOriginScan(start, requests, receipts)
 		comparison := scan
@@ -387,7 +439,7 @@ func (c *Catalog) teamsProduceRetainedBaseline(ctx context.Context, cfg Config, 
 	// A durable zero attempt marker proves that no PUT began. Retire only
 	// those exact unsent rows under the same sharing/capture barriers.
 	err = c.writeTransaction(censusCtx, "teams-baseline-retire-unsent", func(tx *sql.Tx) error {
-		_, e := tx.ExecContext(censusCtx, `DELETE FROM teams_origin_outbox WHERE observation_id IN (SELECT o.observation_id FROM teams_origin_outbox o JOIN teams_origin_attempts a ON a.observation_id=o.observation_id WHERE o.origin=? AND o.org_id=? AND o.person_id=? AND o.installation_id=? AND o.library_id=? AND o.instance_id=? AND o.state='prepared' AND o.receipt_json IS NULL AND ((a.first_attempt_at=0 AND a.terminal_code='') OR (a.first_attempt_at>0 AND a.terminal_code IN ('first_rejected_source_issuance_expired','first_rejected_source_resync_required','first_rejected_stale_protection_revision'))) ORDER BY o.observation_id LIMIT 8)`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance)
+		_, e := tx.ExecContext(censusCtx, `DELETE FROM teams_origin_outbox WHERE observation_id IN (SELECT o.observation_id FROM teams_origin_outbox o JOIN teams_origin_attempts a ON a.observation_id=o.observation_id WHERE o.origin=? AND o.org_id=? AND o.person_id=? AND o.installation_id=? AND o.library_id=? AND o.instance_id=? AND o.state IN ('prepared','held') AND o.receipt_json IS NULL AND ((o.state='prepared' AND a.first_attempt_at=0 AND a.terminal_code='') OR (a.first_attempt_at=0 AND a.terminal_code='first_rejected_source_issuance_expired') OR (o.state='prepared' AND a.first_attempt_at>0 AND a.terminal_code IN ('first_rejected_source_issuance_expired','first_rejected_source_resync_required','first_rejected_stale_protection_revision'))) ORDER BY o.observation_id LIMIT 8)`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance)
 		return e
 	})
 	if err != nil {
@@ -503,6 +555,9 @@ func (c *Catalog) teamsProduceRetainedBaseline(ctx context.Context, cfg Config, 
 		}
 		if e = teamsPruneSupersededBaselineRuns(censusCtx, tx, d, credential, run, "baseline", scan, false); e != nil {
 			return fmt.Errorf("retain baseline history: %w", e)
+		}
+		if e = teamsCompactRetainedReceiptsIn(censusCtx, tx, d, credential, scan); e != nil {
+			return fmt.Errorf("compact superseded receipts: %w", e)
 		}
 		return nil
 	})

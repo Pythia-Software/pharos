@@ -124,6 +124,7 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 	var unconfirmedPage []byte
 	var requestRun string
 	startBodies := map[string][]byte{}
+	startReceipts := map[string]sourcewire.RecoveryStartReceipt{}
 	runGenerations := map[string]int64{}
 	runHeld := map[string]bool{}
 	safetyHeldOnce := false
@@ -162,6 +163,10 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 				t.Error("recovery start retry changed bytes")
 			}
 			startBodies[command.StartID] = bytes.Clone(raw)
+			if prior, ok := startReceipts[command.StartID]; ok && (mode == "retained-baseline" || mode == "nonprivate-stale") {
+				_ = json.NewEncoder(w).Encode(prior)
+				return
+			}
 			if starts == 1 {
 				// The server received the signed request but its reply was lost.
 				if mode == "auth" {
@@ -189,7 +194,9 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 			}
 			runGenerations[runID] = generation
 			runHeld[runID] = held
-			_ = json.NewEncoder(w).Encode(sourcewire.RecoveryStartReceipt{Status: status, Held: held, RunID: runID, Generation: generation, ServerTime: now, ExpiresAt: now + 3600, UnacceptedFloor: now - 1, ExternalProofRequired: true})
+			receipt := sourcewire.RecoveryStartReceipt{Status: status, Held: held, RunID: runID, Generation: generation, ServerTime: now, ExpiresAt: now + 3600, UnacceptedFloor: now - 1, ExternalProofRequired: true}
+			startReceipts[command.StartID] = receipt
+			_ = json.NewEncoder(w).Encode(receipt)
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/source-recovery/") && strings.HasSuffix(r.URL.Path, "/pages"):
 			request, e := sourcewire.DecodeRecoveryPage(raw)
 			if e != nil {
@@ -676,6 +683,35 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 		}
 		if e = c.teamsPilotCheckpointCurrent(ctx, d); e != nil {
 			t.Fatal(e)
+		}
+		// An explicit stale-start disposition without a receipt or pages has
+		// no authenticated floor and may be retired by a later complete scan.
+		if e = c.writeTransaction(ctx, "synthetic-stale-prefix", func(tx *sql.Tx) error {
+			var key string
+			if x := tx.QueryRow(`SELECT proposal_sha256 FROM teams_protection_baseline WHERE id=1`).Scan(&key); x != nil {
+				return x
+			}
+			current, x := teamsRecoveryScanByRunIn(ctx, tx, key)
+			if x != nil {
+				return x
+			}
+			_, x = tx.Exec(`INSERT INTO teams_origin_runs(run_key,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,token,start_json,start_receipt_json,expires_at,state) SELECT 'stale-empty',origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,token,start_json,NULL,expires_at,'completed' FROM teams_origin_runs WHERE run_key=?`, key)
+			if x != nil {
+				return x
+			}
+			if x = teamsPruneSupersededBaselineRuns(ctx, tx, d, credential, key, "baseline", current, false); x != nil {
+				return x
+			}
+			var n int
+			if x = tx.QueryRow(`SELECT count(*) FROM teams_origin_runs WHERE run_key='stale-empty'`).Scan(&n); x != nil {
+				return x
+			}
+			if n != 0 {
+				return errTeamsProtectionHeld
+			}
+			return nil
+		}); e != nil {
+			t.Fatalf("safe stale-start compaction: %v", e)
 		}
 		// A higher floor retained by a safety scan must fence a later baseline
 		// or batch even when the original baseline had a lower floor.

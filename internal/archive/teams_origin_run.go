@@ -90,30 +90,27 @@ func (c *Catalog) teamsRecoveryPageForScope(ctx context.Context, cfg Config, cli
 		}
 		if errors.Is(e, sql.ErrNoRows) && token == "batch" && workID == "" && scope.snapshotID == "" {
 			// The baseline is already a contributor to this live server run.
-			// Reuse its exact signed start and pages for the first batch rather
+			// Revalidate its exact signed start and read fresh pages rather
 			// than inventing a conflicting start ID in the same generation.
 			var baselineKey string
 			e = tx.QueryRowContext(ctx, `SELECT r.run_key,r.start_json,r.start_receipt_json,r.expires_at FROM teams_origin_runs r JOIN teams_protection_baseline b ON b.id=1 AND b.state='current' AND b.proposal_sha256=r.run_key WHERE r.origin=? AND r.org_id=? AND r.person_id=? AND r.installation_id=? AND r.library_id=? AND r.instance_id=? AND r.token='baseline' AND r.state='completed' AND r.inventory_sha256=? AND r.settings_revision=? AND r.source_revision=? AND r.privacy_revision=? AND r.cache_generation=? AND r.expires_at>?`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, scope.inventoryHash, scope.settingsRevision, scope.sourceRevision, scope.privacyRevision, scope.generation, time.Now().UTC().Unix()).Scan(&baselineKey, &row.start, &row.startReceipt, &row.expires)
 			if e == nil {
+				var count int
+				if x := tx.QueryRowContext(ctx, `SELECT count(*) FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=?`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance).Scan(&count); x != nil {
+					return x
+				}
+				if count >= teamsPilotMaxRetainedRuns {
+					return errTeamsPilotPending
+				}
 				nonce, x := teamsCheckpointRandom()
 				if x != nil {
 					return x
 				}
 				row.key = teamsPayloadHash([]byte("baseline-batch-alias:" + baselineKey + ":" + nonce))
-				row.state = "ready"
-				_, x = tx.ExecContext(ctx, `INSERT INTO teams_origin_runs(run_key,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,token,start_json,start_receipt_json,expires_at,state) SELECT ?,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,'batch',start_json,start_receipt_json,expires_at,'ready' FROM teams_origin_runs WHERE run_key=? AND token='baseline' AND state='completed'`, row.key, baselineKey)
-				if x != nil {
-					return x
-				}
-				result, x := tx.ExecContext(ctx, `INSERT INTO teams_origin_run_pages(run_key,page_index,request_json,receipt_json) SELECT ?,page_index,request_json,receipt_json FROM teams_origin_run_pages WHERE run_key=? AND receipt_json IS NOT NULL ORDER BY page_index`, row.key, baselineKey)
-				if x != nil {
-					return x
-				}
-				n, x := result.RowsAffected()
-				if x != nil || n < 1 || n > teamsRecoveryMaxOriginPages {
-					return errTeamsProtectionHeld
-				}
-				return nil
+				row.state = "prepared"
+				row.startReceipt = nil
+				_, x = tx.ExecContext(ctx, `INSERT INTO teams_origin_runs(run_key,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,token,start_json,expires_at,state) SELECT ?,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,'batch',start_json,expires_at,'prepared' FROM teams_origin_runs WHERE run_key=? AND token='baseline' AND state='completed'`, row.key, baselineKey)
+				return x
 			}
 			if !errors.Is(e, sql.ErrNoRows) {
 				return e
@@ -136,21 +133,20 @@ func (c *Catalog) teamsRecoveryPageForScope(ctx context.Context, cfg Config, cli
 				if x != nil {
 					return x
 				}
+				var count int
+				if x = tx.QueryRowContext(ctx, `SELECT count(*) FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=?`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance).Scan(&count); x != nil {
+					return x
+				}
+				if count >= teamsPilotMaxRetainedRuns {
+					return errTeamsPilotPending
+				}
 				row.key = teamsPayloadHash([]byte("safety-baseline-alias:" + priorKey + ":" + nonce))
-				row.state = "ready"
-				_, x = tx.ExecContext(ctx, `INSERT INTO teams_origin_runs(run_key,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,token,start_json,start_receipt_json,expires_at,state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'baseline',?,?,?,'ready')`, row.key, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, workID, scope.snapshotID, scope.inventoryHash, scope.settingsRevision, scope.sourceRevision, scope.privacyRevision, scope.generation, row.start, row.startReceipt, row.expires)
-				if x != nil {
-					return x
-				}
-				result, x := tx.ExecContext(ctx, `INSERT INTO teams_origin_run_pages(run_key,page_index,request_json,receipt_json) SELECT ?,page_index,request_json,receipt_json FROM teams_origin_run_pages WHERE run_key=? AND receipt_json IS NOT NULL ORDER BY page_index`, row.key, priorKey)
-				if x != nil {
-					return x
-				}
-				n, x := result.RowsAffected()
-				if x != nil || n < 1 || n > teamsRecoveryMaxOriginPages {
-					return errTeamsProtectionHeld
-				}
-				return nil
+				row.state = "prepared"
+				row.startReceipt = nil
+				// Re-submit the exact prior start and read fresh pages. The
+				// server may have advanced since the saved safety view.
+				_, x = tx.ExecContext(ctx, `INSERT INTO teams_origin_runs(run_key,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,token,start_json,expires_at,state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'baseline',?,?,'prepared')`, row.key, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, workID, scope.snapshotID, scope.inventoryHash, scope.settingsRevision, scope.sourceRevision, scope.privacyRevision, scope.generation, row.start, row.expires)
+				return x
 			}
 			if !errors.Is(e, sql.ErrNoRows) {
 				return e
