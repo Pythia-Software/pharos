@@ -50,3 +50,50 @@ func TestTeamsFreshImage(t *testing.T) {
 		t.Fatalf("baseline %q: %v", state, err)
 	}
 }
+
+func TestTeamsBirthReservationTransitions(t *testing.T) {
+	store := &teamsCheckpointTestStore{}
+	r := teamsBirthReservation{Version: 1, Phase: "reserved", Application: "synthetic-app", Path: filepath.Join(t.TempDir(), "library"), Host: "synthetic-host", UID: 1, LibraryID: "library", InstanceID: "instance"}
+	r.Scope = teamsCheckpointScope(r.Application, r.LibraryID)
+	name := teamsBirthReservationName(r.Application, r.Path)
+	raw, err := teamsEncodeBirthReservation(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Save(name, raw); err != nil {
+		t.Fatal(err)
+	}
+	_, got, err := teamsReadBirthReservation(store, name)
+	if err != nil || got.Phase != "reserved" {
+		t.Fatal(err)
+	}
+	next := r
+	next.Phase = "image_bound"
+	next.ImageSHA256 = string(make([]byte, 64))
+	next.Tuple = &teamsCheckpointTuple{Generation: 1, Instance: teamsCheckpointInstance(r.LibraryID, r.InstanceID), Revision: 0, CommitID: "00000000000000000000000000000000", Digest: "0000000000000000000000000000000000000000000000000000000000000000"}
+	next.ImageSHA256 = next.Tuple.Digest
+	next.DirectoryInode = 1
+	next.CatalogInode = 2
+	bound, err := teamsAdvanceBirthReservation(store, name, raw, r, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	altered := next
+	altered.Phase = "committed"
+	altered.DirectoryInode = 1
+	altered.CatalogInode = 2
+	altered.Path = filepath.Join(t.TempDir(), "other")
+	if _, err = teamsAdvanceBirthReservation(store, name, bound, next, altered); err == nil {
+		t.Fatal("changed path accepted")
+	}
+	committed := next
+	committed.Phase = "committed"
+	committed.DirectoryInode = 1
+	committed.CatalogInode = 2
+	if _, err = teamsAdvanceBirthReservation(store, name, raw, next, committed); err == nil {
+		t.Fatal("stale predecessor accepted")
+	}
+	if _, err = teamsAdvanceBirthReservation(store, name, bound, next, committed); err != nil {
+		t.Fatal(err)
+	}
+}
