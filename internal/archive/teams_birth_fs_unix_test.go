@@ -139,11 +139,17 @@ func TestTeamsCreateManagedLibrary(t *testing.T) {
 	if err = os.Rename(oldPath, cfg.CatalogPath); err != nil {
 		t.Fatal(err)
 	}
-	if err = catalog.writeTransaction(context.Background(), "synthetic private change", func(tx *sql.Tx) error {
-		_, e := tx.Exec(`UPDATE teams_protection_baseline SET generation=generation+1 WHERE id=1`)
+	if err = catalog.writeTransaction(context.Background(), "synthetic indexing", func(tx *sql.Tx) error {
+		if _, e := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','test','local','w','Synthetic','2026-01-01')`); e != nil {
+			return e
+		}
+		_, e := tx.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','test','local','c')`)
 		return e
 	}); err != nil {
-		t.Fatal("protected write", err)
+		t.Fatal("protected indexing", err)
+	}
+	if _, err = catalog.setTeamsPrivate(context.Background(), "c", true); err != nil {
+		t.Fatal("private marking", err)
 	}
 	if err = catalog.Close(); err != nil {
 		t.Fatal(err)
@@ -151,6 +157,10 @@ func TestTeamsCreateManagedLibrary(t *testing.T) {
 	catalog, found, err = teamsOpenManagedCatalog(context.Background(), cfg)
 	if err != nil || !found {
 		t.Fatalf("restart after protected write: %v", err)
+	}
+	privacy, err := catalog.teamsPrivacy(context.Background(), "c")
+	if err != nil || !privacy.Private {
+		t.Fatalf("privacy after restart: %v", err)
 	}
 	if err = catalog.Close(); err != nil {
 		t.Fatal(err)
