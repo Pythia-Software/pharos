@@ -182,6 +182,19 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 	if err != nil || !v.Valid(time.Now()) || v.Valid(until) {
 		t.Fatalf("verified issuance: %v", err)
 	}
+	credential := &EnrollmentCredential{Origin: origin, InstallationID: b.InstallationID, OrgID: org, PersonID: person, LibraryID: b.LibraryID, key: key}
+	if !v.MatchesCredential(credential) || (VerifiedTypedBinding{}).MatchesCredential(credential) {
+		t.Fatal("verified binding lost its credential scope")
+	}
+	for _, altered := range []EnrollmentCredential{
+		{Origin: "https://other.invalid", InstallationID: b.InstallationID, OrgID: org, PersonID: person, LibraryID: b.LibraryID, key: key},
+		{Origin: origin, InstallationID: b.InstallationID, OrgID: org, PersonID: org, LibraryID: b.LibraryID, key: key},
+		{Origin: origin, InstallationID: b.InstallationID, OrgID: org, PersonID: person, LibraryID: b.LibraryID},
+	} {
+		if v.MatchesCredential(&altered) {
+			t.Fatal("accepted another credential scope")
+		}
+	}
 	requestBytes, _ := json.Marshal(req)
 	if string(v.RequestBytes()) != string(requestBytes) || v.Receipt().BindingSHA256 != hash || len(v.Pages()) != 1 || len(v.Pages()[0]) != 2 {
 		t.Fatal("verified result lost issuance or pages")
@@ -203,8 +216,8 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 	belowFloor := floor
 	belowFloor.NextIssuedAt++
 	floor = belowFloor
-	if result, e := verified(); e == nil || result.Valid(time.Now()) {
-		t.Fatal("accepted request below issuance floor")
+	if result, e := verified(); e != nil || !result.Valid(time.Now()) {
+		t.Fatalf("exact receipt replay after the issuance floor advanced: %v", e)
 	}
 	floor.NextIssuedAt--
 	wrongRequest := req

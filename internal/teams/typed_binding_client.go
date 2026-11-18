@@ -3,6 +3,7 @@ package teams
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -199,9 +200,11 @@ func (c *DeviceClient) typedAssignments(ctx context.Context, workID string, rece
 // VerifiedTypedBinding is an issuance and all of its verified assignment chains.
 // Its zero value is invalid. Its accessors return independent copies.
 type VerifiedTypedBinding struct {
-	request []byte
-	receipt []byte
-	pages   [][]sourcewire.TypedAssignmentPage
+	request                                    []byte
+	receipt                                    []byte
+	pages                                      [][]sourcewire.TypedAssignmentPage
+	origin, installation, org, person, library string
+	publicKey                                  []byte
 }
 
 // Valid reports whether the verified issuance remains usable at now.
@@ -211,6 +214,12 @@ func (v VerifiedTypedBinding) Valid(now time.Time) bool {
 	}
 	var receipt TypedBindingReceipt
 	return json.Unmarshal(v.receipt, &receipt) == nil && receipt.Status == "issued" && receipt.ValidUntil != nil && now.Before(*receipt.ValidUntil)
+}
+
+// MatchesCredential binds the verified response to the service and device that
+// supplied it, as well as the scope used to derive the request identity.
+func (v VerifiedTypedBinding) MatchesCredential(c *EnrollmentCredential) bool {
+	return c != nil && v.origin == c.Origin && v.installation == c.InstallationID && v.org == c.OrgID && v.person == c.PersonID && v.library == c.LibraryID && len(c.key) == ed25519.PrivateKeySize && bytes.Equal(v.publicKey, c.key.Public().(ed25519.PublicKey))
 }
 
 // RequestBytes returns the exact bytes signed for issuance.
@@ -242,13 +251,8 @@ func (c *DeviceClient) IssueVerifiedTypedBinding(ctx context.Context, orgID, per
 	if c == nil {
 		return zero, errTypedBinding
 	}
-	floor, err := c.TypedBindingFloor(ctx, workID)
-	if err != nil {
-		return zero, err
-	}
-	if request.IssuedAt < floor.NextIssuedAt || (floor.RetryAt != nil && time.Now().Before(*floor.RetryAt)) {
-		return zero, errTypedBinding
-	}
+	// The floor is for allocating a new identity. Exact replays must reach
+	// the service even after accepting that identity advances the floor.
 	receipt, err := c.IssueTypedBinding(ctx, orgID, personID, libraryID, workID, windowSHA256, request)
 	if err != nil {
 		return zero, err
@@ -276,5 +280,5 @@ func (c *DeviceClient) IssueVerifiedTypedBinding(ctx context.Context, orgID, per
 	if err != nil {
 		return zero, err
 	}
-	return VerifiedTypedBinding{request: body, receipt: raw, pages: pages}, nil
+	return VerifiedTypedBinding{request: body, receipt: raw, pages: pages, origin: c.origin.String(), installation: c.installation, org: orgID, person: personID, library: libraryID, publicKey: bytes.Clone(c.key.Public().(ed25519.PublicKey))}, nil
 }
