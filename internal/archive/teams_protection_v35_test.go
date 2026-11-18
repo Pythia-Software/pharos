@@ -241,6 +241,33 @@ func TestTeamsProtectedFormat35Upgrade(t *testing.T) {
 	if golden != "088ac485712a6aa5d02194d5ac0e8d784a32102b05fe437cb75d68c38bfe33c3" {
 		t.Fatalf("v35 populated projection changed: %s", golden)
 	}
+	t.Run("changed executable opens the compatible protected catalog", func(t *testing.T) {
+		override(t, &buildDigest, func() string { return "synthetic-different-executable" })
+		current, err := c.initializedByThisBuild()
+		if err != nil || current {
+			t.Fatalf("changed build classified as current: %t %v", current, err)
+		}
+		host := bytes.Clone(store.raw)
+		reopened, err := OpenCatalog(c.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reopened.Close()
+		read, err := reopened.DB.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer read.Rollback()
+		ok, err := teamsOpenContractMatches(ctx, read)
+		if err != nil || !ok {
+			t.Fatalf("changed-build contract: %t %v", ok, err)
+		}
+		reopenedRoot, err := teamsProtectionProjection(ctx, read)
+		if err != nil || reopenedRoot != golden || !bytes.Equal(host, store.raw) {
+			t.Fatalf("changed-build open altered protected state: %v", err)
+		}
+	})
+
 	copyPath := filepath.Join(t.TempDir(), "recovery.sqlite")
 	if _, err = c.DB.Exec(`VACUUM INTO ?`, copyPath); err != nil {
 		t.Fatal(err)
@@ -304,32 +331,6 @@ func TestTeamsProtectedFormat35Upgrade(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	t.Run("changed executable opens the compatible protected catalog", func(t *testing.T) {
-		override(t, &buildDigest, func() string { return "synthetic-different-executable" })
-		current, err := c.initializedByThisBuild()
-		if err != nil || current {
-			t.Fatalf("changed build classified as current: %t %v", current, err)
-		}
-		host := bytes.Clone(store.raw)
-		reopened, err := OpenCatalog(c.Path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer reopened.Close()
-		read, err := reopened.DB.BeginTx(ctx, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer read.Rollback()
-		ok, err := teamsOpenContractMatches(ctx, read)
-		if err != nil || !ok {
-			t.Fatalf("changed-build contract: %t %v", ok, err)
-		}
-		reopenedRoot, err := teamsProtectionProjection(ctx, read)
-		if err != nil || reopenedRoot != golden || !bytes.Equal(host, store.raw) {
-			t.Fatalf("changed-build open altered protected state: %v", err)
-		}
-	})
 	var version string
 	if err = c.DB.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&version); err != nil || version != "35" {
 		t.Fatalf("version=%q err=%v", version, err)
