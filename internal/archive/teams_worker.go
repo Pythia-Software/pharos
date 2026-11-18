@@ -362,6 +362,21 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 				continue
 			}
 			prior, priorErr := readTeamsV2Draft(ctx, s.Catalog.reader(), work.ID)
+			// Receipt reconciliation above remains available for a previous
+			// attempt. A known-expired upload cannot start a fresh disclosure.
+			if work.ScheduledAssignment != nil && prior.State != "accepted" {
+				var expired bool
+				if e = s.Catalog.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM teams_v2_uploads WHERE work_id=? AND config_sha256=? AND library_id=? AND instance_id=? AND org_id=? AND installation_id=? AND state='abandoned')`, work.ID, work.ConfigSHA256, d.ID, d.Instance, credential.OrgID, credential.InstallationID).Scan(&expired); e != nil {
+					return e
+				}
+				if expired {
+					item.State = teamsExpiredScheduleState
+					item.Payload = nil
+					item.PayloadHash = ""
+					items[work.ID] = item
+					continue
+				}
+			}
 			if priorErr == nil && (prior.State == "approved" || prior.State == "awaiting_review") {
 				item.Payload = bytesClone(prior.Payload)
 				item.PayloadHash = prior.PayloadHash
@@ -369,7 +384,7 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 				if prior.State == "approved" {
 					receipt, sendErr := s.Catalog.sendTeamsV2Approved(ctx, s.Config(), client, d, credential, work.ID, manifest)
 					if sendErr != nil {
-						item.State = "needs_refresh"
+						item.State = s.Catalog.scheduledSourceFailure(ctx, work, d, credential, sendErr, "needs_refresh")
 					} else {
 						item.State = receipt.PublicationState
 					}
@@ -385,7 +400,7 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 				item.Payload = bytesClone(prior.Payload)
 				item.PayloadHash = prior.PayloadHash
 				if reconcileErr != nil {
-					item.State = "unconfirmed"
+					item.State = s.Catalog.scheduledSourceFailure(ctx, work, d, credential, reconcileErr, "unconfirmed")
 				} else {
 					item.State = receipt.PublicationState
 				}
@@ -417,7 +432,7 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 					item.State = "ownership_pending"
 					active = true
 				default:
-					item.State = "unavailable"
+					item.State = s.Catalog.scheduledSourceFailure(ctx, work, d, credential, e, "unavailable")
 				}
 				items[work.ID] = item
 				continue
@@ -442,7 +457,7 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 			if draft.State == "approved" || draft.State == "sending" || draft.State == "needs_reconcile" {
 				receipt, sendErr := s.Catalog.sendTeamsV2Approved(ctx, s.Config(), client, d, credential, work.ID, manifest)
 				if sendErr != nil {
-					item.State = "unconfirmed"
+					item.State = s.Catalog.scheduledSourceFailure(ctx, work, d, credential, sendErr, "unconfirmed")
 				} else {
 					item.State = receipt.PublicationState
 				}
@@ -611,8 +626,9 @@ func teamsWorkViewBindingIn(ctx context.Context, q interface {
 		(SELECT json_array(library_id,instance_id,org_id,installation_id,host_id,provider,model,effort,session_digest,auth_digest,settings_revision,granted_at) FROM teams_model_permission WHERE id=1),
 		(SELECT json_array(library_id,instance_id,org_id,installation_id,config_hash,settings_revision,granted_at) FROM teams_request_grants WHERE version_id=?),
 		(SELECT json_array(state,payload_sha256,decision_id,approved_at,receipt_json) FROM teams_v2_results WHERE work_id=?),
+        (SELECT 1 FROM teams_v2_uploads WHERE work_id=? AND state='abandoned'),
 		(SELECT json_array(state,payload_sha256,approval_id,approved_at,receipt_json) FROM teams_content_runs WHERE work_id=?),
-		(SELECT json_array(library_id,instance_id,org_id,installation_id,config_hash,state) FROM teams_v2_declines WHERE work_id=?))`, work.VersionID, work.ID, work.ID, work.ID).Scan(&local)
+		(SELECT json_array(library_id,instance_id,org_id,installation_id,config_hash,state) FROM teams_v2_declines WHERE work_id=?))`, work.VersionID, work.ID, work.ID, work.ID, work.ID).Scan(&local)
 	if err != nil {
 		return "", err
 	}

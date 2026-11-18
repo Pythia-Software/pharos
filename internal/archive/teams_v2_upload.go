@@ -119,7 +119,7 @@ func (c *Catalog) prepareTeamsV2UploadAt(ctx context.Context, w teams.Work, d Li
 			if old.VersionID != w.VersionID || old.LibraryID != d.ID || old.InstanceID != d.Instance || old.OrgID != s.OrgID || old.InstallationID != s.InstallationID || old.ConfigHash != w.ConfigSHA256 || old.EvaluationRevision != w.EvaluationRevision || old.SettingsRevision != s.SettingsRevision || old.SourceRevision != sourceRevision || old.PrivacyRevision != privacyRevision || old.Generation != g.all || old.Mode != mode || old.PolicyVersion != policyVersion || old.State == "abandoned" {
 				return errTeamsConsentStale
 			}
-			if !matchesTeamsSourceAuthorization(old.Authorization, w.ScheduledAssignment) {
+			if !old.matchesSourceProof(w.ScheduledAssignment) {
 				return errTeamsConsentStale
 			}
 			seal, e := sourcewire.DecodeSeal(old.Seal)

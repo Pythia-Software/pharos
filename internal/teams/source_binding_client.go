@@ -84,40 +84,53 @@ type SourceAuthorizationReceipt struct {
 	ExpiresAt           time.Time `json:"expires_at"`
 }
 
-// AuthorizeSourceDisclosure grants only operational source metadata for this
-// exact work and snapshot. It never grants content access or result delivery.
-func (c *DeviceClient) AuthorizeSourceDisclosure(ctx context.Context, workID string, raw []byte) (SourceAuthorizationReceipt, error) {
-	var out SourceAuthorizationReceipt
-	if !validDeviceID(workID) || !validUniqueJSON(raw) {
-		return out, errSourceBinding
-	}
+// DecodeSourceAuthorization validates the same exact persisted bytes on initial
+// disclosure and when an interrupted upload is resumed.
+func DecodeSourceAuthorization(workID string, raw []byte) (SourceAuthorization, error) {
 	var auth SourceAuthorization
+	if !validDeviceID(workID) || !validUniqueJSON(raw) {
+		return SourceAuthorization{}, errSourceBinding
+	}
 	keys := []string{"snapshot_id", "inventory_revision", "inventory_sha256", "local_revision", "evaluation_revision", "config_sha256", "mode", "decision_id", "decided_at", "settings_revision", "org_policy_version"}
 	fields, err := pollObject(raw)
 	if err != nil {
-		return out, errSourceBinding
+		return SourceAuthorization{}, errSourceBinding
 	}
 	if assignment, present := fields["scheduled_assignment"]; present {
 		parsed, err := decodeScheduledAssignment(assignment)
 		if err != nil || parsed.AssignmentID != workID {
-			return out, errSourceBinding
+			return SourceAuthorization{}, errSourceBinding
 		}
 		keys = append(keys, "scheduled_assignment")
 	}
 	if sourceResponse(raw, &auth, keys...) != nil || !validDeviceID(auth.SnapshotID) || auth.InventoryRevision < 1 || !sourceDigest(auth.InventorySHA256) || auth.LocalRevision < 1 || auth.EvaluationRevision < 1 || !sourceDigest(auth.ConfigSHA256) || auth.DecidedAt.IsZero() || auth.SettingsRevision < 1 {
-		return out, errSourceBinding
+		return SourceAuthorization{}, errSourceBinding
+	}
+	if auth.ScheduledAssignment != nil && auth.Mode == "standing" {
+		return SourceAuthorization{}, errSourceBinding
 	}
 	switch auth.Mode {
 	case "reviewed", "standing":
 		if !validDeviceID(auth.DecisionID) || auth.OrgPolicyVersion != 0 {
-			return out, errSourceBinding
+			return SourceAuthorization{}, errSourceBinding
 		}
 	case "automatic_metrics":
 		if auth.DecisionID != "" || auth.OrgPolicyVersion < 1 {
-			return out, errSourceBinding
+			return SourceAuthorization{}, errSourceBinding
 		}
 	default:
-		return out, errSourceBinding
+		return SourceAuthorization{}, errSourceBinding
+	}
+	return auth, nil
+}
+
+// AuthorizeSourceDisclosure grants only operational source metadata for this
+// exact work and snapshot. It never grants content access or result delivery.
+func (c *DeviceClient) AuthorizeSourceDisclosure(ctx context.Context, workID string, raw []byte) (SourceAuthorizationReceipt, error) {
+	var out SourceAuthorizationReceipt
+	auth, err := DecodeSourceAuthorization(workID, raw)
+	if err != nil {
+		return out, err
 	}
 	raw = bytes.Clone(raw)
 	var response json.RawMessage

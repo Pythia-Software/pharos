@@ -143,6 +143,7 @@ function TeamsWork() {
 	  {item.prompt ? <><p>Instructions: {item.prompt}</p><p>Retention: {JSON.stringify(item.retention)}.</p><p>Only locally reviewed, nonprivate content is eligible. Processing uses the approved Claude account and model.</p></> : null}
       {item.publicationV2 ? <p>{retentionText(item.retention)}</p> : null}
       <p>Status: {item.state === "source_safety_waiting" ? "Checking source safety" : item.state.replaceAll("_", " ")}.</p>
+      {item.state === "source_authorization_expired" ? <p>The source permission expired for this collection period. Later periods have their own source checks.</p> : null}
       {item.state === "source_safety_waiting" ? <p>Pharos will check again shortly while source safety processing finishes.</p> : null}
 	  {item.prompt && item.state === "unavailable" ? <p>This request needs a completely indexed supported source and at least one reviewed, nonprivate conversation. Review a conversation in the library and check again after indexing.</p> : null}
 	  {item.prompt && item.state === "started" ? <p>A previous attempt may have started. It will not automatically run the model again; you can decline this request.</p> : null}
@@ -155,7 +156,7 @@ function TeamsWork() {
         <details><summary>Exact response data</summary><pre>{item.scheduledResult.exactJson}</pre></details>
       </section> : item.payload && !item.scheduledTerms ? <pre>{JSON.stringify(item.payload, null, 2)}</pre> : null}
       {item.state === "awaiting_review" ? <button type="button" disabled={busy || (!!item.publicationV2 && !item.labelsReady) || (!!item.scheduledTerms && !item.scheduledResult)} onClick={() => void act("/approve-result", { workId: item.workId, payloadHash: item.payloadHash, ...(item.publicationV2 ? {configHash: item.configHash, labelsToken: item.labelsToken} : {}) })}>Approve and send this result</button> : null}{" "}
-      {["awaiting_source_consent", "awaiting_model_permission", "awaiting_review", "decline_pending", "started", "source_safety_waiting"].includes(item.state) ? <button type="button" disabled={busy} onClick={() => void act("/decline", { workId: item.workId })}>{item.state === "decline_pending" ? "Retry decline" : "Decline request"}</button> : null}
+      {["awaiting_source_consent", "awaiting_model_permission", "awaiting_review", "decline_pending", "started", "source_safety_waiting", "source_authorization_expired"].includes(item.state) ? <button type="button" disabled={busy} onClick={() => void act("/decline", { workId: item.workId })}>{item.state === "decline_pending" ? "Retry decline" : item.scheduledTerms ? "Decline this period" : "Decline request"}</button> : null}
     </div>)}
     <section aria-label="Sent responses"><h4>Sent responses</h4><button type="button" disabled={busy} onClick={() => void loadSent()}>Show recent sends</button>
       {sent ? sent.length ? sent.map(item => <ViewDisclosure key={item.workId} viewKey={`teams:sent:${item.workId}`} summary={`${item.question || "Teams response"} · ${new Date(item.sentAt).toLocaleString()}`}><pre>{JSON.stringify(item.payload,null,2)}</pre></ViewDisclosure>) : <p>No sends recorded for this library.</p> : null}

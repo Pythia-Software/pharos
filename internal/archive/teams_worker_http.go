@@ -479,7 +479,7 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			binding := s.teamsWorker.workBindings[body.WorkID]
 			valid := s.teamsWorker.scope == scope && settings.Enabled
 			s.teamsWorker.mu.Unlock()
-			if !valid || !ok || (item.State != "awaiting_source_consent" && item.State != "awaiting_model_permission" && item.State != "awaiting_review" && item.State != "decline_pending" && item.State != "started" && item.State != "unconfirmed" && item.State != "source_safety_waiting") {
+			if !valid || !ok || (item.State != "awaiting_source_consent" && item.State != "awaiting_model_permission" && item.State != "awaiting_review" && item.State != "decline_pending" && item.State != "started" && item.State != "unconfirmed" && item.State != "source_safety_waiting" && item.State != teamsExpiredScheduleState) {
 				return errTeamsConsentStale
 			}
 			lease, e := s.Catalog.teamsSharingLease()

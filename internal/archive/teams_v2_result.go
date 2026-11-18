@@ -107,7 +107,7 @@ func (c *Catalog) stageTeamsV2Result(ctx context.Context, cfg Config, d LibraryD
 		}
 		bindingRaw, _ := json.Marshal(registration.Binding)
 		assignmentsRaw, _ := json.Marshal(registration.Assignments)
-		if !matchesTeamsSourceAuthorization(u.Authorization, registration.Work.ScheduledAssignment) || u.State != "bound" || u.LibraryID != d.ID || u.InstanceID != d.Instance || u.OrgID != credential.OrgID || u.InstallationID != credential.InstallationID || u.ConfigHash != registration.Work.ConfigSHA256 || !bytes.Equal(u.BindingJSON, bindingRaw) || !bytes.Equal(u.AssignmentsJSON, assignmentsRaw) || !settings.Enabled || settings.SettingsRevision != u.SettingsRevision || sourceRev != current.SourceRevision || sourceRev != u.SourceRevision || privacyRev != current.PrivacyRevision || privacyRev != u.PrivacyRevision || g.all != current.Generation || g.all != u.Generation {
+		if !u.matchesSourceProof(registration.Work.ScheduledAssignment) || u.State != "bound" || u.LibraryID != d.ID || u.InstanceID != d.Instance || u.OrgID != credential.OrgID || u.InstallationID != credential.InstallationID || u.ConfigHash != registration.Work.ConfigSHA256 || !bytes.Equal(u.BindingJSON, bindingRaw) || !bytes.Equal(u.AssignmentsJSON, assignmentsRaw) || !settings.Enabled || settings.SettingsRevision != u.SettingsRevision || sourceRev != current.SourceRevision || sourceRev != u.SourceRevision || privacyRev != current.PrivacyRevision || privacyRev != u.PrivacyRevision || g.all != current.Generation || g.all != u.Generation {
 			return errTeamsSnapshotChanged
 		}
 		seal, e := sourcewire.DecodeSeal(u.Seal)
@@ -191,7 +191,7 @@ func (c *Catalog) reviewTeamsV2DraftWithConfig(ctx context.Context, d LibraryDes
 		if e != nil {
 			return e
 		}
-		if !validTeamsSeriesReview(draft.Config, u.ConfigHash, configHash) {
+		if u.State != "bound" || !validTeamsSeriesReview(draft.Config, u.ConfigHash, configHash) {
 			return errTeamsConsentStale
 		}
 		if u.LibraryID != d.ID || u.InstanceID != d.Instance || !s.Enabled || s.SettingsRevision != u.SettingsRevision || s.OrgID != u.OrgID || s.InstallationID != u.InstallationID || sourceRev != u.SourceRevision || privacyRev != u.PrivacyRevision || g.all != u.Generation || draft.State != "awaiting_review" || draft.PayloadHash != payloadHash || teamsPayloadHash(draft.Payload) != payloadHash {

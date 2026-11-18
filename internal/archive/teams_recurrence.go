@@ -83,8 +83,9 @@ func teamsNumericWorkEligible(w teams.Work, m teamsCapabilityManifest) bool {
 		return false
 	}
 	var c struct {
-		PublicationV2 json.RawMessage `json:"publication_v2"`
-		Audiences     struct {
+		ScheduleBounds json.RawMessage `json:"schedule_bounds"`
+		PublicationV2  json.RawMessage `json:"publication_v2"`
+		Audiences      struct {
 			Exports      []json.RawMessage `json:"exports"`
 			Publications []json.RawMessage `json:"publications"`
 		} `json:"audiences"`
@@ -94,6 +95,9 @@ func teamsNumericWorkEligible(w teams.Work, m teamsCapabilityManifest) bool {
 	}
 	if w.ScheduledAssignment != nil {
 		return p.Key != "once" && len(c.PublicationV2) > 0 && teamsBuildEligible(m, "reader_labels_v1") && teamsBuildEligible(m, "report_automatic_metrics_v1")
+	}
+	if len(c.ScheduleBounds) > 0 {
+		return false
 	}
 	if len(c.PublicationV2) > 0 && (!teamsBuildEligible(m, "report_deterministic_v2") || p.Key != "once") {
 		return false

@@ -117,7 +117,7 @@ func decodePollResponse(raw []byte, out *PollResponse) error {
 			continue
 		}
 		var w Work
-		if json.Unmarshal(item, &w) != nil {
+		if json.Unmarshal(item, &w) != nil || (w.ScheduledAssignment != nil && (w.Kind != "deterministic" || w.ID != w.ScheduledAssignment.AssignmentID)) {
 			continue
 		}
 		out.Work = append(out.Work, w)

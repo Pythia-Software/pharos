@@ -2,7 +2,10 @@ package archive
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"time"
 
@@ -26,8 +29,8 @@ func teamsV2PlanFromWork(w teams.Work) (teamsQueryPlan, error) {
 	period, err := parseTeamsPeriod(w.Period, &teamsSchedule{
 		Cadence: config.Schedule.Cadence, Timezone: config.Schedule.Timezone, CatchUp: config.Schedule.CatchUp, ResponseWindowSeconds: config.Schedule.ResponseWindowSeconds,
 	})
-	if err != nil {
-		return teamsQueryPlan{}, err
+	if err != nil || period.StartAt == nil || period.EndAt == nil {
+		return teamsQueryPlan{}, errTeamsQueryUnsupported
 	}
 	expected := teamsScheduledAssignment{AssignmentID: w.ID, PeriodKey: period.Key, Timezone: config.Schedule.Timezone, StartAt: *period.StartAt, DeadlineAt: w.ExpiresAt}
 	if time.Now().Before(expected.StartAt) || !matchesTeamsScheduledPeriod(config, expected, *w.ScheduledAssignment, period.EndAt) {
@@ -48,6 +51,19 @@ func sameTeamsScheduledAssignment(a, b *teams.ScheduledAssignment) bool {
 func matchesTeamsSourceAuthorization(raw []byte, current *teams.ScheduledAssignment) bool {
 	var auth teams.SourceAuthorization
 	return teams.ValidUniqueJSON(raw) && json.Unmarshal(raw, &auth) == nil && sameTeamsScheduledAssignment(auth.ScheduledAssignment, current)
+}
+
+// Scheduled receipt authority requires the same signed source mode, policy,
+// scope and inventory that the local upload ledger retained.
+func (u teamsV2Upload) matchesSourceProof(current *teams.ScheduledAssignment) bool {
+	if current == nil {
+		return matchesTeamsSourceAuthorization(u.Authorization, nil)
+	}
+	a, err := teams.DecodeSourceAuthorization(u.WorkID, u.Authorization)
+	return err == nil && sameTeamsScheduledAssignment(a.ScheduledAssignment, current) &&
+		a.Mode == u.Mode && a.OrgPolicyVersion == u.PolicyVersion && a.SettingsRevision == u.SettingsRevision &&
+		a.SnapshotID == u.SnapshotID && a.ConfigSHA256 == u.ConfigHash && a.EvaluationRevision == u.EvaluationRevision &&
+		a.LocalRevision == u.LocalRevision && a.InventoryRevision == u.InventoryRevision && a.InventorySHA256 == u.InventoryHash
 }
 
 // JSON integers can exceed JavaScript's safe range. Expose the approved decimal
@@ -72,4 +88,35 @@ func teamsScheduledResultForDisplay(raw []byte, hash string) *teamsScheduledResu
 		return nil
 	}
 	return &teamsScheduledResultDisplay{total, payload.Coverage.SourceState, string(raw)}
+}
+
+const teamsExpiredScheduleState = "source_authorization_expired"
+
+// A definite, scoped expiry can retire this upload. An offline check, a missing
+// authorization, and a missing result receipt cannot establish expiry.
+func (c *Catalog) scheduledSourceFailure(ctx context.Context, w teams.Work, d LibraryDescriptor, credential *teams.EnrollmentCredential, err error, fallback string) string {
+	var remote *teams.HTTPError
+	if w.ScheduledAssignment == nil || credential == nil || !errors.As(err, &remote) || remote.Status != 409 || remote.Code != teamsExpiredScheduleState {
+		return fallback
+	}
+	lease, e := c.teamsSharingLease()
+	if e != nil {
+		return fallback
+	}
+	defer lease.Close()
+	e = c.writeTransaction(ctx, "teams-expired-scheduled-source", func(tx *sql.Tx) error {
+		u, e := readTeamsV2Upload(ctx, tx, w.ID)
+		if e != nil {
+			return e
+		}
+		if u.LibraryID != d.ID || u.InstanceID != d.Instance || u.OrgID != credential.OrgID || u.InstallationID != credential.InstallationID || u.ConfigHash != w.ConfigSHA256 || !u.matchesSourceProof(w.ScheduledAssignment) {
+			return errTeamsConsentStale
+		}
+		_, e = tx.ExecContext(ctx, `UPDATE teams_v2_uploads SET state='abandoned' WHERE work_id=?`, w.ID)
+		return e
+	})
+	if e != nil {
+		return fallback
+	}
+	return teamsExpiredScheduleState
 }
