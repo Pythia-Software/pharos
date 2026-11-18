@@ -69,19 +69,39 @@ func teamsCaptureOpenContract(ctx context.Context, tx *sql.Tx) error {
 	return err
 }
 func teamsOpenContractMatches(ctx context.Context, q teamsSchemaQuery) (bool, error) {
+	return teamsVerifyOpenContract(ctx, q, false)
+}
+
+func teamsVerifyOpenContract(ctx context.Context, q teamsSchemaQuery, initialActivation bool) (bool, error) {
 	var epoch, version int
 	var compiled, actual, library string
 	if err := q.QueryRowContext(ctx, `SELECT initializer_epoch,compiled_schema_sha256,actual_schema_sha256,catalog_version,library_version FROM teams_protection_open_contract WHERE id=1`).Scan(&epoch, &compiled, &actual, &version, &library); err != nil {
 		return false, err
 	}
-	if epoch != teamsProtectionInitializerEpoch || compiled != teamsCompiledSchemaDigest() || version != protectedCatalogSchemaVersion || library != libraryVersion() {
+	expected := teamsCompiledSchemaDigest()
+	if version == teamsProtectedFormat35 {
+		expected = teamsCompiledSchemaDigest35()
+	} else if version != protectedCatalogSchemaVersion {
+		return false, nil
+	}
+	if epoch != teamsProtectionInitializerEpoch || compiled != expected || library != libraryVersion() {
 		return false, nil
 	}
 	var stored string
-	if err := q.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='schema_version'`).Scan(&stored); err != nil || stored != strconv.Itoa(protectedCatalogSchemaVersion) {
+	if err := q.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='schema_version'`).Scan(&stored); err != nil {
 		return false, err
 	}
-	current, err := teamsActualSchemaDigest(ctx, q)
+	preActivation := initialActivation && stored == strconv.Itoa(catalogSchemaVersion) && version == protectedCatalogSchemaVersion
+	if stored != strconv.Itoa(version) && !preActivation {
+		return false, nil
+	}
+	var current string
+	var err error
+	if version == teamsProtectedFormat35 {
+		current, err = teamsActualSchemaDigest35(ctx, q)
+	} else {
+		current, err = teamsActualSchemaDigest(ctx, q)
+	}
 	return err == nil && current == actual, err
 }
 

@@ -79,7 +79,7 @@ func (c *Catalog) initializedByThisBuild() (bool, error) {
 	}
 	digest := buildDigest()
 	version := stored["schema_version"]
-	if version == strconv.Itoa(protectedCatalogSchemaVersion) {
+	if version == strconv.Itoa(protectedCatalogSchemaVersion) || version == strconv.Itoa(teamsProtectedFormat35) {
 		active, e := c.hasProtectionCheckpoint()
 		if e != nil {
 			return false, e
@@ -88,7 +88,7 @@ func (c *Catalog) initializedByThisBuild() (bool, error) {
 			return false, errTeamsProtectionContinuity
 		}
 	}
-	return digest != "" && (version == strconv.Itoa(catalogSchemaVersion) || version == strconv.Itoa(protectedCatalogSchemaVersion)) && stored[initializedBuildKey] == digest &&
+	return digest != "" && (version == strconv.Itoa(catalogSchemaVersion) || version == strconv.Itoa(protectedCatalogSchemaVersion) || version == strconv.Itoa(teamsProtectedFormat35)) && stored[initializedBuildKey] == digest &&
 		stored["workspace_library_version"] == libraryVersion(), nil
 }
 
@@ -136,7 +136,7 @@ func openCatalogReadOnly(path string) (*Catalog, error) {
 	current, err := catalog.initializedByThisBuild()
 	if err == nil && !current {
 		var version string
-		if err = db.QueryRow("SELECT value FROM meta WHERE key='schema_version'").Scan(&version); err == nil && (strings.TrimSpace(version) != strconv.Itoa(catalogSchemaVersion) && strings.TrimSpace(version) != strconv.Itoa(protectedCatalogSchemaVersion)) {
+		if err = db.QueryRow("SELECT value FROM meta WHERE key='schema_version'").Scan(&version); err == nil && (strings.TrimSpace(version) != strconv.Itoa(catalogSchemaVersion) && strings.TrimSpace(version) != strconv.Itoa(protectedCatalogSchemaVersion) && strings.TrimSpace(version) != strconv.Itoa(teamsProtectedFormat35)) {
 			err = fmt.Errorf("%w (%s has catalog schema version %s, and Pharos could not take its operation lease to initialize it)", errCatalogNeedsUpgrade, path, version)
 		}
 	}

@@ -9,6 +9,8 @@ import (
 	"errors"
 	"hash"
 	"math"
+	"strconv"
+	"strings"
 )
 
 // This bounded metadata projection is not an activation predicate by itself:
@@ -59,10 +61,15 @@ var teamsProjectionMaxRows = 100000
 type teamsProjectionWriter struct {
 	h          hash.Hash
 	size, rows int
+	limit      int
 }
 
 func (w *teamsProjectionWriter) put(kind byte, b []byte) error {
-	if len(b) > teamsProjectionMaxBytes || w.size > teamsProjectionMaxBytes-len(b)-9 {
+	limit := w.limit
+	if limit == 0 {
+		limit = teamsProjectionMaxBytes
+	}
+	if len(b) > limit || w.size > limit-len(b)-9 {
 		return errTeamsProjectionBound
 	}
 	w.size += len(b) + 9
@@ -74,11 +81,55 @@ func (w *teamsProjectionWriter) put(kind byte, b []byte) error {
 	return nil
 }
 func teamsProtectionProjection(ctx context.Context, tx *sql.Tx) (string, error) {
-	w := teamsProjectionWriter{h: sha256.New()}
-	if err := w.put('D', []byte("pharos-teams-protection-projection-v1")); err != nil {
+	var version string
+	if err := tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='schema_version'`).Scan(&version); err != nil {
 		return "", err
 	}
-	for _, spec := range teamsProtectionProjectionQueries {
+	baseDomain := "pharos-teams-protection-projection-v1"
+	if version != strconv.Itoa(teamsProtectedFormat35) {
+		return teamsProtectionProjectionPart(ctx, tx, teamsProtectionProjectionQueries, baseDomain, teamsProjectionMaxBytes)
+	}
+	// In format 35 the full pre-existing outbox moves into the separately
+	// bounded journal digest, so a promised receipt never consumes capacity
+	// reserved for unrelated ordinary protected metadata.
+	base35, journal35 := teamsProtectionProjectionParts35()
+	baseDomain = "pharos-teams-protected-base-35-v1"
+	if _, err := teamsProtectionProjectionPreflight35(ctx, tx, base35, baseDomain, teamsProjectionMaxBytes); err != nil {
+		return "", err
+	}
+	base, err := teamsProtectionProjectionPart(ctx, tx, base35, baseDomain, teamsProjectionMaxBytes)
+	if err != nil {
+		return "", err
+	}
+	journalDomain := "pharos-teams-origin-journal-projection-v1"
+	if _, err = teamsProtectionProjectionPreflight35(ctx, tx, journal35, journalDomain, teamsOriginJournalMaxBytes); err != nil {
+		if errors.Is(err, errTeamsProjectionBound) {
+			return "", errTeamsJournalProjectionBound
+		}
+		return "", err
+	}
+	journal, err := teamsProtectionProjectionPart(ctx, tx, journal35, journalDomain, teamsOriginJournalMaxBytes)
+	if err != nil {
+		return "", err
+	}
+	root := teamsProjectionWriter{h: sha256.New(), limit: 256}
+	for _, v := range []struct {
+		kind  byte
+		value string
+	}{{'D', "pharos-teams-protected-format-35-root-v1"}, {'B', base}, {'J', journal}} {
+		if err = root.put(v.kind, []byte(v.value)); err != nil {
+			return "", err
+		}
+	}
+	return hex.EncodeToString(root.h.Sum(nil)), nil
+}
+
+func teamsProtectionProjectionPart(ctx context.Context, tx *sql.Tx, specs []struct{ name, query string }, domain string, limit int) (string, error) {
+	w := teamsProjectionWriter{h: sha256.New(), limit: limit}
+	if err := w.put('D', []byte(domain)); err != nil {
+		return "", err
+	}
+	for _, spec := range specs {
 		if err := w.put('T', []byte(spec.name)); err != nil {
 			return "", err
 		}
@@ -143,4 +194,88 @@ func teamsProtectionProjection(ctx context.Context, tx *sql.Tx) (string, error) 
 		}
 	}
 	return hex.EncodeToString(w.h.Sum(nil)), nil
+}
+
+// The format-35 preflight reads only SQLite type and length metadata before
+// the driver materializes any potentially large protected cell.
+func teamsProtectionProjectionPreflight35(ctx context.Context, tx *sql.Tx, specs []struct{ name, query string }, domain string, limit int) (int64, error) {
+	total := int64(9 + len(domain))
+	rowsTotal := 0
+	for _, spec := range specs {
+		total += int64(9 + len(spec.name))
+		if total > int64(limit) {
+			return 0, errTeamsProjectionBound
+		}
+		shape, e := tx.QueryContext(ctx, "SELECT * FROM ("+spec.query+") LIMIT 0")
+		if e != nil {
+			return 0, e
+		}
+		cols, e := shape.Columns()
+		shape.Close()
+		if e != nil {
+			return 0, e
+		}
+		terms := make([]string, 0, len(cols))
+		for _, col := range cols {
+			id := quotedIdentifier(col)
+			terms = append(terms, "CASE typeof("+id+") WHEN 'null' THEN 0 WHEN 'integer' THEN 8 WHEN 'real' THEN 8 WHEN 'text' THEN length(CAST("+id+" AS BLOB)) WHEN 'blob' THEN length("+id+") ELSE -1 END")
+		}
+		rows, e := tx.QueryContext(ctx, "SELECT "+strings.Join(terms, ",")+" FROM ("+spec.query+")")
+		if e != nil {
+			return 0, e
+		}
+		vals := make([]int64, len(cols))
+		ptr := make([]any, len(cols))
+		for i := range vals {
+			ptr[i] = &vals[i]
+		}
+		for rows.Next() {
+			rowsTotal++
+			if rowsTotal > teamsProjectionMaxRows {
+				rows.Close()
+				return 0, errTeamsProjectionBound
+			}
+			if e = rows.Scan(ptr...); e != nil {
+				rows.Close()
+				return 0, e
+			}
+			total += 9
+			for _, n := range vals {
+				cellLimit := limit
+				if strings.HasPrefix(spec.name, "v35_") {
+					cellLimit = teamsOriginJournalMaxCellBytes
+				}
+				if n < 0 || n > int64(cellLimit) {
+					rows.Close()
+					return 0, errTeamsProjectionBound
+				}
+				total += 9 + n
+				if total > int64(limit) {
+					rows.Close()
+					return 0, errTeamsProjectionBound
+				}
+
+			}
+		}
+		if e = rows.Err(); e != nil {
+			rows.Close()
+			return 0, e
+		}
+		rows.Close()
+	}
+	return total, nil
+}
+
+// The v35 root still binds every v34 outbox field, but accounts those bytes
+// with the new journal and its pending-receipt reservations.
+func teamsProtectionProjectionParts35() (base, journal []struct{ name, query string }) {
+	for _, spec := range teamsProtectionProjectionQueries {
+		if spec.name == "origin_outbox" {
+			journal = append(journal, struct{ name, query string }{"v35_origin_outbox", spec.query})
+		} else {
+			base = append(base, spec)
+		}
+	}
+	journal = append(journal, teamsProtectionProjectionQueries35...)
+	return base, journal
 }

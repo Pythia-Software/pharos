@@ -294,7 +294,7 @@ func TestCatalogRefusesNewerSchemaVersion(t *testing.T) {
 	if got := storedVersion(); got != strconv.Itoa(catalogSchemaVersion) {
 		t.Fatalf("older catalog recorded version %q after migration", got)
 	}
-	newer := strconv.Itoa(protectedCatalogSchemaVersion + 1)
+	newer := strconv.Itoa(teamsProtectedFormat35 + 1)
 	setVersion(newer)
 	if _, err := OpenCatalog(path); err == nil || !strings.Contains(err.Error(), "schema version "+newer) {
 		t.Fatalf("a newer catalog was not refused: %v", err)

@@ -19,11 +19,20 @@ var teamsProtectionFenceMechanical = []string{"teams_protection_open_contract", 
 type teamsFenceStatement struct{ name, sql string }
 
 func teamsProtectionFenceStatements() []teamsFenceStatement {
+	return teamsProtectionFenceStatementsFor(teamsProtectionFenceInputs, teamsProtectionFenceMechanical)
+}
+
+func teamsProtectionFenceStatements35() []teamsFenceStatement {
+	inputs := append(append([]string(nil), teamsProtectionFenceInputs...), teamsProtectedFormat35Inputs...)
+	return teamsProtectionFenceStatementsFor(inputs, teamsProtectionFenceMechanical)
+}
+
+func teamsProtectionFenceStatementsFor(inputs, mechanical []string) []teamsFenceStatement {
 	var statements []teamsFenceStatement
 	for _, group := range []struct {
 		tables []string
 		count  bool
-	}{{teamsProtectionFenceInputs, true}, {teamsProtectionFenceMechanical, false}} {
+	}{{inputs, true}, {mechanical, false}} {
 		for _, table := range group.tables {
 			for _, op := range []string{"INSERT", "UPDATE", "DELETE"} {
 				name := fmt.Sprintf("teams_fence_%s_%s", table, op)
@@ -47,7 +56,18 @@ func teamsInstallProtectionFence(ctx context.Context, tx *sql.Tx) error {
 	return teamsVerifyProtectionFence(ctx, tx)
 }
 func teamsVerifyProtectionFence(ctx context.Context, tx *sql.Tx) error {
-	for _, s := range teamsProtectionFenceStatements() {
+	var version string
+	if err := tx.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='schema_version'`).Scan(&version); err != nil {
+		return errTeamsProtectionContinuity
+	}
+	statements := teamsProtectionFenceStatements()
+	if version == "35" {
+		if err := teamsSchemaInventoryPreflight(ctx, tx, false); err != nil {
+			return err
+		}
+		statements = teamsProtectionFenceStatements35()
+	}
+	for _, s := range statements {
 		var actual string
 		if err := tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?`, s.name).Scan(&actual); err != nil || actual != s.sql {
 			return errTeamsProtectionContinuity
