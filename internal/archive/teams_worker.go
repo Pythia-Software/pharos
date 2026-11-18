@@ -66,6 +66,8 @@ func (w *teamsWorkerState) clearWorkLocked() {
 	w.viewScope = ""
 }
 
+var errTeamsWorkerAuthorityChanged = errors.New("Teams worker authority changed")
+
 var teamsWorkerCapabilities = teamsBuildCapabilities
 
 func teamsIdleDelay() time.Duration {
@@ -476,9 +478,10 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 		if e != nil {
 			return e
 		}
-		if latest != settings {
-			return errTeamsConsentStale
+		if !teamsSameWorkerAuthority(settings, latest) {
+			return errors.Join(errTeamsWorkerAuthorityChanged, errTeamsConsentStale)
 		}
+		settings = latest
 		if e = s.Catalog.reader().QueryRowContext(ctx, `SELECT revision FROM teams_source_revision WHERE id=1`).Scan(&sourceRev); e != nil {
 			return e
 		}
@@ -489,17 +492,44 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 		if e != nil {
 			return e
 		}
+		invalidated := make(map[string]bool)
+		pendingSweep := make(map[string]bool, len(sweep))
+		for _, id := range sweep {
+			pendingSweep[id] = true
+		}
+		visited := make(map[string]bool, len(visits))
 		for _, id := range visits {
-			keys[id], e = s.teamsWorkViewBinding(ctx, scope, items[id].Work, settings, sourceRev, privacyRev, generations.all)
+			visited[id] = true
+		}
+		for _, id := range ordered {
+			post, e := s.teamsWorkViewBinding(ctx, scope, items[id].Work, settings, sourceRev, privacyRev, generations.all)
 			if e != nil {
 				return e
+			}
+			if post != keys[id] {
+				item := items[id]
+				item.State = "pending"
+				item.Payload = nil
+				item.PayloadHash = ""
+				item.Labels = nil
+				item.LabelsAt = time.Time{}
+				item.LabelsScope = ""
+				items[id] = item
+				invalidated[id] = true
+				if visited[id] {
+					runnable[id] = true
+				} else if !pendingSweep[id] {
+					sweep = append(sweep, id)
+					pendingSweep[id] = true
+				}
+				active = true
 			}
 		}
 		sweep = teamsAppendRunnable(sweep, visits, items, runnable)
 		s.teamsWorker.mu.Lock()
 		stable := s.teamsWorker.scope == scope
 		for id := range keys {
-			if s.teamsWorker.workBindings[id] != workKeys[id] {
+			if invalidated[id] || s.teamsWorker.workBindings[id] != workKeys[id] {
 				continue
 			}
 			// A foreground lookup may have completed while this poll processed.
@@ -528,7 +558,7 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 		s.teamsWorker.mu.Lock()
 		var response *teams.HTTPError
 		denied := errors.As(err, &response) && (response.Status == 401 || response.Status == 403)
-		if !authorityLoaded || denied || errors.Is(err, errTeamsNotEnrolled) {
+		if !authorityLoaded || denied || errors.Is(err, errTeamsNotEnrolled) || errors.Is(err, errTeamsWorkerAuthorityChanged) {
 			s.teamsWorker.clearWorkLocked()
 		} else {
 			s.teamsWorker.clearReaderLabelsLocked()
@@ -544,9 +574,22 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 	return active, err
 }
 
+// Visit processing may advance local catalog counters; it must not change
+// the enrollment or consent that authorized this poll.
+func teamsSameWorkerAuthority(a, b teamsLocalSettings) bool {
+	a.LocalRevision, a.ObservedGeneration, a.ObservedPrivacyRevision = 0, 0, 0
+	b.LocalRevision, b.ObservedGeneration, b.ObservedPrivacyRevision = 0, 0, 0
+	return a == b
+}
+
 func (s *Server) teamsWorkViewBinding(ctx context.Context, scope string, work teams.Work, settings teamsLocalSettings, sourceRev, privacyRev, generation int64) (string, error) {
+	return teamsWorkViewBindingIn(ctx, s.Catalog.reader(), scope, work, settings, sourceRev, privacyRev, generation)
+}
+func teamsWorkViewBindingIn(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, scope string, work teams.Work, settings teamsLocalSettings, sourceRev, privacyRev, generation int64) (string, error) {
 	var local string
-	err := s.Catalog.reader().QueryRowContext(ctx, `SELECT json_array(
+	err := q.QueryRowContext(ctx, `SELECT json_array(
 		(SELECT json_array(library_id,instance_id,org_id,installation_id,host_id,provider,model,effort,session_digest,auth_digest,settings_revision,granted_at) FROM teams_model_permission WHERE id=1),
 		(SELECT json_array(library_id,instance_id,org_id,installation_id,config_hash,settings_revision,granted_at) FROM teams_request_grants WHERE version_id=?),
 		(SELECT json_array(state,payload_sha256,decision_id,approved_at,receipt_json) FROM teams_v2_results WHERE work_id=?),
@@ -565,6 +608,32 @@ func (s *Server) teamsWorkViewBinding(ctx context.Context, scope string, work te
 		return "", err
 	}
 	return teamsPayloadHash(body), nil
+}
+
+// Foreground actions cannot rely on a view after its local inputs changed.
+func (s *Server) teamsRequireCurrentView(ctx context.Context, scope string, work teams.Work, settings teamsLocalSettings, expected string) error {
+	if expected == "" {
+		return errTeamsConsentStale
+	}
+	var source, privacy int64
+	if e := s.Catalog.reader().QueryRowContext(ctx, `SELECT revision FROM teams_source_revision WHERE id=1`).Scan(&source); e != nil {
+		return e
+	}
+	if e := s.Catalog.reader().QueryRowContext(ctx, `SELECT revision FROM teams_privacy_revision WHERE id=1`).Scan(&privacy); e != nil {
+		return e
+	}
+	g, e := readCacheGenerations(ctx, s.Catalog.reader())
+	if e != nil {
+		return e
+	}
+	actual, e := s.teamsWorkViewBinding(ctx, scope, work, settings, source, privacy, g.all)
+	if e != nil {
+		return e
+	}
+	if actual != expected {
+		return errTeamsConsentStale
+	}
+	return nil
 }
 
 func teamsAppendRunnable(sweep, visits []string, items map[string]teamsWorkerItem, runnable map[string]bool) []string {

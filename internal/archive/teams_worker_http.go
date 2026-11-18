@@ -387,15 +387,19 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			item, ok := s.teamsWorker.items[body.WorkID]
 			series := ok && teamsHasSeriesConfig(item.Work.Config)
 			live := ok && settings.Enabled && s.teamsWorker.scope == scope
+			viewKey := s.teamsWorker.bindings[body.WorkID]
 			tokenOK := live && body.LabelsToken != "" && body.LabelsToken == teamsReaderLabelToken(item, scope, s.teamsWorker.generation)
 			s.teamsWorker.mu.Unlock()
 			if !live || item.State != "awaiting_source_consent" {
 				return errTeamsConsentStale
 			}
+			if e = s.teamsRequireCurrentView(r.Context(), scope, item.Work, settings, viewKey); e != nil {
+				return e
+			}
 			if !validTeamsSeriesReview(item.Work.Config, item.Work.ConfigSHA256, body.ConfigHash) || (series && !tokenOK) {
 				return errTeamsConsentStale
 			}
-			if e = s.Catalog.grantTeamsQuestion(r.Context(), item.Work, d, *body.SettingsRevision); e != nil {
+			if e = s.Catalog.grantTeamsQuestionForView(r.Context(), item.Work, d, *body.SettingsRevision, scope, viewKey); e != nil {
 				return e
 			}
 			s.wakeTeams()
@@ -419,10 +423,14 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			item, ok := s.teamsWorker.items[body.WorkID]
 			series := (ok && teamsHasSeriesConfig(item.Work.Config)) || (draftErr == nil && teamsHasSeriesConfig(draft.Config))
 			live := ok && item.State == "awaiting_review" && settings.Enabled && s.teamsWorker.scope == scope
+			viewKey := s.teamsWorker.bindings[body.WorkID]
 			tokenOK := live && body.LabelsToken != "" && body.LabelsToken == teamsReaderLabelToken(item, scope, s.teamsWorker.generation)
 			s.teamsWorker.mu.Unlock()
 			if !live {
 				return errTeamsConsentStale
+			}
+			if e = s.teamsRequireCurrentView(r.Context(), scope, item.Work, settings, viewKey); e != nil {
+				return e
 			}
 			if series && (!ok || draftErr != nil || !bytes.Equal(draft.Config, item.Work.Config) || !validTeamsSeriesReview(item.Work.Config, item.Work.ConfigSHA256, body.ConfigHash) || !tokenOK) {
 				return errTeamsConsentStale

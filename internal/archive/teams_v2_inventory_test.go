@@ -294,8 +294,49 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 	if err = c.DB.QueryRow(`SELECT state FROM teams_v2_results WHERE work_id=?`, w.ID).Scan(&afterOffline); err != nil || afterOffline != "awaiting_review" {
 		t.Fatalf("offline approval changed draft: %q %v", afterOffline, err)
 	}
+	var viewSource, viewPrivacy int64
+	if err = c.DB.QueryRow(`SELECT revision FROM teams_source_revision WHERE id=1`).Scan(&viewSource); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.DB.QueryRow(`SELECT revision FROM teams_privacy_revision WHERE id=1`).Scan(&viewPrivacy); err != nil {
+		t.Fatal(err)
+	}
+	viewGen, err := readCacheGenerations(ctx, c.reader())
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewKey, err := service.teamsWorkViewBinding(ctx, teamsCredentialScope(d, credential), w, currentSettings, viewSource, viewPrivacy, viewGen.all)
+	if err != nil {
+		t.Fatal(err)
+	}
 	service.teamsWorker.mu.Lock()
+	service.teamsWorker.bindings = map[string]string{w.ID: viewKey}
 	service.teamsWorker.scope = teamsCredentialScope(d, credential)
+	itemOffline.State = "awaiting_source_consent"
+	service.teamsWorker.items[w.ID] = itemOffline
+	service.teamsWorker.mu.Unlock()
+	// A privacy change after a card was prepared invalidates both foreground actions.
+	if _, err = c.DB.Exec(`UPDATE teams_privacy_revision SET revision=revision+1 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	staleGrant := httptest.NewRecorder()
+	service.teamsWorkerHTTP(staleGrant, httptest.NewRequest(http.MethodPost, "/api/teams/worker/allow-source", bytes.NewReader(offlineSource)))
+	if staleGrant.Code == http.StatusOK {
+		t.Fatal("stale privacy source consent accepted")
+	}
+	service.teamsWorker.mu.Lock()
+	itemOffline.State = "awaiting_review"
+	service.teamsWorker.items[w.ID] = itemOffline
+	service.teamsWorker.mu.Unlock()
+	staleApproval := httptest.NewRecorder()
+	service.teamsWorkerHTTP(staleApproval, httptest.NewRequest(http.MethodPost, "/api/teams/worker/approve-result", bytes.NewReader(offlineApprove)))
+	if staleApproval.Code == http.StatusOK {
+		t.Fatal("stale privacy approval accepted")
+	}
+	if _, err = c.DB.Exec(`UPDATE teams_privacy_revision SET revision=? WHERE id=1`, viewPrivacy); err != nil {
+		t.Fatal(err)
+	}
+	service.teamsWorker.mu.Lock()
 	itemOffline.State = "awaiting_source_consent"
 	service.teamsWorker.items[w.ID] = itemOffline
 	service.teamsWorker.mu.Unlock()
@@ -437,6 +478,21 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 	if denied.Code != http.StatusConflict {
 		t.Fatal("series approval accepted without config hash")
 	}
+	currentSettings, err = readTeamsSettings(ctx, c.reader())
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewGen, err = readCacheGenerations(ctx, c.reader())
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewKey, err = service.teamsWorkViewBinding(ctx, teamsCredentialScope(d, credential), seriesWork, currentSettings, viewSource, viewPrivacy, viewGen.all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.teamsWorker.mu.Lock()
+	service.teamsWorker.bindings[w.ID] = viewKey
+	service.teamsWorker.mu.Unlock()
 	body, _ = json.Marshal(map[string]any{"workId": w.ID, "payloadHash": draft.PayloadHash, "configHash": seriesHash, "labelsToken": token})
 	rec = httptest.NewRecorder()
 	service.teamsWorkerHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/teams/worker/approve-result", bytes.NewReader(body)))

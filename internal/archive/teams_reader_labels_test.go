@@ -172,3 +172,21 @@ func TestTeamsWorkerSweepRotatesRunnableBehindWaiting(t *testing.T) {
 		t.Fatalf("runnable turn lost: %v", got)
 	}
 }
+
+func TestTeamsWorkerAuthorityAllowsOnlyCatalogCounterChanges(t *testing.T) {
+	base := teamsLocalSettings{LibraryID: "library", InstanceID: "instance", OrgID: "org", InstallationID: "install", KeyFingerprint: "key", Enabled: true, SettingsRevision: 4, LocalRevision: 2, ObservedGeneration: 2, ObservedPrivacyRevision: 3}
+	changed := base
+	changed.LocalRevision++
+	changed.ObservedGeneration++
+	changed.ObservedPrivacyRevision++
+	if !teamsSameWorkerAuthority(base, changed) {
+		t.Fatal("ordinary catalog counters invalidated the visit")
+	}
+	for _, mutate := range []func(*teamsLocalSettings){func(s *teamsLocalSettings) { s.Enabled = false }, func(s *teamsLocalSettings) { s.SettingsRevision++ }, func(s *teamsLocalSettings) { s.InstanceID = "other" }, func(s *teamsLocalSettings) { s.OrgID = "other" }, func(s *teamsLocalSettings) { s.KeyFingerprint = "other" }} {
+		changed = base
+		mutate(&changed)
+		if teamsSameWorkerAuthority(base, changed) {
+			t.Fatal("changed consent or enrollment retained authority")
+		}
+	}
+}
