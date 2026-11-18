@@ -198,7 +198,7 @@ func parseTeamsScheduledConfig(raw []byte) (teamsScheduledConfig, error) {
 	if _, err := teams.WorkPath(d.Triggers[0].ID, "status"); err != nil || d.Triggers[0].Kind != "response_deadline" || len(d.Outputs.Fields) != 1 || d.Outputs.Fields[0] != (teamsScheduledField{"total_tokens", "integer", "captured_tokens", "tokens", "sum"}) || !teamsScheduledEqual(d.Outputs.Coverage, teamsScheduledCoverage) || !teamsScheduledEqual(d.Disclosures, teamsScheduledDisclosures) {
 		return c, errTeamsQueryUnsupported
 	}
-	if _, err := teams.WorkPath(c.Requester.ID, "status"); err != nil || c.Question == "" || len(c.Question) > 2000 || c.Requester.DisplayName == "" || len(c.Requester.DisplayName) > 256 || c.ApprovalPolicy != "metrics_or_review" || !teamsScheduledVersion.MatchString(c.MinAppVersion) || c.RetentionPolicy.Mode != "organization_controlled" || c.RetentionPolicy.PolicyVersion < 1 || (c.RetentionPolicy.DurationDays != nil && *c.RetentionPolicy.DurationDays < 1) || !teamsScheduledReaders(c.Audiences.ResponseReaders) || c.Audiences.Publications == nil || len(c.Audiences.Publications) != 0 || c.Audiences.Exports == nil || len(c.Audiences.Exports) != 0 || !canonicalTeamsScheduledZone(c.Schedule.Timezone) || !validTeamsSchedule(&teamsSchedule{Cadence: c.Schedule.Cadence, Timezone: c.Schedule.Timezone, CatchUp: c.Schedule.CatchUp, ResponseWindowSeconds: c.Schedule.ResponseWindowSeconds}) || c.ScheduleBounds.AnchorAt.IsZero() || !c.ScheduleBounds.UntilAt.After(c.ScheduleBounds.AnchorAt) {
+	if _, err := teams.WorkPath(c.Requester.ID, "status"); err != nil || c.Question == "" || len(c.Question) > 2000 || c.Requester.DisplayName == "" || len(c.Requester.DisplayName) > 256 || c.ApprovalPolicy != "metrics_or_review" || !teamsScheduledVersion.MatchString(c.MinAppVersion) || c.RetentionPolicy.Mode != "organization_controlled" || c.RetentionPolicy.PolicyVersion < 1 || (c.RetentionPolicy.DurationDays != nil && *c.RetentionPolicy.DurationDays < 1) || !teamsScheduledReaders(c.Audiences.ResponseReaders) || c.Audiences.Publications == nil || len(c.Audiences.Publications) != 0 || c.Audiences.Exports == nil || len(c.Audiences.Exports) != 0 || !canonicalTeamsScheduledZone(c.Schedule.Timezone) || !validTeamsScheduledSpec(c.Schedule) || c.ScheduleBounds.AnchorAt.IsZero() || !c.ScheduleBounds.UntilAt.After(c.ScheduleBounds.AnchorAt) {
 		return c, errTeamsQueryUnsupported
 	}
 	calendar := teamsScheduledCalendar{Cadence: c.Schedule.Cadence, Timezone: c.Schedule.Timezone, AnchorAt: c.ScheduleBounds.AnchorAt}
@@ -337,4 +337,18 @@ func matchesPersistedTeamsScheduledAssignment(c teamsScheduledConfig, persisted,
 		deadline = c.ScheduleBounds.UntilAt
 	}
 	return deadline.Equal(persisted.DeadlineAt)
+}
+
+func validTeamsScheduledSpec(s teamsScheduledSchedule) bool {
+	if s.Cadence != "daily" && s.Cadence != "weekly" && s.Cadence != "monthly" {
+		return false
+	}
+	if s.CatchUp != "process" && s.CatchUp != "skip" {
+		return false
+	}
+	if s.ResponseWindowSeconds < 60 || s.ResponseWindowSeconds > 30*24*60*60 {
+		return false
+	}
+	_, err := loadTeamsScheduledLocation(s.Timezone)
+	return err == nil
 }
