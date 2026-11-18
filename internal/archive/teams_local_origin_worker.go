@@ -57,6 +57,9 @@ func (c *Catalog) teamsRunIndependentSourcePilot(ctx context.Context, cfg Config
 	snapshot, scope, err := teamsLocalSourceCensusIn(censusCtx, tx, cfg, d, credential)
 	_ = tx.Rollback()
 	release()
+	if errors.Is(err, errTeamsProtectionHeld) || errors.Is(err, errTeamsSnapshotChanged) {
+		return c.teamsProduceRetainedBaseline(ctx, cfg, client, d, credential)
+	}
 	if err != nil {
 		return err
 	}

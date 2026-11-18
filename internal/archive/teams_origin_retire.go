@@ -32,7 +32,7 @@ func teamsRetireRedundantOriginRunsIn(ctx context.Context, tx *sql.Tx, d Library
 	}
 	var list []candidate
 	query := func(after int64, max int) error {
-		rows, err := tx.QueryContext(ctx, `SELECT rowid,run_key,start_receipt_json FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=? AND state='completed' AND rowid>? ORDER BY rowid LIMIT ?`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, after, max)
+		rows, err := tx.QueryContext(ctx, `SELECT rowid,run_key,start_receipt_json FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=? AND token<>'baseline' AND state='completed' AND rowid>? ORDER BY rowid LIMIT ?`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, after, max)
 		if err != nil {
 			return err
 		}

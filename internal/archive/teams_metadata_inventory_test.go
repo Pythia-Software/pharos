@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"crypto/ed25519"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -97,6 +98,23 @@ func TestTeamsMetadataInventoryMatchesLegacy(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err = c.reviewTeamsSourceMapping(ctx, d, credential, binding, "work", revision, true); err != nil {
+		t.Fatal(err)
+	}
+	// Baseline consent is separate from source-transfer consent.
+	settings, err = readTeamsSettings(ctx, c.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.acknowledgeTeamsProtectionPolicy(ctx, d, credential, settings.SettingsRevision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.DB.Exec(`CREATE TABLE teams_source_transfer_ack(id INTEGER PRIMARY KEY,policy_id TEXT,policy_sha256 TEXT,origin TEXT,org_id TEXT,person_id TEXT,installation_id TEXT,library_id TEXT,instance_id TEXT,enrollment_generation TEXT,acknowledged_at TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	// This metadata fixture is deliberately v33; record the separately
+	// approved transfer only as synthetic setup. Production accepts it only
+	// through the format-35 protected command.
+	if _, err = c.DB.Exec(`INSERT INTO teams_source_transfer_ack(id,policy_id,policy_sha256,origin,org_id,person_id,installation_id,library_id,instance_id,enrollment_generation,acknowledged_at) SELECT 1,?,?,?,?,?,?,?,?,generation,'synthetic' FROM teams_protection_enrollment WHERE id=1`, teamsSourceTransferPolicyID, teamsSourceTransferPolicyDigest(), credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance); err != nil {
 		t.Fatal(err)
 	}
 	session, err := beginCapture(cfg)
@@ -351,6 +369,59 @@ func TestTeamsMetadataInventoryMatchesLegacy(t *testing.T) {
 	}
 	if !got.Complete || !reflect.DeepEqual(got.Items, legacy.Items) || !reflect.DeepEqual(got.values, legacy.values) {
 		t.Fatalf("metadata graph differs: got=%+v legacy=%+v", got.Items, legacy.Items)
+	}
+	if err = tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err = conn.Raw(func(raw any) error {
+		return raw.(*catalogConn).sqliteConn.(sqlite.AuthorizerRegisterer).RegisterAuthorizer(nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	override(t, &teamsIndependentRosterProof, func(ctx context.Context, tx *sql.Tx, cfg Config, d LibraryDescriptor, cred *teams.EnrollmentCredential) (teamsV2Inventory, error) {
+		return teamsMetadataInventoryIn(ctx, tx, cfg, d, cred, roster)
+	})
+	d.ManagedBirth = true
+	proofTx, e := c.DB.BeginTx(ctx, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer proofTx.Rollback()
+	// Exercise the draft's format-35 transfer gate inside this rolled-back
+	// metadata-only fixture; no production writer is activated here.
+	if _, e = proofTx.Exec(`UPDATE meta SET value='35' WHERE key='schema_version'`); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = proofTx.Exec(`UPDATE teams_protection_assertions SET active=1 WHERE conversation_id='different-conversation' AND native_id='synthetic-shared' AND kind='positive_flag'`); e != nil {
+		t.Fatal(e)
+	}
+	baseline, _, e := teamsRetainedBaselineDraft(ctx, proofTx, cfg, d, credential)
+	if e != nil {
+		t.Fatal("retained draft", e)
+	}
+	var public, private, unknown int64
+	for _, item := range baseline.Items {
+		if item.Kind != "codex_thread" {
+			continue
+		}
+		switch item.Protection {
+		case "public":
+			public += baseline.values[item.Token]
+		case "private":
+			private += baseline.values[item.Token]
+		case "unknown":
+			unknown += baseline.values[item.Token]
+		}
+	}
+	if public != 50 || private != 25 || unknown != 250 {
+		t.Fatalf("retained protections changed: %d %d %d", public, private, unknown)
+	}
+	d.ManagedBirth = false
+	if _, _, e = teamsRetainedBaselineDraft(ctx, proofTx, cfg, d, credential); !errors.Is(e, errTeamsProtectionHeld) {
+		t.Fatalf("existing library baselined: %v", e)
+	}
+	if err = proofTx.Rollback(); err != nil {
+		t.Fatal(err)
 	}
 	// Even identical bytes with restored mtime on a replacement inode cannot
 	// be reconciled with the acquisition stamp from the capture.
