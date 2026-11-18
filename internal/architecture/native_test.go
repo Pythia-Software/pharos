@@ -13,6 +13,14 @@ import (
 // Approval is by exact file and purpose, never by a filename suffix or an
 // entire directory. New native implementations need a reviewed entry here.
 var nativeLeaves = map[string]string{
+	"internal/archive/teams_birth_create_unix.go":             "Bind fresh managed creation to the effective local user.",
+	"internal/archive/teams_birth_open_unix.go":               "Check the effective user before opening a bound managed library.",
+	"internal/archive/teams_birth_fs_unix.go":                 "Create-only descriptor-relative fresh-library staging and location checks.",
+	"internal/archive/teams_birth_rename_darwin.go":           "Publish a staged library without replacing a destination on Darwin.",
+	"internal/archive/teams_birth_rename_linux.go":            "Publish a staged library without replacing a destination on Linux.",
+	"internal/archive/teams_birth_sync_darwin.go":             "Flush fresh library files through the Darwin drive cache.",
+	"internal/platform/credentialstore/fullsync_darwin.go":    "Flush protected host records through the Darwin drive cache.",
+	"internal/platform/credentialstore/fullsync_linux.go":     "Flush protected host records on Linux.",
 	"internal/platform/filelock/filelock_unix.go":             "Borrowed-descriptor advisory locking.",
 	"internal/platform/credentialstore/store_unix.go":         "Owner-only installation credential files, opened without following the final symlink and published without replacement.",
 	"internal/platform/credentialstore/rename_darwin.go":      "Atomic no-replace publication of a protected credential on Darwin.",

@@ -99,6 +99,9 @@ func (c *Catalog) initializedByThisBuild() (bool, error) {
 // refused (see errCatalogNeedsUpgrade), and one from a newer build is refused
 // by Initialize's version check before anything is written.
 func OpenCatalogForQuery(path string) (*Catalog, error) {
+	if err := rejectUnboundManagedPath(path); err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(path); err != nil {
 		return nil, err
 	}
@@ -126,6 +129,9 @@ func OpenCatalogForQuery(path string) (*Catalog, error) {
 // A catalog this build has not initialized is read only if its schema version
 // is this build's.
 func openCatalogReadOnly(path string) (*Catalog, error) {
+	if err := rejectUnboundManagedPath(path); err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(path); err != nil {
 		return nil, err
 	}

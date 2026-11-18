@@ -35,6 +35,8 @@ type LibraryDescriptor struct {
 	Inode         uint64 `json:"directory_inode"`
 	RecoveredFrom string `json:"recovered_from_library_id,omitempty"`
 	RecoveryPoint string `json:"recovery_point,omitempty"`
+	// Fresh managed births require the independently retained host binding.
+	ManagedBirth bool `json:"managed_birth,omitempty"`
 	// Sticky protection: pausing a delivery pair must not make undelivered
 	// evidence eligible for ordinary snapshot pruning, including CLI capture.
 	RetainPendingEvidence bool `json:"retain_pending_evidence,omitempty"`

@@ -36,6 +36,15 @@ var teamsCredentialStore = func(cfg Config) (credentialstore.Store, error) {
 	return credentialstore.New(root), nil
 }
 
+// Birth checkpoint writes require the stronger durable file lane. The ordinary
+// enrollment store keeps its existing behavior and failure modes.
+var teamsBirthCredentialStore = func(cfg Config) (credentialstore.Store, error) {
+	if _, err := teamsCredentialStore(cfg); err != nil {
+		return nil, err
+	}
+	return credentialstore.NewDurable(filepath.Join(pharosSupportDir(), "teams-credentials")), nil
+}
+
 func teamsCredentialName(applicationID, libraryID string) string {
 	sum := sha256.Sum256([]byte("credential\x00" + applicationID + "\x00" + libraryID))
 	return hex.EncodeToString(sum[:])

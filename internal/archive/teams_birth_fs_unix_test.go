@@ -1,0 +1,381 @@
+//go:build darwin || linux
+
+package archive
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/gbdubs/pharos/internal/platform/credentialstore"
+)
+
+func TestTeamsBirthStagingExclusive(t *testing.T) {
+	parent := t.TempDir()
+	target := filepath.Join(parent, "library")
+	image := []byte("synthetic image")
+	d := LibraryDescriptor{Version: libraryFormatVersion, ID: "fresh", Instance: "instance"}
+	stage, err := teamsStageBirth(target, "Library", image, d, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stage.close()
+	sum := sha256.Sum256(image)
+	r := teamsBirthReservation{ImageSHA256: hex.EncodeToString(sum[:]), DirectoryDevice: uint64(stage.dirStat.Dev), DirectoryInode: stage.dirStat.Ino, CatalogDevice: uint64(stage.catalogStat.Dev), CatalogInode: stage.catalogStat.Ino}
+	if err = stage.publish(); err != nil {
+		t.Fatal(err)
+	}
+	if err = teamsVerifyBirthImage(target, r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = teamsStageBirth(target, "Library", image, d, func(string) string { return "" }); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("existing destination: %v", err)
+	}
+	other := filepath.Join(parent, "other")
+	competing, err := teamsStageBirth(other, "Other", image, d, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer competing.close()
+	if err = os.Mkdir(other, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = competing.publish(); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("publish replaced destination: %v", err)
+	}
+	if err = os.WriteFile(filepath.Join(target, "catalog", "catalog.sqlite3-wal"), []byte("unexpected"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = teamsVerifyBirthImage(target, r); err == nil {
+		t.Fatal("unexpected sidecar accepted")
+	}
+}
+
+func TestTeamsCreateManagedLibrary(t *testing.T) {
+	useHost(t, "synthetic-managed-birth")
+	t.Setenv("PHAROS_SUPPORT_DIR", t.TempDir())
+	override(t, &teamsBirthHardwareUUID, func() (string, error) { return "synthetic-hardware", nil })
+	parent := t.TempDir()
+	target := filepath.Join(parent, "fresh")
+	cfg, err := teamsCreateManagedLibrary(context.Background(), filepath.Join(parent, "Synthetic.app"), target, "Fresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := readLibraryDescriptor(cfg)
+	if err != nil || d.ID == "" || d.Instance == "" {
+		t.Fatalf("descriptor: %v", err)
+	}
+	if c, e := OpenCatalog(cfg.CatalogPath); e == nil {
+		_ = c.Close()
+		t.Fatal("path-only writer accepted managed birth")
+	}
+	if c, e := OpenCatalogForQuery(cfg.CatalogPath); e == nil {
+		_ = c.Close()
+		t.Fatal("path-only query accepted managed birth")
+	}
+	if c, e := openCatalogReadOnly(cfg.CatalogPath); e == nil {
+		_ = c.Close()
+		t.Fatal("path-only read accepted managed birth")
+	}
+	store, err := teamsCredentialStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appID := installationID(cfg.Application)
+	_, reservation, err := teamsReadBirthReservation(store, teamsBirthReservationName(appID, filepath.Dir(cfg.Path)))
+	if err != nil || reservation.Phase != "committed" {
+		t.Fatalf("reservation: %v", err)
+	}
+	_, host, err := teamsCheckpointLoad(store, reservation.Scope)
+	if err != nil || host.Phase != "current" || *host.Current != *reservation.Tuple {
+		t.Fatalf("host checkpoint: %v", err)
+	}
+	// Model a crash after host finalization and before reservation CAS. The
+	// exact installed catalog can finish without minting another identity.
+	reservationKey := teamsBirthReservationName(appID, filepath.Dir(cfg.Path))
+	committedBytes, _, err := teamsReadBirthReservation(store, reservationKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interrupted := reservation
+	interrupted.Phase = "verified"
+	interruptedBytes, err := teamsEncodeBirthReservation(interrupted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Replace(reservationKey, committedBytes, interruptedBytes); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = teamsCreateManagedLibrary(context.Background(), cfg.Application, target, "Fresh"); err != nil {
+		t.Fatalf("finalization retry: %v", err)
+	}
+	copyBytes, err := os.ReadFile(cfg.CatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(t.TempDir(), "copy.sqlite3")
+	if err = os.WriteFile(copyPath, copyBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	initialImage := append([]byte(nil), copyBytes...)
+	redirected := cfg
+	redirected.CatalogPath = copyPath
+	if _, _, err = teamsOpenManagedCatalog(context.Background(), redirected); err == nil {
+		t.Fatal("configured catalog copy accepted")
+	}
+	catalog, found, err := teamsOpenManagedCatalog(context.Background(), cfg)
+	if err != nil || !found {
+		t.Fatalf("managed restart: %v", err)
+	}
+	if catalog.teamsCheckpoint == nil {
+		t.Fatal("missing protected serving writer")
+	}
+	// Replacing the main path while the writer is open must stop a protected
+	// write before it changes either the host checkpoint or the replacement.
+	oldPath := cfg.CatalogPath + ".moved"
+	if err = os.Rename(cfg.CatalogPath, oldPath); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(cfg.CatalogPath, []byte("replacement"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = catalog.writeTransaction(context.Background(), "replacement check", func(*sql.Tx) error { t.Error("replacement callback ran"); return nil }); err == nil {
+		t.Fatal("replacement accepted")
+	}
+	if err = os.Remove(cfg.CatalogPath); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(oldPath, cfg.CatalogPath); err != nil {
+		t.Fatal(err)
+	}
+	if err = catalog.writeTransaction(context.Background(), "synthetic indexing", func(tx *sql.Tx) error {
+		if _, e := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','test','local','w','Synthetic','2026-01-01')`); e != nil {
+			return e
+		}
+		_, e := tx.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','test','local','c')`)
+		return e
+	}); err != nil {
+		t.Fatal("protected indexing", err)
+	}
+	if _, err = catalog.setTeamsPrivate(context.Background(), "c", true); err != nil {
+		t.Fatal("private marking", err)
+	}
+	if err = catalog.Close(); err != nil {
+		t.Fatal(err)
+	}
+	catalog, found, err = teamsOpenManagedCatalog(context.Background(), cfg)
+	if err != nil || !found {
+		t.Fatalf("restart after protected write: %v", err)
+	}
+	privacy, err := catalog.teamsPrivacy(context.Background(), "c")
+	if err != nil || !privacy.Private {
+		t.Fatalf("privacy after restart: %v", err)
+	}
+	if err = catalog.Close(); err != nil {
+		t.Fatal(err)
+	}
+	advancedImage, err := os.ReadFile(cfg.CatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(cfg.CatalogPath, initialImage, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = teamsOpenManagedCatalog(context.Background(), cfg); err == nil {
+		t.Fatal("rolled-back catalog accepted")
+	}
+	if err = os.WriteFile(cfg.CatalogPath, advancedImage, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = teamsCreateManagedLibrary(context.Background(), cfg.Application, target, "Fresh"); err != nil {
+		t.Fatalf("registration retry: %v", err)
+	}
+	if err = os.WriteFile(filepath.Join(target, "catalog", "catalog.sqlite3-wal"), []byte("unsafe"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(filepath.Join(target, "catalog", "catalog.sqlite3-wal")); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink("other", filepath.Join(target, "catalog", "catalog.sqlite3-wal")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = teamsOpenManagedCatalog(context.Background(), cfg); err == nil {
+		t.Fatal("unsafe sidecar accepted")
+	}
+	if err = os.Remove(filepath.Join(target, "catalog", "catalog.sqlite3-wal")); err != nil {
+		t.Fatal(err)
+	}
+	current, _, err := teamsReadBirthReservation(store, reservationKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Delete(reservationKey, current); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = teamsOpenManagedCatalog(context.Background(), cfg); err == nil {
+		t.Fatal("missing host birth record accepted")
+	}
+}
+
+func TestTeamsBirthDoesNotClaimExistingLibrary(t *testing.T) {
+	useHost(t, "synthetic-existing-library")
+	t.Setenv("PHAROS_SUPPORT_DIR", t.TempDir())
+	override(t, &teamsBirthHardwareUUID, func() (string, error) { return "synthetic-hardware", nil })
+	parent := t.TempDir()
+	target := filepath.Join(parent, "existing")
+	app := filepath.Join(parent, "Synthetic.app")
+	cfg, err := InitLibrary(target, libraryVolumeIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Application = app
+	if _, err = teamsCreateManagedLibrary(context.Background(), app, target, "Existing"); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("existing create: %v", err)
+	}
+	if c, found, err := teamsOpenManagedCatalog(context.Background(), cfg); err != nil || found {
+		if c != nil {
+			_ = c.Close()
+		}
+		t.Fatalf("legacy library claimed: %v", err)
+	}
+	// A failed competing birth must not claim a different, valid legacy leaf.
+	canonicalParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalTarget := filepath.Join(canonicalParent, "existing")
+	appID := installationID(app)
+	store, err := teamsBirthCredentialStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := teamsBirthReservation{Version: 1, Phase: "image_bound", Application: appID, Path: canonicalTarget, Host: "synthetic-hardware", UID: os.Geteuid(), Volume: libraryVolumeIdentity(canonicalParent), LibraryID: "other-library", InstanceID: "other-instance", DirectoryInode: 1, CatalogInode: 2, ImageSHA256: strings.Repeat("0", 64)}
+	stale.Scope = teamsCheckpointScope(appID, stale.LibraryID)
+	stale.Tuple = &teamsCheckpointTuple{Generation: 1, Instance: teamsCheckpointInstance(stale.LibraryID, stale.InstanceID), CommitID: strings.Repeat("0", 32), Digest: strings.Repeat("0", 64)}
+	raw, err := teamsEncodeBirthReservation(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Save(teamsBirthReservationName(appID, canonicalTarget), raw); err != nil {
+		t.Fatal(err)
+	}
+	if c, found, err := teamsOpenManagedCatalog(context.Background(), cfg); err != nil || found {
+		if c != nil {
+			_ = c.Close()
+		}
+		t.Fatalf("interrupted birth claimed legacy leaf: %v", err)
+	}
+	override(t, &teamsCredentialStore, func(Config) (credentialstore.Store, error) {
+		return nil, errors.New("synthetic unavailable host storage")
+	})
+	if c, found, err := teamsOpenManagedCatalog(context.Background(), cfg); err != nil || found {
+		if c != nil {
+			_ = c.Close()
+		}
+		t.Fatalf("legacy depended on birth storage: %v", err)
+	}
+}
+
+func TestTeamsBirthAbandonsUnpublishedReservation(t *testing.T) {
+	useHost(t, "synthetic-abandoned-birth")
+	t.Setenv("PHAROS_SUPPORT_DIR", t.TempDir())
+	override(t, &teamsBirthHardwareUUID, func() (string, error) { return "synthetic-hardware", nil })
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, app := filepath.Join(parent, "fresh"), filepath.Join(parent, "Synthetic.app")
+	cfg := Config{Application: app, Library: true, Path: filepath.Join(target, libraryConfigName), CatalogPath: filepath.Join(target, "catalog", "catalog.sqlite3"), ArchiveRoot: filepath.Join(target, "preserved"), StagingRoot: filepath.Join(target, "staging")}
+	store, err := teamsCredentialStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appID := installationID(app)
+	stale := teamsBirthReservation{Version: 1, Phase: "reserved", Application: appID, Path: target, Host: "synthetic-hardware", UID: os.Geteuid(), Volume: libraryVolumeIdentity(parent), LibraryID: "stale-library", InstanceID: "stale-instance"}
+	stale.Scope = teamsCheckpointScope(appID, stale.LibraryID)
+	raw, err := teamsEncodeBirthReservation(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Save(teamsBirthReservationName(appID, target), raw); err != nil {
+		t.Fatal(err)
+	}
+	created, err := teamsCreateManagedLibrary(context.Background(), app, target, "Fresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := readLibraryDescriptor(created)
+	if err != nil || d.ID == stale.LibraryID {
+		t.Fatalf("stale identity reused: %v", err)
+	}
+	tombstone, err := store.Load(teamsBirthReservationName(appID, "abandoned:"+stale.Scope))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var abandoned teamsBirthReservation
+	if err = json.Unmarshal(tombstone, &abandoned); err != nil || abandoned.Phase != "abandoned" {
+		t.Fatalf("missing tombstone: %v", err)
+	}
+}
+
+type teamsLoadUnsafeStore struct{ credentialstore.Store }
+
+func (teamsLoadUnsafeStore) Load(string) ([]byte, error) { return nil, credentialstore.ErrUnsafe }
+
+func TestLegacyV35IgnoresUnavailableBirthLoad(t *testing.T) {
+	useHost(t, "synthetic-legacy-v35")
+	t.Setenv("PHAROS_SUPPORT_DIR", t.TempDir())
+	parent := t.TempDir()
+	cfg, err := InitLibrary(filepath.Join(parent, "legacy"), libraryVolumeIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Application = filepath.Join(parent, "Synthetic.app")
+	image, _, err := teamsBuildFreshImage(context.Background(), "legacy-library", "legacy-instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(cfg.CatalogPath, image, 0600); err != nil {
+		t.Fatal(err)
+	}
+	override(t, &teamsCredentialStore, func(Config) (credentialstore.Store, error) { return teamsLoadUnsafeStore{}, nil })
+	if c, found, err := teamsOpenManagedCatalog(context.Background(), cfg); err != nil || found {
+		if c != nil {
+			_ = c.Close()
+		}
+		t.Fatalf("legacy v35 birth dependency: %v", err)
+	}
+}
+
+func TestTeamsBirthRetriesPendingVerifiedImage(t *testing.T) {
+	for _, stage := range []string{"verified", "wal_enabled"} {
+		t.Run(stage, func(t *testing.T) {
+			useHost(t, "synthetic-birth-crash-"+stage)
+			t.Setenv("PHAROS_SUPPORT_DIR", t.TempDir())
+			override(t, &teamsBirthHardwareUUID, func() (string, error) { return "synthetic-hardware", nil })
+			parent := t.TempDir()
+			target, app := filepath.Join(parent, "fresh"), filepath.Join(parent, "Synthetic.app")
+			hit := false
+			override(t, &teamsBirthFault, func(at string) error {
+				if at == stage && !hit {
+					hit = true
+					return errors.New("synthetic interruption")
+				}
+				return nil
+			})
+			if _, err := teamsCreateManagedLibrary(context.Background(), app, target, "Fresh"); err == nil || !hit {
+				t.Fatalf("missing interruption: %v", err)
+			}
+			if _, err := teamsCreateManagedLibrary(context.Background(), app, target, "Fresh"); err != nil {
+				t.Fatalf("pending verified retry: %v", err)
+			}
+		})
+	}
+}

@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+
+	"github.com/gbdubs/pharos/internal/platform/credentialstore"
 )
 
 func teamsCheckpointKeyName(scope string) string {
@@ -21,11 +23,21 @@ func (c *Catalog) configureTeamsCheckpoint(ctx context.Context, cfg Config, d Li
 	if c.teamsCheckpoint != nil || cfg.Application == "" || d.ID == "" || d.Instance == "" || len(d.ID) > 256 || len(d.Instance) > 256 || cfg.CatalogPath != c.Path {
 		return false, errTeamsProtectionContinuity
 	}
-	scope := teamsCheckpointScope(installationID(cfg.Application), d.ID)
 	store, err := teamsCredentialStore(cfg)
 	if err != nil {
 		return false, err
 	}
+	return c.configureTeamsCheckpointWithStore(ctx, cfg, d, store)
+}
+
+func (c *Catalog) configureTeamsCheckpointWithStore(ctx context.Context, cfg Config, d LibraryDescriptor, store credentialstore.Store) (bool, error) {
+	if store == nil {
+		return false, errTeamsProtectionContinuity
+	}
+	if c.teamsCheckpoint != nil || cfg.Application == "" || d.ID == "" || d.Instance == "" || len(d.ID) > 256 || len(d.Instance) > 256 || cfg.CatalogPath != c.Path {
+		return false, errTeamsProtectionContinuity
+	}
+	scope := teamsCheckpointScope(installationID(cfg.Application), d.ID)
 	key, err := store.Load(teamsCheckpointKeyName(scope))
 	if err != nil || len(key) != 32 {
 		clear(key)

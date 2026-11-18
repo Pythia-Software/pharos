@@ -1447,6 +1447,7 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 		}
 	})
 	t.Run("edited default local folder", func(t *testing.T) {
+		t.Setenv("PHAROS_EXPERIMENTAL_MANAGED_BIRTH", "")
 		support := t.TempDir()
 		t.Setenv("PHAROS_SUPPORT_DIR", support)
 		override(t, &libraryVolumeIdentity, testIdentity)
@@ -1462,6 +1463,22 @@ func TestApplicationSetupWithoutLibrary(t *testing.T) {
 		}
 		if _, err = os.Stat(filepath.Join(path, libraryConfigName)); err != nil {
 			t.Fatal(err)
+		}
+		// Without the experimental birth gate, the ordinary Create path
+		// remains the existing portable catalog format.
+		legacy, err := sql.Open("sqlite", readerDSN(filepath.Join(path, "catalog", "catalog.sqlite3")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var version string
+		if err = legacy.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&version); err != nil {
+			t.Fatal(err)
+		}
+		if err = legacy.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if version != fmt.Sprint(catalogSchemaVersion) {
+			t.Fatalf("ordinary create changed format: %s", version)
 		}
 		missing := filepath.Join(t.TempDir(), "missing-drive", "Libraries", "Other")
 		w = httptest.NewRecorder()

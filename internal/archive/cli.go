@@ -265,15 +265,41 @@ func Run(arguments []string) error {
 	if command == "add-this-mac" {
 		return runAddThisMacCLI(config, args, os.Stdin, os.Stdout)
 	}
-	if err := config.EnsureDirs(); err != nil {
-		return err
-	}
 	if command == "serve" {
-		catalog, err := OpenCatalog(config.CatalogPath)
+		var use, owner *os.File
+		if d, e := readLibraryDescriptor(config); (e == nil && d.ManagedBirth) || teamsHasRetainedBirth(config) {
+			var e error
+			use, e = fileLease(libraryUseLock(config), false)
+			if e != nil {
+				return e
+			}
+			defer use.Close()
+			owner, e = fileLease(filepath.Join(filepath.Dir(canonical(config.CatalogPath)), ".pharos-service.lock"), true)
+			if e != nil {
+				return e
+			}
+			defer owner.Close()
+		}
+		catalog, managed, err := teamsOpenManagedCatalog(context.Background(), config)
+		if err != nil {
+			return err
+		}
+		if !managed {
+			if err = config.EnsureDirs(); err != nil {
+				return err
+			}
+			catalog, err = OpenCatalog(config.CatalogPath)
+
+		}
 		if err != nil {
 			return err
 		}
 		defer catalog.Close()
+		if managed {
+			if err = config.EnsureDirs(); err != nil {
+				return err
+			}
+		}
 		if err := catalog.scheduleDefaultModelBackfill(context.Background()); err != nil {
 			return err
 		}
@@ -300,7 +326,10 @@ func Run(arguments []string) error {
 		// Only a service that got its port serves the library: then a release
 		// (see releasedMarkerName) ends.
 		server.life.listening = func() { _ = os.Remove(releasedMarker(config.CatalogPath)) }
-		return server.Serve()
+		return server.serveWithLeases(use, owner)
+	}
+	if err := config.EnsureDirs(); err != nil {
+		return err
 	}
 	// Every other command opens the catalog under a lease (§6.5): taken
 	// before the open, so its Initialize is seen, and released after the

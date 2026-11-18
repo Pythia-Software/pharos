@@ -37,12 +37,19 @@ type teamsProtectedWriter struct {
 	requireFence     bool
 	expectedInstance string
 	upgradePreflight bool
+	validateBinding  func() error
 	// Set only by the checkpoint protocol while it owns the writer transaction.
 	// Until that protocol is implemented, no production path grants authority.
 	authorized atomic.Bool
 }
 
 func teamsOpenProtectedWriter(path string) (*teamsProtectedWriter, error) {
+	return teamsOpenProtectedWriterDSN(catalogDSNWithPragmas(path, durableCatalog) + "&_txlock=immediate")
+}
+
+// teamsOpenProtectedWriterDSN constructs an isolated driver; callers must
+// never install its protected function on the ordinary shared SQLite driver.
+func teamsOpenProtectedWriterDSN(dsn string) (*teamsProtectedWriter, error) {
 	w := &teamsProtectedWriter{}
 	d := &sqlite.Driver{}
 	// Persistent computed-column and search triggers need the same Query
@@ -101,7 +108,6 @@ func teamsOpenProtectedWriter(path string) (*teamsProtectedWriter, error) {
 	}
 	// Do not inherit the non-durable test lane. FULL and immediate locking are
 	// properties of every connection opened on this private pool.
-	dsn := catalogDSNWithPragmas(path, durableCatalog) + "&_txlock=immediate"
 	db := sql.OpenDB(&teamsProtectedConnector{driver: d, dsn: dsn})
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
@@ -110,6 +116,11 @@ func teamsOpenProtectedWriter(path string) (*teamsProtectedWriter, error) {
 }
 
 func teamsBeginProtectedWrite(ctx context.Context, w *teamsProtectedWriter) (*sql.Tx, error) {
+	if w.validateBinding != nil {
+		if err := w.validateBinding(); err != nil {
+			return nil, err
+		}
+	}
 	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
