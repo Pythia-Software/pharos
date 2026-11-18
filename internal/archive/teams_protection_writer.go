@@ -43,6 +43,12 @@ type teamsProtectedWriter struct {
 }
 
 func teamsOpenProtectedWriter(path string) (*teamsProtectedWriter, error) {
+	return teamsOpenProtectedWriterDSN(catalogDSNWithPragmas(path, durableCatalog) + "&_txlock=immediate")
+}
+
+// teamsOpenProtectedWriterDSN constructs an isolated driver; callers must
+// never install its protected function on the ordinary shared SQLite driver.
+func teamsOpenProtectedWriterDSN(dsn string) (*teamsProtectedWriter, error) {
 	w := &teamsProtectedWriter{}
 	d := &sqlite.Driver{}
 	// Persistent computed-column and search triggers need the same Query
@@ -101,7 +107,6 @@ func teamsOpenProtectedWriter(path string) (*teamsProtectedWriter, error) {
 	}
 	// Do not inherit the non-durable test lane. FULL and immediate locking are
 	// properties of every connection opened on this private pool.
-	dsn := catalogDSNWithPragmas(path, durableCatalog) + "&_txlock=immediate"
 	db := sql.OpenDB(&teamsProtectedConnector{driver: d, dsn: dsn})
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
