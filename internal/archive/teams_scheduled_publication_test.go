@@ -333,7 +333,7 @@ func TestScheduledReleaseDisclosesSinglePartialContributor(t *testing.T) {
 		t.Fatal(err)
 	}
 	terms := teamsScheduledTerms(c)
-	if terms.DisclosureRevision != 2 || !strings.Contains(terms.Inference, "your token total") || !strings.Contains(terms.Inference, "partial coverage") || !strings.Contains(terms.Inference, "named report readers") || !strings.Contains(terms.Inference, "web report") || !strings.Contains(terms.Inference, "separate approval") || !strings.Contains(terms.Coverage, "opted out, unavailable, declined and pending") {
+	if terms.DisclosureRevision != 2 || !strings.Contains(terms.Inference, "your token total") || !strings.Contains(terms.Inference, "partial coverage") || !strings.Contains(terms.Inference, "named report readers") || !strings.Contains(terms.Inference, "web report") || !strings.Contains(terms.Inference, "separate approval") || !strings.Contains(terms.Coverage, "opted out, unavailable, declined and pending") || !strings.Contains(terms.Coverage, "With one participant") {
 		t.Fatal("release disclosure omitted the scope of a single partial contribution")
 	}
 	for _, bad := range []string{revision, strings.Replace(string(raw), end, release, 1), strings.Replace(v2, `"disclosure_revision":2`, `"disclosure_revision":3`, 1)} {
