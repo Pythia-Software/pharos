@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,6 +29,12 @@ import (
 
 // The census proof hook is supplied by the independent native evidence slice;
 // this exercises the normal worker and signed wire while that proof is absent.
+func TestTeamsWorkerNonPrivateReplayHoldsOnChangedEvidence(t *testing.T) {
+	runTeamsWorkerSourcePilotSignedOrigin(t, false, false, false, "nonprivate-stale")
+}
+func TestTeamsWorkerRetainedBaselineSignedRecovery(t *testing.T) {
+	runTeamsWorkerSourcePilotSignedOrigin(t, false, false, false, "retained-baseline")
+}
 func TestTeamsWorkerSourcePilotSignedOrigin(t *testing.T) {
 	runTeamsWorkerSourcePilotSignedOrigin(t, false, false, false, "")
 }
@@ -93,6 +100,9 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 	cfg.Application = filepath.Join(t.TempDir(), "Synthetic.app")
 	ctx := context.Background()
 	override(t, &teamsSourcePilotEnabled, false)
+	if mode == "nonprivate-stale" {
+		override(t, &teamsNonPrivateSourceProofEnabled, true)
+	}
 	d, err := ensureLibraryDescriptor(cfg, "Synthetic library")
 	if err != nil {
 		t.Fatal(err)
@@ -114,6 +124,10 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 	var unconfirmedPage []byte
 	var requestRun string
 	startBodies := map[string][]byte{}
+	startReceipts := map[string]sourcewire.RecoveryStartReceipt{}
+	runGenerations := map[string]int64{}
+	runHeld := map[string]bool{}
+	safetyHeldOnce := false
 	accepted := map[string]sourcewire.ProtectionObservation{}
 	invalidateOnPage, invalidated := false, false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +163,10 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 				t.Error("recovery start retry changed bytes")
 			}
 			startBodies[command.StartID] = bytes.Clone(raw)
+			if prior, ok := startReceipts[command.StartID]; ok && (mode == "retained-baseline" || mode == "nonprivate-stale") {
+				_ = json.NewEncoder(w).Encode(prior)
+				return
+			}
 			if starts == 1 {
 				// The server received the signed request but its reply was lost.
 				if mode == "auth" {
@@ -162,7 +180,23 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 				t.Error("new generation did not request restart")
 			}
 			runID := fmt.Sprintf("00000000-0000-4000-8000-%012d", len(accepted)+6)
-			_ = json.NewEncoder(w).Encode(sourcewire.RecoveryStartReceipt{Status: "proof_required", RunID: runID, Generation: int64(len(accepted) + 1), ServerTime: now, ExpiresAt: now + 3600, UnacceptedFloor: now - 1, ExternalProofRequired: true})
+			generation := int64(len(accepted) + 1)
+			status := "proof_required"
+			held := false
+			if mode == "retained-baseline" || mode == "nonprivate-stale" {
+				runID = fmt.Sprintf("00000000-0000-4000-8000-%012d", starts+100)
+				generation = int64(starts)
+				if len(accepted) > 0 && !safetyHeldOnce {
+					held = true
+					status = "held"
+					safetyHeldOnce = true
+				}
+			}
+			runGenerations[runID] = generation
+			runHeld[runID] = held
+			receipt := sourcewire.RecoveryStartReceipt{Status: status, Held: held, RunID: runID, Generation: generation, ServerTime: now, ExpiresAt: now + 3600, UnacceptedFloor: now - 1, ExternalProofRequired: true}
+			startReceipts[command.StartID] = receipt
+			_ = json.NewEncoder(w).Encode(receipt)
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/source-recovery/") && strings.HasSuffix(r.URL.Path, "/pages"):
 			request, e := sourcewire.DecodeRecoveryPage(raw)
 			if e != nil {
@@ -293,7 +327,17 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 					return
 				}
 			}
-			_ = json.NewEncoder(w).Encode(sourcewire.RecoveryPageReceipt{Status: "proof_required", RunID: request.RunID, Generation: int64(len(accepted) + 1), ServerTime: now, UnacceptedFloor: now - 1, ExternalProofRequired: true, Family: "origins", Items: items, NextCursor: cursor})
+			generation := int64(len(accepted) + 1)
+			status := "proof_required"
+			held := false
+			if mode == "retained-baseline" || mode == "nonprivate-stale" {
+				generation = runGenerations[request.RunID]
+				held = runHeld[request.RunID]
+				if held {
+					status = "held"
+				}
+			}
+			_ = json.NewEncoder(w).Encode(sourcewire.RecoveryPageReceipt{Status: status, Held: held, RunID: request.RunID, Generation: generation, ServerTime: now, UnacceptedFloor: now - 1, ExternalProofRequired: true, Family: "origins", Items: items, NextCursor: cursor})
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/source-protection/") && strings.Contains(r.URL.Path, "/receipts/"):
 			lookups++
 			if len(raw) != 0 {
@@ -372,7 +416,7 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 				return
 			}
 			signedOrigins++
-			_ = json.NewEncoder(w).Encode(sourcewire.ProtectionReceipt{Status: "accepted", ObservationID: v.ObservationID, Revision: v.Revision, ObservationSHA256: sourcewire.ProtectionDigest(raw), PrivacyRevision: 1, OriginProtection: v.Protection})
+			_ = json.NewEncoder(w).Encode(sourcewire.ProtectionReceipt{Status: "accepted", ObservationID: v.ObservationID, Revision: v.Revision, ObservationSHA256: sourcewire.ProtectionDigest(raw), PrivacyRevision: 1, OriginProtection: v.Protection, SafetyPending: mode == "retained-baseline" || mode == "nonprivate-stale"})
 		default:
 			t.Errorf("unexpected synthetic route %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(404)
@@ -415,7 +459,7 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 	}
 	for i := byte(1); i <= last; i += 3 {
 		protection := "private"
-		if i == 1 {
+		if i == 1 || (mode == "retained-baseline" && i == 4) {
 			protection = "public"
 		}
 		snapshot.Items = append(snapshot.Items, sourcewire.Item{Kind: "codex_thread", Token: opaque(i), Witness: opaque(i + 1), Profile: &sourcewire.Profile{ID: "codex_thread_usage", Version: 1}, EvidenceRevision: opaque(i + 2), Protection: protection, Dependencies: []string{}})
@@ -523,6 +567,181 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 		}
 		return snapshot, nil
 	})
+	if mode == "retained-baseline" || mode == "nonprivate-stale" {
+		override(t, &teamsNonPrivateSourceProofEnabled, true)
+		// A real birth supplies this private, location-checked writer binding.
+		// This fixture focuses on the signed 038 journal and baseline CAS.
+		d.ManagedBirth = true
+		writer.validateBinding = func() error { return nil }
+		if err = c.writeTransaction(ctx, "hold before synthetic baseline", func(tx *sql.Tx) error {
+			_, e := tx.Exec(`UPDATE teams_protection_baseline SET state='held' WHERE id=1`)
+			return e
+		}); err != nil {
+			t.Fatal(err)
+		}
+		client, e := teams.NewDeviceClient(server.URL, installation, key, true)
+		if e != nil {
+			t.Fatal(e)
+		}
+		for turn := 0; turn < 8; turn++ {
+			e = c.teamsProduceRetainedBaseline(ctx, cfg, client, d, credential)
+			if e == nil {
+				break
+			}
+		}
+		if e != nil {
+			t.Fatalf("signed baseline: %v", e)
+		}
+		var state, run string
+		if e = c.DB.QueryRow(`SELECT state,proposal_sha256 FROM teams_protection_baseline WHERE id=1`).Scan(&state, &run); e != nil || state != "current" || run == "" {
+			t.Fatalf("baseline not checkpointed: %s %v", state, e)
+		}
+		if n := countRows(t, c, `SELECT count(*) FROM teams_origin_runs WHERE token='baseline' AND state='completed' AND start_receipt_json IS NOT NULL`); n != 1 {
+			t.Fatalf("signed run not retained: %d", n)
+		}
+		if starts != 2 || signedOrigins != 0 {
+			t.Fatalf("unexpected baseline effects: %d %d", starts, signedOrigins)
+		}
+		if mode == "nonprivate-stale" {
+			for turn := 0; turn < 12 && originAttempts == 0; turn++ {
+				_ = c.teamsRunIndependentSourcePilot(ctx, cfg, client, d, credential, teams.CapabilityManifest{}, true)
+			}
+			if originAttempts != 1 || signedOrigins != 0 {
+				t.Fatalf("expected uncertain first attempt: %d %d", originAttempts, signedOrigins)
+			}
+			invalidated = true
+			for turn := 0; turn < 3; turn++ {
+				_ = c.teamsRunIndependentSourcePilot(ctx, cfg, client, d, credential, teams.CapabilityManifest{}, true)
+			}
+			if originAttempts != 1 || signedOrigins != 0 {
+				t.Fatal("changed evidence replayed uncertain non-private origin")
+			}
+			return
+		}
+		// Publish every bounded synthetic origin through the existing signed
+		// worker, then rebuild from the retained receipts and server floor.
+		for turn := 0; turn < 80 && signedOrigins < len(snapshot.Items); turn++ {
+			e = c.teamsRunIndependentSourcePilot(ctx, cfg, client, d, credential, teams.CapabilityManifest{}, true)
+			// The synthetic server deliberately loses the first accepted PUT;
+			// the worker must replay its retained exact bytes on the next turn.
+			if e != nil && turn > 0 && !errors.Is(e, errTeamsPilotMore) && !errors.Is(e, errTeamsPilotRetry) && !errors.Is(e, errTeamsPilotPending) {
+				t.Fatalf("signed origin %d: %v", turn, e)
+			}
+		}
+		if signedOrigins != len(snapshot.Items) {
+			t.Fatalf("origin count %d", signedOrigins)
+		}
+		public, private := 0, 0
+		for _, v := range accepted {
+			switch v.Protection {
+			case "non_private":
+				public++
+			case "explicit_private":
+				private++
+			}
+		}
+		if public != 2 || private != len(snapshot.Items)-2 {
+			t.Fatalf("wrong signed protections: %d %d", public, private)
+		}
+		for turn := 0; turn < 12; turn++ {
+			if e = c.teamsRunIndependentSourcePilot(ctx, cfg, client, d, credential, teams.CapabilityManifest{}, true); e == nil {
+				break
+			}
+		}
+		if e != nil {
+			t.Fatalf("finish safety recheck: %v", e)
+		}
+		finishedStarts := starts
+		for turn := 0; turn < 4; turn++ {
+			if e = c.teamsRunIndependentSourcePilot(ctx, cfg, client, d, credential, teams.CapabilityManifest{}, true); e != nil {
+				t.Fatal(e)
+			}
+		}
+		if starts != finishedStarts {
+			t.Fatal("completed safety proof created extra scans")
+		}
+		if e = c.writeTransaction(ctx, "synthetic baseline invalidation", func(tx *sql.Tx) error {
+			_, err := tx.Exec(`UPDATE teams_protection_baseline SET state='held' WHERE id=1`)
+			return err
+		}); e != nil {
+			t.Fatal(e)
+		}
+		for turn := 0; turn < 12; turn++ {
+			e = c.teamsProduceRetainedBaseline(ctx, cfg, client, d, credential)
+			if e == nil {
+				break
+			}
+		}
+		if e != nil {
+			var pending, acceptedCount, active, completed int
+			_ = c.DB.QueryRow(`SELECT count(*) FILTER(WHERE state<>'accepted'),count(*) FILTER(WHERE state='accepted') FROM teams_origin_outbox`).Scan(&pending, &acceptedCount)
+			_ = c.DB.QueryRow(`SELECT count(*) FILTER(WHERE state='ready'),count(*) FILTER(WHERE state='completed') FROM teams_origin_runs`).Scan(&active, &completed)
+			t.Fatalf("baseline with retained origins: %v (outbox pending=%d accepted=%d runs ready=%d completed=%d)", e, pending, acceptedCount, active, completed)
+		}
+		if n := countRows(t, c, `SELECT count(*) FROM teams_origin_runs WHERE token='baseline' AND state='completed'`); n != 1 {
+			t.Fatalf("superseded baseline scans retained: %d", n)
+		}
+		if e = c.teamsPilotCheckpointCurrent(ctx, d); e != nil {
+			t.Fatal(e)
+		}
+		// An explicit stale-start disposition without a receipt or pages has
+		// no authenticated floor and may be retired by a later complete scan.
+		if e = c.writeTransaction(ctx, "synthetic-stale-prefix", func(tx *sql.Tx) error {
+			var key string
+			if x := tx.QueryRow(`SELECT proposal_sha256 FROM teams_protection_baseline WHERE id=1`).Scan(&key); x != nil {
+				return x
+			}
+			current, x := teamsRecoveryScanByRunIn(ctx, tx, key)
+			if x != nil {
+				return x
+			}
+			_, x = tx.Exec(`INSERT INTO teams_origin_runs(run_key,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,token,start_json,start_receipt_json,expires_at,state) SELECT 'stale-empty',origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,token,start_json,NULL,expires_at,'completed' FROM teams_origin_runs WHERE run_key=?`, key)
+			if x != nil {
+				return x
+			}
+			if x = teamsPruneSupersededBaselineRuns(ctx, tx, d, credential, key, "baseline", current, false); x != nil {
+				return x
+			}
+			var n int
+			if x = tx.QueryRow(`SELECT count(*) FROM teams_origin_runs WHERE run_key='stale-empty'`).Scan(&n); x != nil {
+				return x
+			}
+			if n != 0 {
+				return errTeamsProtectionHeld
+			}
+			return nil
+		}); e != nil {
+			t.Fatalf("safe stale-start compaction: %v", e)
+		}
+		// A higher floor retained by a safety scan must fence a later baseline
+		// or batch even when the original baseline had a lower floor.
+		if e = c.writeTransaction(ctx, "synthetic-safety-floor", func(tx *sql.Tx) error {
+			result, x := tx.Exec(`UPDATE teams_origin_run_pages SET receipt_json=json_set(receipt_json,'$.unaccepted_floor',?) WHERE run_key=(SELECT run_key FROM teams_origin_runs WHERE token='batch-safety' AND state='completed' ORDER BY rowid DESC LIMIT 1)`, time.Now().Unix()+120)
+			if x != nil {
+				return x
+			}
+			n, x := result.RowsAffected()
+			if x != nil {
+				return x
+			}
+			if n < 1 {
+				return errTeamsProtectionHeld
+			}
+			return nil
+		}); e != nil {
+			t.Fatal(e)
+		}
+		tx, e := c.reader().BeginTx(ctx, nil)
+		if e != nil {
+			t.Fatal(e)
+		}
+		e = teamsRequireRetainedRecoveryFloorIn(ctx, tx, d, credential, &teamsRecoveryOriginScan{last: sourcewire.RecoveryPageReceipt{UnacceptedFloor: time.Now().Unix() - 1}})
+		_ = tx.Rollback()
+		if !errors.Is(e, errTeamsProtectionHeld) {
+			t.Fatalf("higher safety floor lost: %v", e)
+		}
+		return
+	}
 	store.rejectCurrent = true
 	if _, err = service.checkTeamsWork(ctx); err != nil {
 		t.Fatal(err)
@@ -853,6 +1072,15 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 	}
 	if _, err = service.checkTeamsWork(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if mode == "nonprivate-stale" {
+		if originAttempts != 1 || signedOrigins != 0 {
+			t.Fatalf("stale non-private replayed: attempts=%d accepted=%d", originAttempts, signedOrigins)
+		}
+		if n := countRows(t, c, `SELECT count(*) FROM teams_origin_outbox WHERE state='prepared' AND receipt_json IS NULL`); n != 1 {
+			t.Fatal("uncertain receipt not retained")
+		}
+		return
 	}
 	if mode == "stale" || mode == "expired" || mode == "lookup" {
 		want := "unknown_stale_protection_revision"

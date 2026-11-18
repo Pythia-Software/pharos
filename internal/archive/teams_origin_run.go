@@ -88,6 +88,70 @@ func (c *Catalog) teamsRecoveryPageForScope(ctx context.Context, cfg Config, cli
 		} else if !errors.Is(e, sql.ErrNoRows) {
 			return e
 		}
+		if errors.Is(e, sql.ErrNoRows) && token == "batch" && workID == "" && scope.snapshotID == "" {
+			// The baseline is already a contributor to this live server run.
+			// Revalidate its exact signed start and read fresh pages rather
+			// than inventing a conflicting start ID in the same generation.
+			var baselineKey string
+			e = tx.QueryRowContext(ctx, `SELECT r.run_key,r.start_json,r.start_receipt_json,r.expires_at FROM teams_origin_runs r JOIN teams_protection_baseline b ON b.id=1 AND b.state='current' AND b.proposal_sha256=r.run_key WHERE r.origin=? AND r.org_id=? AND r.person_id=? AND r.installation_id=? AND r.library_id=? AND r.instance_id=? AND r.token='baseline' AND r.state='completed' AND r.inventory_sha256=? AND r.settings_revision=? AND r.source_revision=? AND r.privacy_revision=? AND r.cache_generation=? AND r.expires_at>?`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, scope.inventoryHash, scope.settingsRevision, scope.sourceRevision, scope.privacyRevision, scope.generation, time.Now().UTC().Unix()).Scan(&baselineKey, &row.start, &row.startReceipt, &row.expires)
+			if e == nil {
+				var count int
+				if x := tx.QueryRowContext(ctx, `SELECT count(*) FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=?`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance).Scan(&count); x != nil {
+					return x
+				}
+				if count >= teamsPilotMaxRetainedRuns {
+					return errTeamsPilotPending
+				}
+				nonce, x := teamsCheckpointRandom()
+				if x != nil {
+					return x
+				}
+				row.key = teamsPayloadHash([]byte("baseline-batch-alias:" + baselineKey + ":" + nonce))
+				row.state = "prepared"
+				row.startReceipt = nil
+				_, x = tx.ExecContext(ctx, `INSERT INTO teams_origin_runs(run_key,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,token,start_json,expires_at,state) SELECT ?,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,'batch',start_json,expires_at,'prepared' FROM teams_origin_runs WHERE run_key=? AND token='baseline' AND state='completed'`, row.key, baselineKey)
+				return x
+			}
+			if !errors.Is(e, sql.ErrNoRows) {
+				return e
+			}
+		}
+		if errors.Is(e, sql.ErrNoRows) && token == "baseline" && workID == "" && scope.snapshotID == "" {
+			// Reuse the last fully accepted safety view when local evidence
+			// changed but the remote generation has not. A new contributor
+			// start in that same live generation would conflict.
+			var priorKey string
+			e = tx.QueryRowContext(ctx, `SELECT run_key,start_json,start_receipt_json,expires_at FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=? AND token='batch-safety' AND state='completed' AND expires_at>? ORDER BY rowid DESC LIMIT 1`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, time.Now().UTC().Unix()).Scan(&priorKey, &row.start, &row.startReceipt, &row.expires)
+			if e == nil {
+				priorScan, x := teamsRecoveryScanByRunIn(ctx, tx, priorKey)
+				if x != nil || priorScan.held || teamsRequireRetainedRecoveryFloorIn(ctx, tx, d, credential, priorScan) != nil || teamsBaselineReconcileHistoryMode(ctx, tx, d, credential, snapshot, priorScan, true) != nil {
+					e = sql.ErrNoRows
+				}
+			}
+			if e == nil {
+				nonce, x := teamsCheckpointRandom()
+				if x != nil {
+					return x
+				}
+				var count int
+				if x = tx.QueryRowContext(ctx, `SELECT count(*) FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=?`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance).Scan(&count); x != nil {
+					return x
+				}
+				if count >= teamsPilotMaxRetainedRuns {
+					return errTeamsPilotPending
+				}
+				row.key = teamsPayloadHash([]byte("safety-baseline-alias:" + priorKey + ":" + nonce))
+				row.state = "prepared"
+				row.startReceipt = nil
+				// Re-submit the exact prior start and read fresh pages. The
+				// server may have advanced since the saved safety view.
+				_, x = tx.ExecContext(ctx, `INSERT INTO teams_origin_runs(run_key,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,token,start_json,expires_at,state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'baseline',?,?,'prepared')`, row.key, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, workID, scope.snapshotID, scope.inventoryHash, scope.settingsRevision, scope.sourceRevision, scope.privacyRevision, scope.generation, row.start, row.expires)
+				return x
+			}
+			if !errors.Is(e, sql.ErrNoRows) {
+				return e
+			}
+		}
 		var otherActive bool
 		if e = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=? AND state IN ('prepared','started','ready'))`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance).Scan(&otherActive); e != nil {
 			return e
@@ -149,6 +213,12 @@ func (c *Catalog) teamsRecoveryPageForScope(ctx context.Context, cfg Config, cli
 		})
 	}
 	var start sourcewire.RecoveryStartReceipt
+	retireStale := func() error {
+		return c.writeTransaction(ctx, "teams-origin-run-stale", func(tx *sql.Tx) error {
+			_, e := tx.ExecContext(ctx, `UPDATE teams_origin_runs SET state='completed' WHERE run_key=? AND state IN ('prepared','started','ready')`, row.key)
+			return e
+		})
+	}
 	if len(row.startReceipt) == 0 {
 		if err = recheck(); err != nil {
 			return nil, err
@@ -168,6 +238,12 @@ func (c *Catalog) teamsRecoveryPageForScope(ctx context.Context, cfg Config, cli
 				return nil, errTeamsPilotPending
 			}
 			return nil, errTeamsPilotRetry
+		}
+		if start.Status == "restart_required" {
+			if e := retireStale(); e != nil {
+				return nil, e
+			}
+			return nil, errTeamsPilotMore
 		}
 		if start.Status == "busy" || start.Status == "cleanup_pending" || start.Status == "restart_exhausted" || start.Status == "capacity_blocked" {
 			return nil, errTeamsPilotPending
@@ -300,6 +376,21 @@ func (c *Catalog) teamsRecoveryPageForScope(ctx context.Context, cfg Config, cli
 			return nil, errTeamsPilotPending
 		}
 		if scan.held {
+			if token == "batch-safety" {
+				// Retain this signed held scan, but permit a later independent
+				// status scan. No origin or receipt is changed here.
+				if e = c.writeTransaction(ctx, "teams-origin-safety-held", func(tx *sql.Tx) error {
+					if x := check(ctx, tx); x != nil {
+						return x
+					}
+					if _, x := tx.ExecContext(ctx, `UPDATE teams_origin_runs SET state='completed' WHERE run_key=? AND token='batch-safety' AND state='ready'`, row.key); x != nil {
+						return x
+					}
+					return teamsPruneSupersededBaselineRuns(ctx, tx, d, credential, row.key, "batch-safety", scan, true)
+				}); e != nil {
+					return nil, e
+				}
+			}
 			return nil, errTeamsPilotPending
 		}
 		return scan, nil
@@ -315,6 +406,13 @@ func (c *Catalog) teamsRecoveryPageForScope(ctx context.Context, cfg Config, cli
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
+		}
+		var response *teams.HTTPError
+		if errors.As(err, &response) && response.Status == 409 && response.Code == "source_recovery_restart_required" {
+			if e := retireStale(); e != nil {
+				return nil, e
+			}
+			return nil, errTeamsPilotMore
 		}
 		if errors.Is(err, teams.ErrInvalidRecoveryPage) {
 			if e := hold(); e != nil {

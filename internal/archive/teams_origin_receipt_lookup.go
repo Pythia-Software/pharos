@@ -164,7 +164,8 @@ func (s *Server) reconcileTeamsSourceReceipt(ctx context.Context) error {
 			if n != 1 {
 				return errTeamsConsentStale
 			}
-			return nil
+			_, e = tx.ExecContext(ctx, `UPDATE teams_origin_runs SET state='completed' WHERE state='ready' AND token='baseline' AND origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=? AND json_extract(start_receipt_json,'$.run_id')=(SELECT run_id FROM teams_origin_outbox WHERE observation_id=?)`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, id)
+			return e
 		})
 	})
 	if err == nil {

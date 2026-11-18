@@ -32,7 +32,7 @@ func teamsRetireRedundantOriginRunsIn(ctx context.Context, tx *sql.Tx, d Library
 	}
 	var list []candidate
 	query := func(after int64, max int) error {
-		rows, err := tx.QueryContext(ctx, `SELECT rowid,run_key,start_receipt_json FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=? AND state='completed' AND rowid>? ORDER BY rowid LIMIT ?`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, after, max)
+		rows, err := tx.QueryContext(ctx, `SELECT rowid,run_key,start_receipt_json FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=? AND token<>'baseline' AND state='completed' AND rowid>? ORDER BY rowid LIMIT ?`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, after, max)
 		if err != nil {
 			return err
 		}
@@ -136,6 +136,13 @@ func teamsRetireRedundantOriginRunsIn(ctx context.Context, tx *sql.Tx, d Library
 			return retired, err
 		}
 		if !ownValid || own == 0 || len(matched) != len(scan.byToken) {
+			continue
+		}
+		otherFloor, err := teamsRetainedRecoveryFloorIn(ctx, tx, d, credential, v.key)
+		if err != nil {
+			return retired, err
+		}
+		if scan.last.UnacceptedFloor > otherFloor {
 			continue
 		}
 		result, err := tx.ExecContext(ctx, `DELETE FROM teams_origin_runs WHERE run_key=? AND state='completed'`, v.key)

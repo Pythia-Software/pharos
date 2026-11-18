@@ -138,6 +138,19 @@ func teamsSweepOriginPartialsIn(ctx context.Context, tx *sql.Tx, d LibraryDescri
 			}
 		}
 
+		if safe && len(v.start) > 0 {
+			otherFloor, e := teamsRetainedRecoveryFloorIn(ctx, tx, d, credential, v.key)
+			if e != nil {
+				return false, e
+			}
+			ownFloor := start.UnacceptedFloor
+			for _, page := range receipts {
+				ownFloor = max(ownFloor, page.UnacceptedFloor)
+			}
+			if ownFloor > otherFloor {
+				safe = false
+			}
+		}
 		var result sql.Result
 		if safe {
 			result, err = tx.ExecContext(ctx, `DELETE FROM teams_origin_runs WHERE run_key=? AND state IN ('prepared','started','ready')`, v.key)
