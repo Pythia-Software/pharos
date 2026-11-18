@@ -1,18 +1,18 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ViewDisclosure } from "./view-disclosure";
 import "./teams-settings.css";
 
 type EnrollmentStatus = { state: string; available: boolean; library: string; fingerprint: string; problem: string; optedOut?: boolean };
 type SourceAccount = { bindingId: string; provider: string; sourceName: string; accountLabel: string; host: string; root: string; identifiable: number; ambiguous: number; mode: string; exposed: boolean; unindexed?: boolean };
 type SourceStatus = { sourceRevision: number; settingsRevision: number; proofRequested: boolean; sources: SourceAccount[] };
-type WorkItem = { workId: string; question: string; prompt: string; retention: unknown; requester: string; readers: string[] | null; state: string; payloadHash: string; configHash: string; payload: unknown; publicationV2?: {schema_version:number; descriptors:{id:string;readers:{kind:string;id:string}[];outputs:{fields:{id:string;unit:string}[];coverage:string[]};destination:{kind:string};disclosures:string[]}[]} | null; schedule?: {cadence:string; timezone:string; catch_up:string; response_window_seconds:number} | null; period?: {key:string; start_at?:string; end_at?:string} | null; exports?: {id:string;kind:string;destination:string;fields:string[]}[] | null; publications?: {id:string;kind:string;readers:{kind:string;id:string}[];fields:string[];include_completeness?:boolean}[] | null };
+type WorkItem = { workId: string; question: string; prompt: string; retention: unknown; requester: string; requesterId: string; requesterFallback?: string; readerLabels?: {entries:{person_id:string;status:string;display_name?:string}[]}; labelsReady: boolean; labelsToken?: string; labelsExpireAt?: string; generation: number; readers: string[] | null; state: string; payloadHash: string; configHash: string; payload: unknown; publicationV2?: {schema_version:number; descriptors:{id:string;readers:{kind:string;id:string}[];outputs:{fields:{id:string;unit:string}[];coverage:string[]};destination:{kind:string};disclosures:string[]}[]} | null; schedule?: {cadence:string; timezone:string; catch_up:string; response_window_seconds:number} | null; period?: {key:string; start_at?:string; end_at?:string} | null; exports?: {id:string;kind:string;destination:string;fields:string[]}[] | null; publications?: {id:string;kind:string;readers:{kind:string;id:string}[];fields:string[];include_completeness?:boolean}[] | null };
 type WorkerStatus = { enabled: boolean; optOut: boolean; settingsRevision: number; acknowledgedPolicy: number; nextCheck: string; checking: boolean; problem: string; items: WorkItem[]; modelApproved: boolean };
 type ModelInspection = { provider: string; model: string; effort: string; account: string; sessionDigest: string; authDigest: string; settingsRevision: number };
 type SentItem = {workId:string; question:string; payload:unknown; sentAt:string};
 type OrgPolicy = { value: boolean; policyVersion: number; settingsRevision: number };
 
-async function workerRequest<T>(path = "", body?: object): Promise<T> {
-  const response = await fetch(`/api/teams/worker${path}`, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : undefined);
+async function workerRequest<T>(path = "", body?: object, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(`/api/teams/worker${path}`, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal } : { signal });
   const value = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(value.error || "Teams is unavailable.");
   return value as T;
@@ -37,6 +37,44 @@ function LocalProtectionPolicy({ onChange }: { onChange: () => Promise<void> }) 
     {policy ? <><p>{policy.disclosure}</p><p>{policy.continuity === "held" ? "Source protection needs reconciliation. You can continue using this library." : policy.continuity === "reconciling" ? "Source protection is being reconciled." : "Source protection is not ready yet."}</p>{policy.acknowledged ? <p>Protection policy acknowledged for this library.</p> : <button type="button" disabled={busy} onClick={() => void acknowledge()}>Acknowledge protection policy</button>}</> : null}
     {error ? <p role="alert">{error}</p> : null}
   </section>;
+}
+
+function retentionText(raw: unknown): string {
+  const policy = raw as {mode?: string; duration_days?: number | null} | null;
+  if (policy?.mode === "organization_controlled") return typeof policy.duration_days === "number" ? `Your organization currently retains this for ${policy.duration_days} days and controls the retention policy.` : "Your organization controls retention; there is currently no scheduled expiry.";
+  if (typeof policy?.duration_days === "number") return `Retention is ${policy.duration_days} days.`;
+  return "No scheduled expiry is specified for this request.";
+}
+
+function ReaderAudiences({ item, refresh }: { item: WorkItem; refresh: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const current = useRef<AbortController | null>(null);
+  const load = useCallback(async (signal?: AbortSignal) => {
+    current.current?.abort();
+    const controller = new AbortController(); current.current = controller;
+    const abort = () => controller.abort();
+    if (signal?.aborted) controller.abort(); else signal?.addEventListener("abort", abort, {once:true});
+    setBusy(true); setError("");
+    try { await workerRequest("/reader-labels", {workId:item.workId, configHash:item.configHash}, controller.signal); if (!controller.signal.aborted) await refresh(); }
+    catch { if (!controller.signal.aborted) { setError("Names could not be loaded. Refresh to try again."); await refresh(); } }
+    finally { signal?.removeEventListener("abort", abort); if (current.current === controller) { setBusy(false); current.current = null; } }
+  }, [item.workId, item.configHash, item.state, item.generation, refresh]);
+  useEffect(() => () => current.current?.abort(), []);
+  useEffect(() => { const controller = new AbortController(); void load(controller.signal); return () => controller.abort(); }, [load]);
+  useEffect(() => {
+    if (!item.labelsExpireAt) return;
+    const timer = window.setTimeout(() => { void load(); }, Math.max(0, Date.parse(item.labelsExpireAt!) - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [item.labelsExpireAt, load]);
+  const entries = item.readerLabels?.entries || [];
+  const row = (id: string, reportOnly = false) => {
+    const label = entries.find(x => x.person_id === id);
+    const fallback = id === item.requesterId && label?.status !== "inactive" ? item.requesterFallback : "";
+    const name = label?.display_name || fallback;
+    return <li key={id}><bdi>{name || "Name unavailable"}</bdi>{fallback && !label?.display_name ? " (request name)" : ""}{label?.status === "inactive" ? " — Inactive account; access may resume if reactivated" : ""}{reportOnly ? " — Report only" : ""} <code>{id}</code></li>;
+  };
+  return <section aria-label="Readers"><h5>Response collection</h5><ul>{item.readers?.map(id => row(id))}</ul><h5>Web report</h5><ul>{item.publicationV2?.descriptors.flatMap(x => x.readers.map(r => row(r.id, !item.readers?.includes(r.id))))}</ul>{!item.labelsReady ? <p role="status">Names are unavailable for one or more readers. Refresh names before approving, or decline this request.</p> : null}{error ? <p role="alert">{error}</p> : null}<button type="button" disabled={busy} onClick={() => void load()}>{busy ? "Loading names…" : "Refresh names"}</button></section>;
 }
 
 function TeamsWork() {
@@ -83,20 +121,22 @@ function TeamsWork() {
     </section> : null}
     {status?.problem ? <p role="status">{status.problem}</p> : null}
     {status?.items.map(item => <div className="teams-source" key={item.workId}>
-      <h4>{item.question}</h4><p>Requested by {item.requester || "your organization"}. Readers: {item.readers?.join(", ") || "none listed"}.</p>
+      <h4>{item.question}</h4><p>Requested by {item.requester || "your organization"}.{!item.publicationV2 ? ` Readers: ${item.readers?.map(id => id === item.requesterId && item.requesterFallback ? `${item.requesterFallback} (request name; ${id})` : id).join(", ") || "none listed"}.` : ""}</p>
+      {status.enabled && item.publicationV2 && ["awaiting_source_consent", "awaiting_review"].includes(item.state) ? <ReaderAudiences item={item} refresh={refresh} /> : null}
 	  {item.schedule ? <><p>Repeats {item.schedule.cadence} in {item.schedule.timezone}; missed periods: {item.schedule.catch_up}. Response window: {item.schedule.response_window_seconds} seconds.</p><p>Current period: {item.period?.start_at} to {item.period?.end_at}. The token total covers all eligible history.</p></> : null}
-      {item.publicationV2?.descriptors.map(x => <section key={x.id} aria-label="Report history disclosure"><p>Report with history, published on the web for: {x.readers.map(r => r.id).join(", ")}. Field: {x.outputs.fields[0]?.id} ({x.outputs.fields[0]?.unit}) across all eligible captured history. Each manually refreshed snapshot includes a complete or incomplete indicator.</p><p>Each refresh adds a retained snapshot; differences between snapshots can reveal individual contributions.</p><p>Withdrawing later does not remove snapshots already published; retention and explicit invalidation still apply.</p><p>Request digest: <code>{item.configHash}</code>. Every result requires your review before sending.</p></section>)}
+      {item.publicationV2?.descriptors.map(x => <section key={x.id} aria-label="Report history disclosure"><p>Report with history, published on the web. Total captured tokens ({x.outputs.fields[0]?.unit}) across all eligible captured history. Each manually refreshed snapshot includes a complete or incomplete indicator.</p><p>Each refresh adds a retained snapshot; differences between snapshots can reveal individual contributions.</p><p>Withdrawing later does not remove snapshots already published; retention and explicit invalidation still apply.</p><p>Request digest: <code>{item.configHash}</code>. Every result requires your review before sending.</p></section>)}
 	  {item.publications?.map(x => <p key={x.id}>Report readers: {x.readers.map(r => r.id).join(", ")}. Fields: {x.fields.join(", ")}. Completeness indicator: {x.include_completeness ? "included" : "not included"}. Each result requires your review before sending.</p>)}
 	  {item.exports?.map(x => <p key={x.id}>Export to {x.destination}. Fields: {x.fields.join(", ")}. Each result requires your review before sending.</p>)}
 	  {item.prompt ? <><p>Instructions: {item.prompt}</p><p>Retention: {JSON.stringify(item.retention)}.</p><p>Only locally reviewed, nonprivate content is eligible. Processing uses the approved Claude account and model.</p></> : null}
+      {item.publicationV2 ? <p>{retentionText(item.retention)}</p> : null}
       <p>Status: {item.state === "source_safety_waiting" ? "Checking source safety" : item.state.replaceAll("_", " ")}.</p>
       {item.state === "source_safety_waiting" ? <p>Pharos will check again shortly while source safety processing finishes.</p> : null}
 	  {item.prompt && item.state === "unavailable" ? <p>This request needs a completely indexed supported source and at least one reviewed, nonprivate conversation. Review a conversation in the library and check again after indexing.</p> : null}
 	  {item.prompt && item.state === "started" ? <p>A previous attempt may have started. It will not automatically run the model again; you can decline this request.</p> : null}
 	  {item.state === "delivery_unconfirmed" ? <p>The send is being reconciled. Pharos will check for a receipt before retrying.</p> : null}
-      {item.state === "awaiting_source_consent" ? <><p>{item.prompt ? "Allow source membership checks and send eligible reviewed content to your approved Claude account to prepare a draft. The answer will still require your review before it is sent." : `Allow this request${item.schedule ? " and its future scheduled periods" : ""} to check opaque source membership. This does not approve sending an answer.`}</p><button type="button" disabled={busy || !status} onClick={() => void act("/allow-source", { workId: item.workId, settingsRevision: status.settingsRevision, ...(item.publicationV2 ? {configHash: item.configHash} : {}) })}>{item.prompt ? "Allow source checks and draft" : "Allow source checks"}</button></> : null}
+      {item.state === "awaiting_source_consent" ? <><p>{item.prompt ? "Allow source membership checks and send eligible reviewed content to your approved Claude account to prepare a draft. The answer will still require your review before it is sent." : `Allow this request${item.schedule ? " and its future scheduled periods" : ""} to check opaque source membership. This does not approve sending an answer.`}</p><button type="button" disabled={busy || !status || (!!item.publicationV2 && !item.labelsReady)} onClick={() => void act("/allow-source", { workId: item.workId, settingsRevision: status.settingsRevision, ...(item.publicationV2 ? {configHash: item.configHash, labelsToken: item.labelsToken} : {}) })}>{item.prompt ? "Allow source checks and draft" : "Allow source checks"}</button></> : null}
       {item.payload ? <pre>{JSON.stringify(item.payload, null, 2)}</pre> : null}
-      {item.state === "awaiting_review" ? <button type="button" disabled={busy} onClick={() => void act("/approve-result", { workId: item.workId, payloadHash: item.payloadHash, ...(item.publicationV2 ? {configHash: item.configHash} : {}) })}>Approve and send this result</button> : null}{" "}
+      {item.state === "awaiting_review" ? <button type="button" disabled={busy || (!!item.publicationV2 && !item.labelsReady)} onClick={() => void act("/approve-result", { workId: item.workId, payloadHash: item.payloadHash, ...(item.publicationV2 ? {configHash: item.configHash, labelsToken: item.labelsToken} : {}) })}>Approve and send this result</button> : null}{" "}
       {["awaiting_source_consent", "awaiting_model_permission", "awaiting_review", "decline_pending", "started", "source_safety_waiting"].includes(item.state) ? <button type="button" disabled={busy} onClick={() => void act("/decline", { workId: item.workId })}>{item.state === "decline_pending" ? "Retry decline" : "Decline request"}</button> : null}
     </div>)}
     <section aria-label="Sent responses"><h4>Sent responses</h4><button type="button" disabled={busy} onClick={() => void loadSent()}>Show recent sends</button>
@@ -155,6 +195,15 @@ async function enrollmentRequest(method = "GET", cancel = false): Promise<Enroll
 }
 
 export function TeamsSettings() {
+  const root = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const update = () => setVisible(!document.hidden && !!root.current?.getClientRects().length);
+    const observer = new MutationObserver(update);
+    observer.observe(document.body, {attributes:true, subtree:true, attributeFilter:["hidden", "class", "style", "aria-hidden"]});
+    document.addEventListener("visibilitychange", update); update();
+    return () => { observer.disconnect(); document.removeEventListener("visibilitychange", update); };
+  }, []);
   const [status, setStatus] = useState<EnrollmentStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -172,7 +221,7 @@ export function TeamsSettings() {
     finally { setBusy(false); }
   };
   const waiting = status?.state === "waiting" || status?.state === "starting";
-  return <div className="layout-preference-card teams-settings">
+  return <div ref={root} className="layout-preference-card teams-settings">
     <h3>Connect this library</h3>
     <p>Enrolling {status?.library ? <strong>{status.library}</strong> : "a library"} makes its retained history part of your organization’s data.</p>
     <p>Your organization’s visible defaults can share attributed statistics. You can opt out. Conversation content and answers derived from it require your permission; private conversations are excluded from Teams text analysis and AI answers while eligible statistics can still include them.</p>
@@ -183,6 +232,6 @@ export function TeamsSettings() {
     {error ? <p role="alert">{error}</p> : null}
     {waiting ? <button type="button" disabled={busy} onClick={() => void act(true)}>Cancel connection</button>
       : <button type="button" disabled={busy || !status?.available || status.state === "connected_paused" || status.state === "reconcile"} onClick={() => void act()}>Connect Teams</button>}
-    {status?.state === "connected_paused" ? <><TeamsWork /><SourceAccounts /></> : null}
+    {visible && status?.state === "connected_paused" ? <><TeamsWork /><SourceAccounts /></> : null}
   </div>;
 }

@@ -52,6 +52,7 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			return e
 		}
+		scope := teamsCredentialScope(d, credential)
 		switch {
 		case r.URL.Path == "/api/teams/worker" && r.Method == http.MethodGet:
 			s.teamsWorker.mu.Lock()
@@ -60,26 +61,38 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 				items = append(items, item)
 			}
 			next, checking, problem := s.teamsWorker.next, s.teamsWorker.checking, s.teamsWorker.problem
+			generation, workScope := s.teamsWorker.generation, s.teamsWorker.scope
 			s.teamsWorker.mu.Unlock()
 			type row struct {
-				WorkID        string                   `json:"workId"`
-				Question      string                   `json:"question"`
-				Requester     string                   `json:"requester"`
-				State         string                   `json:"state"`
-				PayloadHash   string                   `json:"payloadHash"`
-				ConfigHash    string                   `json:"configHash,omitempty"`
-				PublicationV2 *teamsReportSeries       `json:"publicationV2,omitempty"`
-				Readers       []string                 `json:"readers"`
-				Payload       json.RawMessage          `json:"payload"`
-				Prompt        string                   `json:"prompt"`
-				Retention     json.RawMessage          `json:"retention"`
-				Schedule      json.RawMessage          `json:"schedule"`
-				Period        json.RawMessage          `json:"period"`
-				Exports       []teamsFeedExport        `json:"exports"`
-				Publications  []teamsReportPublication `json:"publications"`
+				WorkID            string                   `json:"workId"`
+				Question          string                   `json:"question"`
+				Requester         string                   `json:"requester"`
+				State             string                   `json:"state"`
+				PayloadHash       string                   `json:"payloadHash"`
+				ConfigHash        string                   `json:"configHash,omitempty"`
+				PublicationV2     *teamsReportSeries       `json:"publicationV2,omitempty"`
+				Readers           []string                 `json:"readers"`
+				RequesterID       string                   `json:"requesterId"`
+				RequesterFallback string                   `json:"requesterFallback,omitempty"`
+				Labels            *teams.ReaderLabels      `json:"readerLabels,omitempty"`
+				LabelsReady       bool                     `json:"labelsReady"`
+				LabelsToken       string                   `json:"labelsToken,omitempty"`
+				LabelsExpireAt    string                   `json:"labelsExpireAt,omitempty"`
+				Generation        uint64                   `json:"generation"`
+				Payload           json.RawMessage          `json:"payload"`
+				Prompt            string                   `json:"prompt"`
+				Retention         json.RawMessage          `json:"retention"`
+				Schedule          json.RawMessage          `json:"schedule"`
+				Period            json.RawMessage          `json:"period"`
+				Exports           []teamsFeedExport        `json:"exports"`
+				Publications      []teamsReportPublication `json:"publications"`
 			}
 			out := make([]row, 0, len(items))
 			for _, item := range items {
+				if item.LabelsScope != scope || !validReaderLabels(item.Work, item.Labels, item.LabelsAt, false) {
+					item.Labels = nil
+					item.LabelsAt = time.Time{}
+				}
 				var config struct {
 					PublicationV2 *teamsReportSeries `json:"publication_v2"`
 					Question      string             `json:"question"`
@@ -87,6 +100,7 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 					Retention     json.RawMessage    `json:"retention_policy"`
 					Schedule      json.RawMessage    `json:"schedule"`
 					Requester     struct {
+						ID          string `json:"id"`
 						DisplayName string `json:"display_name"`
 					} `json:"requester"`
 					Audiences struct {
@@ -105,6 +119,10 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				_ = json.Unmarshal(item.Work.Config, &config)
+				if config.PublicationV2 != nil && (!settings.Enabled || workScope != scope || (item.State != "awaiting_source_consent" && item.State != "awaiting_review")) {
+					item.Labels = nil
+					item.LabelsAt = time.Time{}
+				}
 				readers := []string{}
 				for _, reader := range config.Audiences.ResponseReaders {
 					readers = append(readers, reader.ID)
@@ -113,7 +131,15 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 				if config.PublicationV2 != nil {
 					configHash = item.Work.ConfigSHA256
 				}
-				out = append(out, row{WorkID: item.Work.ID, Question: config.Question, Prompt: config.Prompt, Retention: config.Retention, Requester: config.Requester.DisplayName, State: item.State, PayloadHash: item.PayloadHash, ConfigHash: configHash, PublicationV2: config.PublicationV2, Readers: readers, Payload: json.RawMessage(item.Payload), Schedule: config.Schedule, Period: item.Work.Period, Exports: config.Audiences.Exports, Publications: config.Audiences.Publications})
+				expires := ""
+				if item.Labels != nil {
+					expires = item.LabelsAt.Add(5 * time.Minute).UTC().Format(time.RFC3339Nano)
+				}
+				fallback := ""
+				if usableTeamsReaderName(config.Requester.DisplayName) {
+					fallback = config.Requester.DisplayName
+				}
+				out = append(out, row{LabelsExpireAt: expires, RequesterFallback: fallback, WorkID: item.Work.ID, Question: config.Question, Prompt: config.Prompt, Retention: config.Retention, Requester: config.Requester.DisplayName, RequesterID: config.Requester.ID, Labels: item.Labels, LabelsReady: labelsForReview(item.Work, item.Labels, item.LabelsAt), LabelsToken: teamsReaderLabelToken(item, scope, generation), Generation: generation, State: item.State, PayloadHash: item.PayloadHash, ConfigHash: configHash, PublicationV2: config.PublicationV2, Readers: readers, Payload: json.RawMessage(item.Payload), Schedule: config.Schedule, Period: item.Work.Period, Exports: config.Audiences.Exports, Publications: config.Audiences.Publications})
 			}
 			var modelApproved bool
 			if e = s.Catalog.reader().QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM teams_model_permission WHERE id=1 AND library_id=? AND instance_id=? AND org_id=? AND installation_id=? AND host_id=? AND settings_revision=?)`, d.ID, d.Instance, credential.OrgID, credential.InstallationID, currentHost().ID, settings.SettingsRevision).Scan(&modelApproved); e != nil {
@@ -269,22 +295,92 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			s.wakeTeams()
 			writeJSON(w, map[string]bool{"revoked": true}, 200)
 			return nil
+
+		case r.URL.Path == "/api/teams/worker/reader-labels" && r.Method == http.MethodPost:
+			var body struct {
+				WorkID     string `json:"workId"`
+				ConfigHash string `json:"configHash"`
+			}
+			if e = teamsLocalAction(w, r, &body, map[string]bool{"workId": true, "configHash": true}); e != nil {
+				return errTeamsConsentStale
+			}
+			s.teamsWorker.mu.Lock()
+			item, ok := s.teamsWorker.items[body.WorkID]
+			if !ok || !settings.Enabled || s.teamsWorker.scope != scope || item.Work.ConfigSHA256 != body.ConfigHash || (item.State != "awaiting_source_consent" && item.State != "awaiting_review") || !validTeamsSeriesReview(item.Work.Config, item.Work.ConfigSHA256, body.ConfigHash) {
+				s.teamsWorker.mu.Unlock()
+				return errTeamsConsentStale
+			}
+			key := body.WorkID + ":" + body.ConfigHash
+			generation := s.teamsWorker.generation
+			if s.teamsWorker.labelFlights == nil {
+				s.teamsWorker.labelFlights = map[string]bool{}
+			}
+			if s.teamsWorker.labelLast == nil {
+				s.teamsWorker.labelLast = map[string]time.Time{}
+			}
+			if s.teamsWorker.labelFlights[key] || time.Since(s.teamsWorker.labelLast[key]) < 2*time.Second {
+				s.teamsWorker.mu.Unlock()
+				return errTeamsConsentStale
+			}
+			s.teamsWorker.labelFlights[key] = true
+			s.teamsWorker.labelLast[key] = time.Now()
+			if ok {
+				item.Labels = nil
+				item.LabelsAt = time.Time{}
+				s.teamsWorker.items[body.WorkID] = item
+			}
+			s.teamsWorker.mu.Unlock()
+			defer func() { s.teamsWorker.mu.Lock(); delete(s.teamsWorker.labelFlights, key); s.teamsWorker.mu.Unlock() }()
+			if !ok || item.Work.ConfigSHA256 != body.ConfigHash || (item.State != "awaiting_source_consent" && item.State != "awaiting_review") {
+				return errTeamsConsentStale
+			}
+			labels, lookupErr := client.ReaderLabels(r.Context(), body.WorkID)
+			if lookupErr != nil {
+				return lookupErr
+			}
+			latest, stateErr := readTeamsSettings(r.Context(), s.Catalog.reader())
+			if stateErr != nil || !latest.Enabled || latest.SettingsRevision != settings.SettingsRevision || latest.LibraryID != d.ID || latest.InstanceID != d.Instance || latest.OrgID != credential.OrgID || latest.InstallationID != credential.InstallationID {
+				return errTeamsConsentStale
+			}
+			now := time.Now()
+			if !validReaderLabels(item.Work, &labels, now, false) {
+				return errTeamsConsentStale
+			}
+			s.teamsWorker.mu.Lock()
+			current, ok := s.teamsWorker.items[body.WorkID]
+			if ok && s.teamsWorker.scope == scope && s.teamsWorker.generation == generation && r.Context().Err() == nil && current.Work.ConfigSHA256 == body.ConfigHash && current.State == item.State {
+				current.Labels = &labels
+				current.LabelsAt = now
+				current.LabelsScope = scope
+				s.teamsWorker.items[body.WorkID] = current
+			} else {
+				ok = false
+			}
+			s.teamsWorker.mu.Unlock()
+			if !ok {
+				return errTeamsConsentStale
+			}
+			writeJSON(w, map[string]bool{"loaded": true}, 200)
+			return nil
 		case r.URL.Path == "/api/teams/worker/allow-source" && r.Method == http.MethodPost:
 			var body struct {
 				WorkID           string `json:"workId"`
 				SettingsRevision *int64 `json:"settingsRevision"`
 				ConfigHash       string `json:"configHash,omitempty"`
+				LabelsToken      string `json:"labelsToken,omitempty"`
 			}
-			if e = teamsLocalAction(w, r, &body, map[string]bool{"workId": true, "settingsRevision": true, "configHash": true}); e != nil || body.SettingsRevision == nil {
+			if e = teamsLocalAction(w, r, &body, map[string]bool{"workId": true, "settingsRevision": true, "configHash": true, "labelsToken": true}); e != nil || body.SettingsRevision == nil {
 				return errTeamsConsentStale
 			}
 			s.teamsWorker.mu.Lock()
 			item, ok := s.teamsWorker.items[body.WorkID]
+			series := ok && teamsHasSeriesConfig(item.Work.Config)
+			tokenOK := ok && settings.Enabled && s.teamsWorker.scope == scope && body.LabelsToken != "" && body.LabelsToken == teamsReaderLabelToken(item, scope, s.teamsWorker.generation)
 			s.teamsWorker.mu.Unlock()
 			if !ok || item.State != "awaiting_source_consent" {
 				return errTeamsConsentStale
 			}
-			if !validTeamsSeriesReview(item.Work.Config, item.Work.ConfigSHA256, body.ConfigHash) {
+			if !validTeamsSeriesReview(item.Work.Config, item.Work.ConfigSHA256, body.ConfigHash) || (series && !tokenOK) {
 				return errTeamsConsentStale
 			}
 			if e = s.Catalog.grantTeamsQuestion(r.Context(), item.Work, d, *body.SettingsRevision); e != nil {
@@ -298,10 +394,24 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 				WorkID      string `json:"workId"`
 				PayloadHash string `json:"payloadHash"`
 				ConfigHash  string `json:"configHash,omitempty"`
+				LabelsToken string `json:"labelsToken,omitempty"`
 			}
-			if e = teamsLocalAction(w, r, &body, map[string]bool{"workId": true, "payloadHash": true, "configHash": true}); e != nil {
+			if e = teamsLocalAction(w, r, &body, map[string]bool{"workId": true, "payloadHash": true, "configHash": true, "labelsToken": true}); e != nil {
 				return errTeamsConsentStale
 			}
+			draft, draftErr := readTeamsV2Draft(r.Context(), s.Catalog.reader(), body.WorkID)
+			if draftErr != nil && !errors.Is(draftErr, sql.ErrNoRows) {
+				return draftErr
+			}
+			s.teamsWorker.mu.Lock()
+			item, ok := s.teamsWorker.items[body.WorkID]
+			series := (ok && teamsHasSeriesConfig(item.Work.Config)) || (draftErr == nil && teamsHasSeriesConfig(draft.Config))
+			tokenOK := ok && item.State == "awaiting_review" && settings.Enabled && s.teamsWorker.scope == scope && body.LabelsToken != "" && body.LabelsToken == teamsReaderLabelToken(item, scope, s.teamsWorker.generation)
+			s.teamsWorker.mu.Unlock()
+			if series && (!ok || draftErr != nil || !bytes.Equal(draft.Config, item.Work.Config) || !validTeamsSeriesReview(item.Work.Config, item.Work.ConfigSHA256, body.ConfigHash) || !tokenOK) {
+				return errTeamsConsentStale
+			}
+
 			if _, contentErr := readTeamsContentRun(r.Context(), s.Catalog.reader(), body.WorkID); contentErr == nil {
 				e = s.Catalog.approveTeamsContent(r.Context(), d, credential, body.WorkID, body.PayloadHash)
 			} else if errors.Is(contentErr, sql.ErrNoRows) {

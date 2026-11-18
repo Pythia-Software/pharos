@@ -291,7 +291,7 @@ func WorkPath(id, operation string) (string, error) {
 		return "", errors.New("invalid work ID")
 	}
 	switch operation {
-	case "status", "privacy", "inputs", "sources", "result", "receipt":
+	case "status", "privacy", "inputs", "sources", "result", "receipt", "reader-labels":
 		return fmt.Sprintf("/v1/device/work/%s/%s", id, operation), nil
 	default:
 		return "", errors.New("invalid work operation")
@@ -343,4 +343,15 @@ func SubmissionBytes(s Submission) ([]byte, error) {
 		return nil, errors.New("invalid submission envelope")
 	}
 	return body, nil
+}
+
+type ReaderLabel struct {
+	PersonID    string `json:"person_id"`
+	Status      string `json:"status"`
+	DisplayName string `json:"display_name,omitempty"`
+}
+type ReaderLabels struct {
+	Version      int           `json:"version"`
+	ConfigSHA256 string        `json:"config_sha256"`
+	Entries      []ReaderLabel `json:"entries"`
 }

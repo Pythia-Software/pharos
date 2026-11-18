@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -19,7 +20,9 @@ import (
 
 // This is only for the dedicated unsigned-control, literal-loopback harness.
 // Its catalog, source data, installation key and identities are all synthetic.
-func TestTeamsReportSyntheticPostgres(t *testing.T) {
+func TestTeamsReportSyntheticPostgres(t *testing.T)       { testTeamsReportSyntheticPostgres(t, false) }
+func TestTeamsManualSeriesSyntheticPostgres(t *testing.T) { testTeamsReportSyntheticPostgres(t, true) }
+func testTeamsReportSyntheticPostgres(t *testing.T, series bool) {
 	origin := os.Getenv("PHAROS_TEAMS_SYNTHETIC_REPORT_ORIGIN")
 	if origin == "" {
 		t.Skip("no synthetic integration harness")
@@ -160,6 +163,20 @@ func TestTeamsReportSyntheticPostgres(t *testing.T) {
 	}
 	control("/_test/send-report", map[string]string{"library_id": library}, &issued)
 	manifest := teams.CapabilityManifest{SchemaVersion: 1, AppVersion: "0.10.0", Capabilities: []string{"deterministic_query_v1", "report_deterministic_v1", "source_snapshot_v2"}}
+	if series {
+		manifest.V2OnlyFeatures = []string{"reader_labels_v1", "report_deterministic_v2"}
+		old := manifest
+		old.V2OnlyFeatures = []string{"report_deterministic_v2"}
+		legacy, e := client.Poll(ctx, teams.PollRequest{AppVersion: old.AppVersion, LibraryIDs: []string{library}, CapabilityManifest: &old})
+		if e != nil {
+			t.Fatal(e)
+		}
+		for _, w := range legacy.Work {
+			if w.VersionID == issued.VersionID {
+				t.Fatal("old manifest received series work")
+			}
+		}
+	}
 	poll, err := client.Poll(ctx, teams.PollRequest{AppVersion: manifest.AppVersion, LibraryIDs: []string{library}, CapabilityManifest: &manifest})
 	if err != nil {
 		t.Fatal(err)
@@ -173,14 +190,32 @@ func TestTeamsReportSyntheticPostgres(t *testing.T) {
 	if work == nil {
 		t.Fatalf("synthetic work missing: status %q", poll.CapabilityStatus)
 	}
-	var consent struct {
-		Audiences struct {
-			Publications []teamsReportPublication `json:"publications"`
-		} `json:"audiences"`
+	if series {
+		if !validTeamsSeriesReview(work.Config, work.ConfigSHA256, work.ConfigSHA256) {
+			t.Fatal("invalid signed series config")
+		}
+		old := manifest
+		old.V2OnlyFeatures = []string{"report_deterministic_v2"}
+		if _, e := client.Poll(ctx, teams.PollRequest{AppVersion: old.AppVersion, LibraryIDs: []string{library}, CapabilityManifest: &old}); e != nil {
+			t.Fatal(e)
+		}
+		if _, e := client.ReaderLabels(ctx, work.ID); e == nil {
+			t.Fatal("old manifest accessed direct series labels")
+		}
+		if _, e := client.Poll(ctx, teams.PollRequest{AppVersion: manifest.AppVersion, LibraryIDs: []string{library}, CapabilityManifest: &manifest}); e != nil {
+			t.Fatal(e)
+		}
+	} else {
+		var consent struct {
+			Audiences struct {
+				Publications []teamsReportPublication `json:"publications"`
+			} `json:"audiences"`
+		}
+		if json.Unmarshal(work.Config, &consent) != nil || len(consent.Audiences.Publications) != 1 || !consent.Audiences.Publications[0].IncludeCompleteness {
+			t.Fatal("signed config did not include explicit completeness")
+		}
 	}
-	if json.Unmarshal(work.Config, &consent) != nil || len(consent.Audiences.Publications) != 1 || !consent.Audiences.Publications[0].IncludeCompleteness {
-		t.Fatal("signed config did not include explicit completeness")
-	}
+
 	override(t, &teamsWorkerCapabilities, func() teamsCapabilityManifest { return manifest })
 	override(t, &teamsLoadSourceConfig, func(string) (Config, error) { return cfg, nil })
 	service := testServer(t, cfg, c)
@@ -188,9 +223,39 @@ func TestTeamsReportSyntheticPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = c.grantTeamsQuestion(ctx, *work, d, settings.SettingsRevision); err != nil {
-		t.Fatalf("source review: %v", err)
+	action := func(path string, body map[string]any) {
+		t.Helper()
+		if path == "allow-source" || path == "approve-result" {
+			service.teamsWorker.mu.Lock()
+			i := service.teamsWorker.items[work.ID]
+			body["labelsToken"] = teamsReaderLabelToken(i, teamsCredentialScope(d, credential), service.teamsWorker.generation)
+			service.teamsWorker.mu.Unlock()
+		}
+		raw, _ := json.Marshal(body)
+		rec := httptest.NewRecorder()
+		service.teamsWorkerHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/teams/worker/"+path, bytes.NewReader(raw)))
+		if rec.Code != 200 {
+			t.Fatalf("series review %s: %d", path, rec.Code)
+		}
 	}
+	if series {
+		if _, e := service.checkTeamsWork(ctx); e != nil {
+			t.Fatal(e)
+		}
+		action("reader-labels", map[string]any{"workId": work.ID, "configHash": work.ConfigSHA256})
+		service.teamsWorker.mu.Lock()
+		labels := service.teamsWorker.items[work.ID].Labels
+		service.teamsWorker.mu.Unlock()
+		if labels == nil || len(labels.Entries) != 1 || labels.Entries[0].Status != "active" || labels.Entries[0].DisplayName == "" {
+			t.Fatal("signed audience label missing")
+		}
+		action("allow-source", map[string]any{"workId": work.ID, "settingsRevision": settings.SettingsRevision, "configHash": work.ConfigSHA256})
+	} else {
+		if err = c.grantTeamsQuestion(ctx, *work, d, settings.SettingsRevision); err != nil {
+			t.Fatalf("source review: %v", err)
+		}
+	}
+
 	if _, err = service.checkTeamsWork(ctx); err != nil {
 		t.Fatalf("draft worker: %v", err)
 	}
@@ -198,9 +263,15 @@ func TestTeamsReportSyntheticPostgres(t *testing.T) {
 	if err != nil || draft.State != "awaiting_review" {
 		t.Fatalf("draft state=%s: %v", draft.State, err)
 	}
-	if err = c.reviewTeamsV2Draft(ctx, d, work.ID, draft.PayloadHash); err != nil {
-		t.Fatalf("answer review: %v", err)
+	if series {
+		action("reader-labels", map[string]any{"workId": work.ID, "configHash": work.ConfigSHA256})
+		action("approve-result", map[string]any{"workId": work.ID, "payloadHash": draft.PayloadHash, "configHash": work.ConfigSHA256})
+	} else {
+		if err = c.reviewTeamsV2Draft(ctx, d, work.ID, draft.PayloadHash); err != nil {
+			t.Fatalf("answer review: %v", err)
+		}
 	}
+
 	if _, err = service.checkTeamsWork(ctx); err != nil {
 		t.Fatalf("delivery worker: %v", err)
 	}
@@ -208,22 +279,25 @@ func TestTeamsReportSyntheticPostgres(t *testing.T) {
 	if err != nil || sent.State != "accepted" {
 		t.Fatalf("sent state=%s: %v", sent.State, err)
 	}
-	var published struct {
-		ReportID string `json:"report_id"`
+	if !series {
+		var published struct {
+			ReportID string `json:"report_id"`
+		}
+		control("/_test/publish-report", map[string]string{"version_id": issued.VersionID, "publication_id": issued.PublicationID}, &published)
+		t.Logf("synthetic request=%s version=%s report=%s", issued.RequestID, issued.VersionID, published.ReportID)
+		if published.ReportID == "" {
+			t.Fatal("missing report ID")
+		}
+		var report struct {
+			Values   map[string]*int64 `json:"values"`
+			Complete bool              `json:"complete"`
+		}
+		control("/_test/read-report", map[string]string{"report_id": published.ReportID}, &report)
+		if report.Values["total_tokens"] == nil || *report.Values["total_tokens"] != 123 || report.Complete {
+			t.Fatal("authorized report did not preserve the partial synthetic total")
+		}
 	}
-	control("/_test/publish-report", map[string]string{"version_id": issued.VersionID, "publication_id": issued.PublicationID}, &published)
-	t.Logf("synthetic request=%s version=%s report=%s", issued.RequestID, issued.VersionID, published.ReportID)
-	if published.ReportID == "" {
-		t.Fatal("missing report ID")
-	}
-	var report struct {
-		Values   map[string]*int64 `json:"values"`
-		Complete bool              `json:"complete"`
-	}
-	control("/_test/read-report", map[string]string{"report_id": published.ReportID}, &report)
-	if report.Values["total_tokens"] == nil || *report.Values["total_tokens"] != 123 || report.Complete {
-		t.Fatal("authorized report did not preserve the partial synthetic total")
-	}
+
 	var view struct {
 		Rows []struct {
 			Values map[string]json.RawMessage `json:"values"`

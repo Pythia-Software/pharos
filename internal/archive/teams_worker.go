@@ -18,16 +18,36 @@ type teamsWorkerItem struct {
 	State       string
 	Payload     []byte
 	PayloadHash string
+	Labels      *teams.ReaderLabels
+	LabelsAt    time.Time
+	LabelsScope string
 }
 type teamsWorkerState struct {
 	mu                    sync.Mutex
 	wake                  chan struct{}
 	items                 map[string]teamsWorkerItem
+	generation            uint64
+	scope                 string
+	labelFlights          map[string]bool
+	labelLast             map[string]time.Time
 	next                  time.Time
 	checking              bool
 	problem               string
 	reconcileAfter        string
 	contentReconcileAfter string
+}
+
+// clearReaderLabelsLocked invalidates every display token while preserving ordinary work.
+func (w *teamsWorkerState) clearReaderLabelsLocked() {
+	w.generation++
+	w.scope = ""
+	w.labelLast = nil
+	for id, item := range w.items {
+		item.Labels = nil
+		item.LabelsAt = time.Time{}
+		item.LabelsScope = ""
+		w.items[id] = item
+	}
 }
 
 var teamsWorkerCapabilities = teamsBuildCapabilities
@@ -117,11 +137,15 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 			return e
 		}
 		if !settings.Enabled {
+			s.teamsWorker.mu.Lock()
+			s.teamsWorker.clearReaderLabelsLocked()
+			s.teamsWorker.mu.Unlock()
 			return nil
 		}
 		manifest := teamsWorkerCapabilities()
 		if !teamsNumericBuildEligible(manifest) {
 			s.teamsWorker.mu.Lock()
+			s.teamsWorker.clearReaderLabelsLocked()
 			s.teamsWorker.problem = "This Pharos build needs an update before it can process Teams requests."
 			s.teamsWorker.mu.Unlock()
 			return nil
@@ -329,16 +353,22 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 		}
 		s.teamsWorker.mu.Lock()
 		s.teamsWorker.items = items
+		s.teamsWorker.scope = teamsCredentialScope(d, credential)
+		s.teamsWorker.generation++
+		s.teamsWorker.labelLast = nil
 		s.teamsWorker.mu.Unlock()
 		return nil
 	})
-	if errors.Is(err, errTeamsNotEnrolled) {
-		return false, nil
-	}
 	if err != nil {
 		s.teamsWorker.mu.Lock()
-		s.teamsWorker.problem = "The Teams check could not complete. Try again."
+		s.teamsWorker.clearReaderLabelsLocked()
+		if !errors.Is(err, errTeamsNotEnrolled) {
+			s.teamsWorker.problem = "The Teams check could not complete. Try again."
+		}
 		s.teamsWorker.mu.Unlock()
+		if errors.Is(err, errTeamsNotEnrolled) {
+			return false, nil
+		}
 	}
 	return active, err
 }

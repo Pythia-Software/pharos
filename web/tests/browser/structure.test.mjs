@@ -2513,3 +2513,81 @@ test('Teams shows recurring export consent details before review', { skip }, asy
   await app.page.waitForTimeout(100);
   assert.deepEqual(approval,{workId:'synthetic-work',payloadHash:'a'.repeat(64)});
 });
+
+test('Teams manual series displays reader identities at both reviews', { skip }, async t => {
+  const ids=['00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000003'];
+  let loaded=false, approved=false, attempts=0, generation=1;
+  const item={workId:'synthetic-work',question:'Synthetic total',prompt:'',requester:'Requester',requesterId:ids[0],readers:[ids[0],ids[1]],state:'awaiting_source_consent',payloadHash:'payload',configHash:'digest',retention:{mode:'organization_controlled',duration_days:null},publicationV2:{descriptors:[{id:'report',readers:[{id:ids[1]},{id:ids[2]}],outputs:{fields:[{id:'total_tokens',unit:'tokens'}]}}]}};
+  const entries=ids.map((person_id,i)=>({person_id,status:'active',display_name:i?'Alex Kim':'Requester'}));
+  const app=await open(t,{url:'/settings/teams',ready:'#teamsSettingsPage .teams-settings',api:{
+    'GET /api/teams/enrollment':{state:'connected_paused',available:true,library:'Synthetic',fingerprint:'',problem:''},
+    'GET /api/teams/worker':()=>({enabled:true,optOut:true,settingsRevision:4,acknowledgedPolicy:1,nextCheck:'',checking:false,problem:'',items:[{...item,generation,labelsToken:loaded?`token-${generation}`:undefined,labelsReady:loaded,readerLabels:loaded?{entries}:undefined}],modelApproved:false}),
+    'GET /api/teams/source-accounts':{sourceRevision:0,settingsRevision:4,proofRequested:true,sources:[]},
+    'POST /api/teams/worker/reader-labels':()=>{attempts++;loaded=true;return {loaded:true}},
+    'POST /api/teams/worker/check':()=>{generation++;loaded=false;return {checked:true}},
+    'POST /api/teams/worker/allow-source':({body})=>{assert.equal(body.labelsToken,`token-${generation}`); item.state='awaiting_review';item.payload={total_tokens:7};return {granted:true}},
+    'POST /api/teams/worker/approve-result':({body})=>{assert.equal(body.labelsToken,`token-${generation}`);approved=true;return {approved:true}},
+  }});
+  await app.page.getByRole('button',{name:'Allow source checks'}).waitFor();
+  await app.page.getByText('Report only',{exact:false}).first().waitFor();
+  assert.equal(await app.page.getByText('Alex Kim',{exact:true}).count(),3);
+  assert.ok((await app.page.locator('code').allTextContents()).includes(ids[2]));
+  await app.page.getByRole('button',{name:'Allow source checks'}).click();
+  await app.page.getByRole('button',{name:'Approve and send this result'}).waitFor();
+  await app.page.waitForFunction(()=>document.querySelector('button') !== null);
+  await app.page.getByRole('button',{name:'Check now'}).click();
+  await app.page.getByRole('button',{name:'Approve and send this result'}).waitFor({state:'visible'});
+  await app.page.evaluate(() => { document.querySelector('#teamsSettings').hidden = true; });
+  await app.page.getByRole('region',{name:'Teams requests'}).waitFor({state:'detached'});
+  const beforeReturn=attempts;
+  const lookup = app.page.waitForResponse(response => response.url().endsWith('/api/teams/worker/reader-labels'));
+  await app.page.evaluate(() => { document.querySelector('#teamsSettings').hidden = false; });
+  await lookup;
+  await app.page.getByRole('button',{name:'Approve and send this result'}).waitFor({state:'visible'});
+  const approvedResponse=app.page.waitForResponse(response => response.url().endsWith('/api/teams/worker/approve-result'));
+  await app.page.getByRole('button',{name:'Approve and send this result'}).click();
+  await approvedResponse;
+  assert.ok(attempts>beforeReturn);
+  assert.equal(approved,true);
+});
+
+test('Teams manual series defers review when names are unavailable', { skip }, async t => {
+  const id='00000000-0000-4000-8000-000000000002'; let loaded=false, attempts=0;
+  const item={workId:'synthetic-work',question:'Synthetic total',prompt:'',requester:'Requester',requesterId:'00000000-0000-4000-8000-000000000001',readers:[id],state:'awaiting_review',payloadHash:'payload',configHash:'digest',retention:{mode:'organization_controlled',duration_days:null},payload:{total_tokens:7},publicationV2:{descriptors:[{id:'report',readers:[{id}],outputs:{fields:[{id:'total_tokens',unit:'tokens'}]}}]}};
+  const app=await open(t,{url:'/settings/teams',ready:'#teamsSettingsPage .teams-settings',api:{
+    'GET /api/teams/enrollment':{state:'connected_paused',available:true,library:'Synthetic',fingerprint:'',problem:''},
+    'GET /api/teams/worker':()=>({enabled:true,optOut:true,settingsRevision:4,acknowledgedPolicy:1,nextCheck:'',checking:false,problem:'',items:[{...item,labelsReady:loaded,readerLabels:loaded?{entries:[{person_id:id,status:'active',display_name:'<b>Alex</b>'}]}:undefined}],modelApproved:false}),
+    'GET /api/teams/source-accounts':{sourceRevision:0,settingsRevision:4,proofRequested:true,sources:[]},
+    'POST /api/teams/worker/reader-labels':()=>{attempts++;if(attempts>1) loaded=true;return {loaded}},
+  }});
+  await app.page.getByText(/Names are unavailable/).waitFor();
+  assert.equal(await app.page.getByRole('button',{name:'Approve and send this result'}).isDisabled(),true);
+  assert.equal(await app.page.getByRole('button',{name:'Decline request'}).isEnabled(),true);
+  await app.page.getByRole('button',{name:'Refresh names'}).click();
+  await app.page.getByText('<b>Alex</b>',{exact:true}).first().waitFor();
+  assert.equal(await app.page.getByRole('button',{name:'Approve and send this result'}).isEnabled(),true);
+  assert.equal(await app.page.locator('b').count(),0);
+});
+
+test('Teams reader name expiry survives a concurrent status refresh', { skip }, async t => {
+  const id='00000000-0000-4000-8000-000000000001'; let calls=0, loaded=false, expire=false, resolveLookup, markStarted; const started=new Promise(resolve=>{markStarted=resolve});
+  const item={workId:'synthetic-work',question:'Synthetic total',prompt:'',requester:'Requester',requesterId:id,requesterFallback:'Requester',readers:[id],state:'awaiting_review',payloadHash:'payload',configHash:'digest',generation:1,retention:{mode:'organization_controlled',duration_days:null},payload:{total_tokens:7},publicationV2:{descriptors:[{id:'report',readers:[{id}],outputs:{fields:[{id:'total_tokens',unit:'tokens'}]}}]}};
+  const app=await open(t,{url:'/settings/teams',ready:'#teamsSettingsPage .teams-settings',api:{
+    'GET /api/teams/enrollment':{state:'connected_paused',available:true,library:'Synthetic',fingerprint:'',problem:''},
+    'GET /api/teams/worker':()=>({enabled:true,optOut:true,settingsRevision:4,acknowledgedPolicy:1,nextCheck:'',checking:false,problem:'',items:[{...item,labelsReady:loaded,labelsToken:loaded?'token':undefined,labelsExpireAt:loaded?(expire?'2000-01-01T00:00:00Z':new Date(Date.now()+60000).toISOString()):undefined,readerLabels:loaded?{entries:[{person_id:id,status:'active',display_name:'Requester'}]}:undefined}],modelApproved:false}),
+    'GET /api/teams/source-accounts':{sourceRevision:0,settingsRevision:4,proofRequested:true,sources:[]},
+    'POST /api/teams/worker/reader-labels':async()=>{calls++; if(calls===1){loaded=true;return {loaded:true}} loaded=false; await new Promise(resolve=>{resolveLookup=resolve;markStarted()}); loaded=true;expire=false;return {loaded:true}},
+    'POST /api/teams/worker/check':()=>{expire=true;return {checked:true}},
+  }});
+  await app.page.getByRole('button',{name:'Check now'}).click();
+  await started;
+  const checkResponse=app.page.waitForResponse(response=>response.url().endsWith('/api/teams/worker/check') && response.request().method()==='POST');
+  const statusResponse=app.page.waitForResponse(response=>response.url().endsWith('/api/teams/worker') && response.request().method()==='GET');
+  await app.page.getByRole('button',{name:'Check now'}).click();
+  await checkResponse; await statusResponse;
+  await app.page.getByText(/Names are unavailable/).waitFor();
+  resolveLookup();
+  await app.page.getByRole('button',{name:'Refresh names'}).waitFor({state:'visible'});
+  assert.equal(await app.page.getByRole('button',{name:'Refresh names'}).isEnabled(),true);
+  assert.equal(await app.page.getByRole('button',{name:'Approve and send this result'}).isEnabled(),true);
+});

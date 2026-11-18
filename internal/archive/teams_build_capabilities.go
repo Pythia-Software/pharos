@@ -16,7 +16,7 @@ const teamsManualReportSeriesReady = false
 func teamsBuildCapabilities() teamsCapabilityManifest {
 	m := teamsCapabilityManifest{SchemaVersion: 1, AppVersion: pushVersion, Capabilities: []string{"deterministic_query_v1", "export_deterministic_v1", "recurring_deterministic_v1", "report_deterministic_v1", "scoped_artifact_v1", "source_snapshot_v2"}}
 	if teamsManualReportSeriesReady {
-		m.V2OnlyFeatures = []string{"report_deterministic_v2"}
+		m.V2OnlyFeatures = []string{"reader_labels_v1", "report_deterministic_v2"}
 	}
 	return m
 }
