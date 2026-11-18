@@ -2,8 +2,10 @@ package archive
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"sort"
 	"time"
 
@@ -109,13 +111,38 @@ func teamsMetadataInventoryIn(ctx context.Context, tx *sql.Tx, cfg Config, d Lib
 	seen := map[string]bool{}
 	for _, r := range found {
 		file, ok := roster[r.origin]
-		if !ok || seen[r.origin] || r.native == "" || len(r.native) > 512 || r.mapping < 1 || !r.total.Valid || !validRecordHash(r.totalDigest) || !validRecordHash(r.transcript) || !teamsCurrentCodexBinding(cfg, currentHost().ID, source.Name, r.root, r.provenance) {
+		if !ok || seen[r.origin] || r.native == "" || len(r.native) > 512 || r.mapping < 1 || !validRecordHash(r.transcript) || !teamsCurrentCodexBinding(cfg, currentHost().ID, source.Name, r.root, r.provenance) {
 			return teamsV2Inventory{}, errTeamsSourceUnavailable
 		}
 		seen[r.origin] = true
 		custody, e := teamsReadCodexCaptureCustody(tx, r.binding, r.id, r.origin)
 		if e != nil || custody.CaptureSHA256 != r.capture || custody.CaptureSHA256 != file.captureSHA || custody.CapturePath != file.capturePath || custody.CaptureRevision != r.revision || custody.IndexedDigest != r.indexed {
 			return teamsV2Inventory{}, errTeamsSourceUnavailable
+		}
+		if !r.total.Valid || !validRecordHash(r.totalDigest) {
+			if r.total.Valid || r.totalDigest != "" {
+				return teamsV2Inventory{}, errTeamsSourceUnavailable
+			}
+			// A complete, parity-checked request profile also proves the total
+			// when a source has request usage records but no legacy counter.
+			var factsJSON, digest string
+			if e = tx.QueryRowContext(ctx, `SELECT facts_json,evidence_sha256 FROM teams_codex_request_profiles WHERE binding_id=? AND conversation_id=? AND origin=? AND indexed_digest=? AND evidence_sha256=?`, r.binding, r.id, r.origin, r.indexed, custody.EvidenceSHA256).Scan(&factsJSON, &digest); e != nil {
+				return teamsV2Inventory{}, errTeamsSourceUnavailable
+			}
+			hash := sha256.Sum256(append([]byte("pharos-codex-request-usage-v1\x00"), []byte(factsJSON)...))
+			var facts []teamsCodexRequestFact
+			if hex.EncodeToString(hash[:]) != digest || json.Unmarshal([]byte(factsJSON), &facts) != nil || len(facts) == 0 || len(facts) > teamsCodexMaxRequestFacts {
+				return teamsV2Inventory{}, errTeamsSourceUnavailable
+			}
+			var total int64
+			for _, fact := range facts {
+				if fact.Total < 0 || total > teamsMaxExactInteger-fact.Total {
+					return teamsV2Inventory{}, errTeamsSourceUnavailable
+				}
+				total += fact.Total
+			}
+			r.total = sql.NullInt64{Int64: total, Valid: true}
+			r.totalDigest = digest
 		}
 		var itemCurrent bool
 		if e = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM source_item_states WHERE host_id=? AND source_name=? AND item=?)`, currentHost().ID, source.Name, r.origin).Scan(&itemCurrent); e != nil || !itemCurrent {
