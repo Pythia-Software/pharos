@@ -318,3 +318,37 @@ func TestTeamsScheduledQuerySizeBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestScheduledReleaseDisclosesSinglePartialContributor(t *testing.T) {
+	raw, err := os.ReadFile("testdata/teams-report-series/scheduled_series_config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := strings.Replace(string(raw), `"disclosure_revision":1`, `"disclosure_revision":2`, 1)
+	const end = `"withdrawal_does_not_remove_published_snapshots"`
+	const release = end + `,"single_contributor_value_and_partial_coverage"`
+	v2 := strings.Replace(revision, end, release, 1)
+	c, err := parseTeamsScheduledConfig([]byte(v2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	terms := teamsScheduledTerms(c)
+	if terms.DisclosureRevision != 2 {
+		t.Fatalf("unexpected disclosure revision %d", terms.DisclosureRevision)
+	}
+	for _, phrase := range []string{"your token total", "partial coverage", "named report readers", "web report", "separate approval"} {
+		if !strings.Contains(terms.Inference, phrase) {
+			t.Fatalf("release terms omit %q", phrase)
+		}
+	}
+	for _, phrase := range []string{"opted out, unavailable, declined and pending", "separately authorized", "With one participant", "opted out, declined, were unavailable or have not responded"} {
+		if !strings.Contains(terms.Coverage, phrase) {
+			t.Fatalf("coverage terms omit %q", phrase)
+		}
+	}
+	for _, bad := range []string{revision, strings.Replace(string(raw), end, release, 1), strings.Replace(v2, `"disclosure_revision":2`, `"disclosure_revision":3`, 1)} {
+		if _, err := parseTeamsScheduledConfig([]byte(bad)); err == nil {
+			t.Fatal("mismatched release terms accepted")
+		}
+	}
+}
