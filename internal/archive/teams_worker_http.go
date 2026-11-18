@@ -69,28 +69,31 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			generation, workScope := s.teamsWorker.generation, s.teamsWorker.scope
 			s.teamsWorker.mu.Unlock()
 			type row struct {
-				WorkID            string                   `json:"workId"`
-				Question          string                   `json:"question"`
-				Requester         string                   `json:"requester"`
-				State             string                   `json:"state"`
-				PayloadHash       string                   `json:"payloadHash"`
-				ConfigHash        string                   `json:"configHash,omitempty"`
-				PublicationV2     *teamsReportSeries       `json:"publicationV2,omitempty"`
-				Readers           []string                 `json:"readers"`
-				RequesterID       string                   `json:"requesterId"`
-				RequesterFallback string                   `json:"requesterFallback,omitempty"`
-				Labels            *teams.ReaderLabels      `json:"readerLabels,omitempty"`
-				LabelsReady       bool                     `json:"labelsReady"`
-				LabelsToken       string                   `json:"labelsToken,omitempty"`
-				LabelsExpireAt    string                   `json:"labelsExpireAt,omitempty"`
-				Generation        uint64                   `json:"generation"`
-				Payload           json.RawMessage          `json:"payload"`
-				Prompt            string                   `json:"prompt"`
-				Retention         json.RawMessage          `json:"retention"`
-				Schedule          json.RawMessage          `json:"schedule"`
-				Period            json.RawMessage          `json:"period"`
-				Exports           []teamsFeedExport        `json:"exports"`
-				Publications      []teamsReportPublication `json:"publications"`
+				WorkID              string                       `json:"workId"`
+				Question            string                       `json:"question"`
+				Requester           string                       `json:"requester"`
+				State               string                       `json:"state"`
+				PayloadHash         string                       `json:"payloadHash"`
+				ConfigHash          string                       `json:"configHash,omitempty"`
+				PublicationV2       json.RawMessage              `json:"publicationV2,omitempty"`
+				ScheduledResult     *teamsScheduledResultDisplay `json:"scheduledResult,omitempty"`
+				ScheduledTerms      *teamsScheduledDisclosure    `json:"scheduledTerms,omitempty"`
+				ScheduledAssignment *teams.ScheduledAssignment   `json:"scheduledAssignment,omitempty"`
+				Readers             []string                     `json:"readers"`
+				RequesterID         string                       `json:"requesterId"`
+				RequesterFallback   string                       `json:"requesterFallback,omitempty"`
+				Labels              *teams.ReaderLabels          `json:"readerLabels,omitempty"`
+				LabelsReady         bool                         `json:"labelsReady"`
+				LabelsToken         string                       `json:"labelsToken,omitempty"`
+				LabelsExpireAt      string                       `json:"labelsExpireAt,omitempty"`
+				Generation          uint64                       `json:"generation"`
+				Payload             json.RawMessage              `json:"payload"`
+				Prompt              string                       `json:"prompt"`
+				Retention           json.RawMessage              `json:"retention"`
+				Schedule            json.RawMessage              `json:"schedule"`
+				Period              json.RawMessage              `json:"period"`
+				Exports             []teamsFeedExport            `json:"exports"`
+				Publications        []teamsReportPublication     `json:"publications"`
 			}
 			out := make([]row, 0, len(items))
 			for _, item := range items {
@@ -104,11 +107,11 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 					item.LabelsAt = time.Time{}
 				}
 				var config struct {
-					PublicationV2 *teamsReportSeries `json:"publication_v2"`
-					Question      string             `json:"question"`
-					Prompt        string             `json:"prompt"`
-					Retention     json.RawMessage    `json:"retention_policy"`
-					Schedule      json.RawMessage    `json:"schedule"`
+					PublicationV2 json.RawMessage `json:"publication_v2"`
+					Question      string          `json:"question"`
+					Prompt        string          `json:"prompt"`
+					Retention     json.RawMessage `json:"retention_policy"`
+					Schedule      json.RawMessage `json:"schedule"`
 					Requester     struct {
 						ID          string `json:"id"`
 						DisplayName string `json:"display_name"`
@@ -122,9 +125,13 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 				if item.Work.Kind == "llm" {
 					_, e = teamsLLMFromWork(item.Work, teamsWorkerCapabilities().AppVersion)
 				} else {
-					_, e = teamsPlanFromWork(item.Work)
+					_, e = teamsV2PlanFromWork(item.Work)
 				}
 				if e != nil {
+					if errors.Is(e, errTeamsScheduledPeriodEnded) {
+						out = append(out, row{WorkID: item.Work.ID, Question: "The collection period for this scheduled report has ended.", State: "period_ended"})
+						continue
+					}
 					out = append(out, row{WorkID: item.Work.ID, Question: "This request needs a newer Pharos build.", State: item.State})
 					continue
 				}
@@ -149,7 +156,18 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 				if usableTeamsReaderName(config.Requester.DisplayName) {
 					fallback = config.Requester.DisplayName
 				}
-				out = append(out, row{LabelsExpireAt: expires, RequesterFallback: fallback, WorkID: item.Work.ID, Question: config.Question, Prompt: config.Prompt, Retention: config.Retention, Requester: config.Requester.DisplayName, RequesterID: config.Requester.ID, Labels: item.Labels, LabelsReady: labelsForReview(item.Work, item.Labels, item.LabelsAt), LabelsToken: teamsReaderLabelToken(item, scope, generation), Generation: generation, State: item.State, PayloadHash: item.PayloadHash, ConfigHash: configHash, PublicationV2: config.PublicationV2, Readers: readers, Payload: json.RawMessage(item.Payload), Schedule: config.Schedule, Period: item.Work.Period, Exports: config.Audiences.Exports, Publications: config.Audiences.Publications})
+				var scheduled *teamsScheduledDisclosure
+				var result *teamsScheduledResultDisplay
+				if item.Work.ScheduledAssignment != nil {
+					c, err := parseTeamsScheduledConfig(item.Work.Config)
+					if err != nil {
+						return err
+					}
+					terms := teamsScheduledTerms(c)
+					scheduled = &terms
+					result = teamsScheduledResultForDisplay(item.Payload, item.PayloadHash)
+				}
+				out = append(out, row{ScheduledResult: result, ScheduledTerms: scheduled, ScheduledAssignment: item.Work.ScheduledAssignment, LabelsExpireAt: expires, RequesterFallback: fallback, WorkID: item.Work.ID, Question: config.Question, Prompt: config.Prompt, Retention: config.Retention, Requester: config.Requester.DisplayName, RequesterID: config.Requester.ID, Labels: item.Labels, LabelsReady: labelsForReview(item.Work, item.Labels, item.LabelsAt), LabelsToken: teamsReaderLabelToken(item, scope, generation), Generation: generation, State: item.State, PayloadHash: item.PayloadHash, ConfigHash: configHash, PublicationV2: config.PublicationV2, Readers: readers, Payload: json.RawMessage(item.Payload), Schedule: config.Schedule, Period: item.Work.Period, Exports: config.Audiences.Exports, Publications: config.Audiences.Publications})
 			}
 			var modelApproved bool
 			if e = s.Catalog.reader().QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM teams_model_permission WHERE id=1 AND library_id=? AND instance_id=? AND org_id=? AND installation_id=? AND host_id=? AND settings_revision=?)`, d.ID, d.Instance, credential.OrgID, credential.InstallationID, currentHost().ID, settings.SettingsRevision).Scan(&modelApproved); e != nil {
@@ -465,7 +483,7 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			binding := s.teamsWorker.workBindings[body.WorkID]
 			valid := s.teamsWorker.scope == scope && settings.Enabled
 			s.teamsWorker.mu.Unlock()
-			if !valid || !ok || (item.State != "awaiting_source_consent" && item.State != "awaiting_model_permission" && item.State != "awaiting_review" && item.State != "decline_pending" && item.State != "started" && item.State != "unconfirmed" && item.State != "source_safety_waiting") {
+			if !valid || !ok || (item.State != "awaiting_source_consent" && item.State != "awaiting_model_permission" && item.State != "awaiting_review" && item.State != "decline_pending" && item.State != "started" && item.State != "unconfirmed" && item.State != "source_safety_waiting" && item.State != teamsExpiredScheduleState) {
 				return errTeamsConsentStale
 			}
 			lease, e := s.Catalog.teamsSharingLease()

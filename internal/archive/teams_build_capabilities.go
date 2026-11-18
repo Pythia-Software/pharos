@@ -25,7 +25,7 @@ func teamsBuildEligible(m teamsCapabilityManifest, required string) bool {
 	if m.SchemaVersion == 2 {
 		capabilities = m.Features
 	}
-	if m.SchemaVersion == 1 && required == "report_deterministic_v2" {
+	if m.SchemaVersion == 1 && (required == "report_deterministic_v2" || required == "report_automatic_metrics_v1" || required == "reader_labels_v1") {
 		capabilities = m.V2OnlyFeatures
 	}
 	for _, capability := range capabilities {

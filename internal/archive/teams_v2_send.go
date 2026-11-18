@@ -107,10 +107,10 @@ func (c *Catalog) sendTeamsV2Approved(ctx context.Context, cfg Config, client *t
 	if work == nil || work.LibraryID != d.ID || work.VersionID != u.VersionID || work.ConfigSHA256 != u.ConfigHash || !bytes.Equal(work.Config, draft.Config) || work.EvaluationRevision != u.EvaluationRevision || work.RequiredLocalRevision > u.LocalRevision || work.BaselineRevision < 0 {
 		return empty, errTeamsConsentStale
 	}
-	if !teamsNumericWorkEligible(*work, manifest) {
+	if !teamsNumericWorkEligible(*work, manifest) || !u.matchesSourceProof(work.ScheduledAssignment) {
 		return empty, errTeamsQueryUnsupported
 	}
-	plan, err := teamsPlanFromWork(*work)
+	plan, err := teamsV2PlanFromWork(*work)
 	if err != nil || len(plan.Metrics) != 1 || plan.Metrics[0].Field != "total_tokens" {
 		return empty, errTeamsQueryUnsupported
 	}
@@ -190,7 +190,7 @@ func (c *Catalog) sendTeamsV2Approved(ctx context.Context, cfg Config, client *t
 			if u.Mode == "reviewed" && current.DecisionID == "" {
 				return errTeamsConsentStale
 			}
-			submission := teams.Submission{IdempotencyKey: current.IdempotencyKey, ConfigSHA256: u.ConfigHash, EvaluationRevision: u.EvaluationRevision, LocalRevision: u.LocalRevision, ManifestSHA256: u.InventoryHash, SourceBindingID: binding.BindingID, AssignmentSHA256: binding.AssignmentSHA256, InventoryRevision: u.InventoryRevision, CatalogRevision: binding.CatalogRevision, OwnershipRevision: binding.OwnershipRevision, BaselineRevision: work.BaselineRevision, PayloadSHA256: current.PayloadHash, Approval: teams.Approval{Mode: u.Mode, DecisionID: current.DecisionID, DecidedAt: at, PrivacyRevision: u.PrivacyRevision, SharedPrivacyRevision: binding.PrivacyRevision, SettingsRevision: u.SettingsRevision, OrgPolicyVersion: u.PolicyVersion}, Payload: current.Payload}
+			submission := teams.Submission{ScheduledAssignment: work.ScheduledAssignment, IdempotencyKey: current.IdempotencyKey, ConfigSHA256: u.ConfigHash, EvaluationRevision: u.EvaluationRevision, LocalRevision: u.LocalRevision, ManifestSHA256: u.InventoryHash, SourceBindingID: binding.BindingID, AssignmentSHA256: binding.AssignmentSHA256, InventoryRevision: u.InventoryRevision, CatalogRevision: binding.CatalogRevision, OwnershipRevision: binding.OwnershipRevision, BaselineRevision: work.BaselineRevision, PayloadSHA256: current.PayloadHash, Approval: teams.Approval{Mode: u.Mode, DecisionID: current.DecisionID, DecidedAt: at, PrivacyRevision: u.PrivacyRevision, SharedPrivacyRevision: binding.PrivacyRevision, SettingsRevision: u.SettingsRevision, OrgPolicyVersion: u.PolicyVersion}, Payload: current.Payload}
 			body, e := json.Marshal(submission)
 			if e != nil {
 				return e
@@ -202,8 +202,16 @@ func (c *Catalog) sendTeamsV2Approved(ctx context.Context, cfg Config, client *t
 			}
 		} else if current.State == "sending" || current.State == "needs_reconcile" {
 			var submitted teams.Submission
-			if len(current.Submission) == 0 || teamsPayloadHash(current.Submission) != current.SubmissionHash || current.SubmissionHash != draft.SubmissionHash || !teams.ValidUniqueJSON(current.Submission) || json.Unmarshal(current.Submission, &submitted) != nil || submitted.BaselineRevision != work.BaselineRevision || submitted.EvaluationRevision != u.EvaluationRevision || submitted.LocalRevision != u.LocalRevision || submitted.CatalogRevision != binding.CatalogRevision || submitted.SourceBindingID != binding.BindingID || submitted.AssignmentSHA256 != binding.AssignmentSHA256 || submitted.ConfigSHA256 != u.ConfigHash || submitted.PayloadSHA256 != current.PayloadHash || submitted.IdempotencyKey != current.IdempotencyKey {
+			if len(current.Submission) == 0 || teamsPayloadHash(current.Submission) != current.SubmissionHash || current.SubmissionHash != draft.SubmissionHash || !teams.ValidUniqueJSON(current.Submission) || json.Unmarshal(current.Submission, &submitted) != nil || !sameTeamsScheduledAssignment(submitted.ScheduledAssignment, work.ScheduledAssignment) || submitted.BaselineRevision != work.BaselineRevision || submitted.EvaluationRevision != u.EvaluationRevision || submitted.LocalRevision != u.LocalRevision || submitted.CatalogRevision != binding.CatalogRevision || submitted.SourceBindingID != binding.BindingID || submitted.AssignmentSHA256 != binding.AssignmentSHA256 || submitted.ConfigSHA256 != u.ConfigHash || submitted.PayloadSHA256 != current.PayloadHash || submitted.IdempotencyKey != current.IdempotencyKey {
 				return errTeamsConsentStale
+			}
+			if work.ScheduledAssignment != nil {
+				at, e := time.Parse(time.RFC3339Nano, current.ApprovedAt)
+				a := submitted.Approval
+				if e != nil || a.Mode != u.Mode || a.OrgPolicyVersion != u.PolicyVersion || a.SettingsRevision != u.SettingsRevision ||
+					a.DecisionID != current.DecisionID || !a.DecidedAt.Equal(at) || a.PrivacyRevision != u.PrivacyRevision || a.SharedPrivacyRevision != binding.PrivacyRevision {
+					return errTeamsConsentStale
+				}
 			}
 		} else {
 			return errTeamsConsentStale
@@ -217,6 +225,9 @@ func (c *Catalog) sendTeamsV2Approved(ctx context.Context, cfg Config, client *t
 	receipt, err := client.Submit(ctx, workID, draft.Submission, draft.PayloadHash)
 	if err != nil {
 		state, _ := teamsSubmitFailure(err)
+		if work.ScheduledAssignment != nil && teamsSourceDefinitelyExpired(err) {
+			state = "needs_reconcile"
+		}
 		c.markTeamsV2Outcome(workID, state)
 		return empty, err
 	}

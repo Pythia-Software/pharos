@@ -1,2 +1,4 @@
 .teams-settings{max-width:760px}.teams-settings p{line-height:1.6;overflow-wrap:anywhere}.teams-settings code{font-size:var(--fs-lg);letter-spacing:.12em}.teams-settings button{margin-top:8px}
 .teams-source{border-top:1px solid var(--border);padding:12px 0}.teams-source label{display:block;line-height:1.5}
+
+.teams-scheduled-result{border-block:1px solid var(--border);padding-block:12px;margin-block:12px}.teams-scheduled-result p{margin-block:6px}.teams-scheduled-result strong{font-size:1.4em;font-variant-numeric:tabular-nums}.teams-scheduled-result pre{white-space:pre-wrap;overflow-wrap:anywhere}

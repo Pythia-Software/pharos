@@ -54,6 +54,15 @@ func pollObject(raw []byte) (map[string]json.RawMessage, error) {
 	}
 	return fields, nil
 }
+func decodeScheduledAssignment(raw []byte) (ScheduledAssignment, error) {
+	var a ScheduledAssignment
+	err := sourceResponse(raw, &a, "assignment_id", "period_key", "timezone", "start_at", "deadline_at")
+	if err != nil || !validDeviceID(a.AssignmentID) || a.PeriodKey == "" || a.Timezone == "" || a.StartAt.IsZero() || !a.DeadlineAt.After(a.StartAt) {
+		return ScheduledAssignment{}, errSourceBinding
+	}
+	return a, nil
+}
+
 func decodePollResponse(raw []byte, out *PollResponse) error {
 	fields, err := pollObject(raw)
 	if err != nil {
@@ -89,9 +98,15 @@ func decodePollResponse(raw []byte, out *PollResponse) error {
 		}
 		bad := false
 		for key, value := range parts {
-			if strings.EqualFold(key, "config") && key != "config" {
+			if (strings.EqualFold(key, "config") && key != "config") || (strings.EqualFold(key, "scheduled_assignment") && key != "scheduled_assignment") {
 				bad = true
 				break
+			}
+			if key == "scheduled_assignment" {
+				if _, err := decodeScheduledAssignment(value); err != nil {
+					bad = true
+					break
+				}
 			}
 			if !validUniqueJSON(value) {
 				bad = true
@@ -102,7 +117,7 @@ func decodePollResponse(raw []byte, out *PollResponse) error {
 			continue
 		}
 		var w Work
-		if json.Unmarshal(item, &w) != nil {
+		if json.Unmarshal(item, &w) != nil || (w.ScheduledAssignment != nil && (w.Kind != "deterministic" || w.ID != w.ScheduledAssignment.AssignmentID)) {
 			continue
 		}
 		out.Work = append(out.Work, w)
@@ -296,7 +311,7 @@ func (c *DeviceClient) Poll(ctx context.Context, in PollRequest) (PollResponse, 
 	if in.CapabilityManifest != nil {
 		previous := ""
 		for _, id := range in.CapabilityManifest.V2OnlyFeatures {
-			if (id != "reader_labels_v1" && id != "report_deterministic_v2" && id != "source_protection_v1" && id != "source_recovery_v1") || id <= previous {
+			if (id != "reader_labels_v1" && id != "report_automatic_metrics_v1" && id != "report_deterministic_v2" && id != "source_protection_v1" && id != "source_recovery_v1") || id <= previous {
 				return out, errors.New("invalid v2-only capability")
 			}
 			previous = id

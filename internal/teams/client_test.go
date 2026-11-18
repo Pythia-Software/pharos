@@ -347,3 +347,18 @@ func TestPollSourceCarrierUsesOnlyNegotiatedV2(t *testing.T) {
 		})
 	}
 }
+
+func TestPollDropsScheduledAssignmentOnContentAndDifferentWork(t *testing.T) {
+	const good = `{"id":"07000000-0000-4000-8000-000000000001","kind":"llm","config":{}}`
+	const assignment = `"scheduled_assignment":{"assignment_id":"07000000-0000-4000-8000-000000000001","period_key":"period:0","timezone":"UTC","start_at":"2026-01-02T00:00:00Z","deadline_at":"2026-01-02T01:00:00Z"}`
+	for _, tc := range []struct{ kind, id string }{
+		{"llm", "07000000-0000-4000-8000-000000000001"},
+		{"deterministic", "07000000-0000-4000-8000-000000000002"},
+	} {
+		raw := []byte(`{"work":[` + good + `,{"id":"` + tc.id + `","kind":"` + tc.kind + `","config":{},` + assignment + `}]}`)
+		var out PollResponse
+		if err := decodePollResponse(raw, &out); err != nil || len(out.Work) != 1 || out.Work[0].ScheduledAssignment != nil {
+			t.Fatalf("invalid item damaged unrelated work: %s", tc.kind)
+		}
+	}
+}

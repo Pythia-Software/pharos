@@ -46,7 +46,7 @@ func teamsLLMFromWork(w teams.Work, appVersion string) (teamsLLMConfig, error) {
 func teamsLLMFromWorkAt(w teams.Work, appVersion string, now time.Time) (teamsLLMConfig, error) {
 	var out teamsLLMConfig
 	bad := errTeamsQueryUnsupported
-	if w.VerifyConfig() != nil || w.Kind != "llm" || w.PopulationKey != "current" || w.ExpiresAt.IsZero() || !now.Before(w.ExpiresAt) || (len(w.RunDecision) != 0 && !bytes.Equal(bytes.TrimSpace(w.RunDecision), []byte("null"))) {
+	if w.ScheduledAssignment != nil || w.VerifyConfig() != nil || w.Kind != "llm" || w.PopulationKey != "current" || w.ExpiresAt.IsZero() || !now.Before(w.ExpiresAt) || (len(w.RunDecision) != 0 && !bytes.Equal(bytes.TrimSpace(w.RunDecision), []byte("null"))) {
 		return out, bad
 	}
 	period, e := teamsStrictObject(w.Period, map[string]bool{"key": true, "anchor_at": true})

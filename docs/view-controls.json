@@ -9172,6 +9172,17 @@
       "reason": "Refreshes reader identities or records a local Teams consent decision; it is not query view state."
     },
     {
+      "key": "6e5cc8ce37feeed3:0",
+      "file": "web/src/teams-settings.tsx",
+      "owner": "TeamsWork",
+      "tag": "ViewDisclosure",
+      "control": "viewKey={`teams:scheduled-result:${item.workId}`}",
+      "binding": "disclosures",
+      "sharedDisclosure": true,
+      "contract": "view.disclosures",
+      "reason": "Bound directly to the registered view field."
+    },
+    {
       "key": "6e662c71ddfd6288:0",
       "file": "web/src/teams-settings.tsx",
       "owner": "TeamsWork",
