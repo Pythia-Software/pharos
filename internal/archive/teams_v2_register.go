@@ -36,6 +36,9 @@ func (c *Catalog) registerTeamsV2(ctx context.Context, cfg Config, client *teams
 		return out, err
 	}
 	defer lease.Close()
+	if err = teamsNumericNotDeclined(ctx, c.reader(), requested.ID); err != nil {
+		return out, err
+	}
 	if !teamsSourceConfigCurrent(cfg) {
 		return out, errTeamsSnapshotChanged
 	}
@@ -170,4 +173,19 @@ func (c *Catalog) registerTeamsV2(ctx context.Context, cfg Config, client *teams
 	upload.BindingJSON = bindingRaw
 	upload.AssignmentsJSON = assignmentsRaw
 	return teamsV2Registration{Upload: upload, Binding: binding, Assignments: assignments, Snapshot: snapshot, Work: *current, Policy: poll.MetricsDefault}, nil
+}
+
+// teamsNumericNotDeclined is checked under the same sharing lease as decline.
+// A read failure is not evidence of permission to disclose or submit.
+func teamsNumericNotDeclined(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, workID string) error {
+	var declined bool
+	if err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM teams_v2_declines WHERE work_id=?)`, workID).Scan(&declined); err != nil {
+		return err
+	}
+	if declined {
+		return errTeamsConsentStale
+	}
+	return nil
 }

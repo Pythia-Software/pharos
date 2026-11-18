@@ -360,6 +360,105 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 	if _, err = c.DB.Exec(`UPDATE teams_v2_results SET state='accepted' WHERE work_id=?`, w.ID); err != nil {
 		t.Fatal(err)
 	}
+	// A locally committed decline wins before any new numeric disclosure or
+	// submission, including when the service still advertises the work.
+	if _, err = c.DB.Exec(`INSERT INTO teams_v2_declines(work_id,library_id,instance_id,org_id,installation_id,config_hash,state) VALUES(?,?,?,?,?,?,'pending')`, w.ID, d.ID, d.Instance, credential.OrgID, credential.InstallationID, w.ConfigSHA256); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.DB.Exec(`UPDATE teams_v2_results SET state='approved' WHERE work_id=?`, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	mode := "none"
+	probe := httptest.NewServer(http.HandlerFunc(func(wr http.ResponseWriter, req *http.Request) {
+		calls++
+		if req.Method != http.MethodGet || !strings.HasSuffix(req.URL.Path, "/receipt") {
+			t.Error("declined work made non-receipt request")
+			wr.WriteHeader(500)
+			return
+		}
+		switch mode {
+		case "match":
+			_ = json.NewEncoder(wr).Encode(accepted)
+		case "absent":
+			wr.WriteHeader(404)
+			_, _ = wr.Write([]byte(`{"error":{"code":"receipt_not_found"}}`))
+		case "mismatch":
+			bad := accepted
+			bad.PayloadSHA256 = strings.Repeat("0", 64)
+			_ = json.NewEncoder(wr).Encode(bad)
+		default:
+			t.Error("unexpected receipt request")
+			wr.WriteHeader(500)
+		}
+	}))
+	defer probe.Close()
+	probeClient, e := teams.NewDeviceClient(probe.URL, credential.InstallationID, key, true)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer probeClient.Destroy()
+	if _, e = c.registerTeamsV2(ctx, cfg, probeClient, d, credential, w, merged, manifest); !errors.Is(e, errTeamsConsentStale) {
+		t.Fatalf("declined registration: %v", e)
+	}
+	if _, e = c.sendTeamsV2Approved(ctx, cfg, probeClient, d, credential, w.ID, manifest); !errors.Is(e, errTeamsConsentStale) {
+		t.Fatalf("declined send: %v", e)
+	}
+	if calls != 0 {
+		t.Fatalf("declined numeric work made %d network calls", calls)
+	}
+	bound, e := readTeamsV2Upload(ctx, c.reader(), w.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var savedBinding teams.SourceBinding
+	var savedAssignments []sourcewire.Assignment
+	if json.Unmarshal(bound.BindingJSON, &savedBinding) != nil || json.Unmarshal(bound.AssignmentsJSON, &savedAssignments) != nil {
+		t.Fatal("missing numeric binding fixture")
+	}
+	if _, e = c.stageTeamsV2Result(ctx, cfg, d, credential, teamsV2Registration{Upload: bound, Binding: savedBinding, Assignments: savedAssignments, Snapshot: merged, Work: w, Policy: policy}); !errors.Is(e, errTeamsConsentStale) {
+		t.Fatalf("declined stage: %v", e)
+	}
+
+	// A previous in-flight submission may have succeeded before decline; only
+	// its exact read-only receipt can be reconciled, never another submit.
+	if _, err = c.DB.Exec(`DELETE FROM teams_send_log WHERE work_id=?`, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.DB.Exec(`UPDATE teams_v2_results SET state='sending',receipt_json='' WHERE work_id=?`, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	mode = "match"
+	if _, e = c.sendTeamsV2Approved(ctx, cfg, probeClient, d, credential, w.ID, manifest); e != nil {
+		t.Fatalf("declined matching receipt: %v", e)
+	}
+	if calls != 1 || countRows(t, c, `SELECT COUNT(*) FROM teams_send_log WHERE work_id=?`, w.ID) != 1 {
+		t.Fatal("matching receipt was not recorded")
+	}
+	if _, err = c.DB.Exec(`UPDATE teams_v2_results SET state='needs_reconcile',receipt_json='' WHERE work_id=?`, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	mode = "absent"
+	if _, e = c.sendTeamsV2Approved(ctx, cfg, probeClient, d, credential, w.ID, manifest); !errors.Is(e, errTeamsConsentStale) {
+		t.Fatalf("declined absent receipt: %v", e)
+	}
+	if calls != 2 {
+		t.Fatal("absent receipt triggered another request")
+	}
+	mode = "mismatch"
+	if _, e = c.sendTeamsV2Approved(ctx, cfg, probeClient, d, credential, w.ID, manifest); !errors.Is(e, teams.ErrReceiptMismatch) {
+		t.Fatalf("declined mismatch: %v", e)
+	}
+	var heldState string
+	if e = c.DB.QueryRow(`SELECT state FROM teams_v2_results WHERE work_id=?`, w.ID).Scan(&heldState); e != nil || heldState != "unconfirmed" || calls != 3 {
+		t.Fatalf("mismatch state %q calls %d: %v", heldState, calls, e)
+	}
+	if _, err = c.DB.Exec(`UPDATE teams_v2_results SET state='accepted',receipt_json=? WHERE work_id=?`, draft.ReceiptJSON, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.DB.Exec(`DELETE FROM teams_v2_declines WHERE work_id=?`, w.ID); err != nil {
+		t.Fatal(err)
+	}
 	// Both real review handlers must reject stale displayed series configs.
 	seriesConfig, err := os.ReadFile("testdata/teams-report-series/manual_series_config.json")
 	if err != nil {
@@ -537,5 +636,17 @@ func TestTeamsV2InventoryWithholdsStaleEvidenceAndReportsPartial(t *testing.T) {
 	}
 	if len(stale.Items) != 1 || stale.Items[0].Protection != "unavailable" || len(stale.values) != 0 || stale.Coverage.OverlapUnresolved == 0 {
 		t.Fatalf("stale proof contributed: %+v", stale)
+	}
+	if _, err = c.DB.Exec(`DROP TABLE teams_v2_declines`); err != nil {
+		t.Fatal(err)
+	}
+	if _, e = c.registerTeamsV2(ctx, cfg, probeClient, d, credential, w, merged, manifest); e == nil || errors.Is(e, errTeamsConsentStale) {
+		t.Fatalf("decline read failure hidden in registration: %v", e)
+	}
+	if _, e = c.sendTeamsV2Approved(ctx, cfg, probeClient, d, credential, w.ID, manifest); e == nil || errors.Is(e, errTeamsConsentStale) {
+		t.Fatalf("decline read failure hidden in send: %v", e)
+	}
+	if calls != 3 {
+		t.Fatalf("failed decline read made an extra network call: %d", calls)
 	}
 }
