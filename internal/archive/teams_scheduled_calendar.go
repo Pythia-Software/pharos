@@ -68,7 +68,7 @@ func (c teamsScheduledCalendar) Boundary(index int) (time.Time, error) {
 	if index < 0 || index > 10000 || c.AnchorAt.IsZero() {
 		return time.Time{}, errTeamsQueryUnsupported
 	}
-	loc, err := time.LoadLocation(c.Timezone)
+	loc, err := loadTeamsScheduledLocation(c.Timezone)
 	if err != nil {
 		return time.Time{}, errTeamsQueryUnsupported
 	}

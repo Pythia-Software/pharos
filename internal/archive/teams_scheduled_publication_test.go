@@ -165,7 +165,7 @@ func TestTeamsScheduledTimingVectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprintf("%x", sha256.Sum256(data)) != "52a6852318ef37678601885a4aad74fd087feb718cd945eba3e8bcb9a141a26f" {
+	if fmt.Sprintf("%x", sha256.Sum256(data)) != "996048eeebb218ee9add0f217d68fda299e6f6862107367e82bca3f8f0c60101" {
 		t.Fatal("timing vectors changed")
 	}
 	var cases []struct {
