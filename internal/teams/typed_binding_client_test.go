@@ -98,6 +98,9 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 				next := floor
 				next.NextIssuedAt++
 				json.NewEncoder(w).Encode(TypedBindingReceipt{Status: "superseded", Floor: &next})
+			case "issuance-expired":
+				w.WriteHeader(http.StatusConflict)
+				io.WriteString(w, `{"error":{"code":"source_issuance_expired"}}`)
 			case "multiple-profiles":
 				extra := b.Profiles[0]
 				extra.ProfileID = "future_usage"
@@ -145,6 +148,11 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 				json.NewEncoder(w).Encode(receipt)
 			}
 		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, base+"/"+b.BindingID+"/profiles/"+b.Profiles[0].ProfileID+"/1/assignments/"):
+			if mode == "page-stale" {
+				w.WriteHeader(http.StatusConflict)
+				io.WriteString(w, `{"error":{"code":"stale_source_binding"}}`)
+				return
+			}
 			p := page
 			if strings.HasSuffix(r.URL.Path, "/1") {
 				if mode == "incomplete" {
@@ -239,7 +247,7 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 			t.Fatalf("accepted %s", m)
 		}
 	}
-	for modeName, want := range map[string]error{"expired": ErrTypedBindingExpired, "stale": ErrTypedBindingStale, "page": ErrTypedBinding, "multiple-profiles": ErrTypedBindingUnsupported} {
+	for modeName, want := range map[string]error{"expired": ErrTypedBindingExpired, "stale": ErrTypedBindingStale, "page": ErrTypedBinding, "multiple-profiles": ErrTypedBindingUnsupported, "page-stale": ErrTypedBindingStale, "issuance-expired": ErrTypedBindingExpired} {
 		mode = modeName
 		if _, e := verified(); !errors.Is(e, want) {
 			t.Fatalf("%s: %v", mode, e)

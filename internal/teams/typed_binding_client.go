@@ -254,6 +254,21 @@ func (v VerifiedTypedBinding) Pages() [][]sourcewire.TypedAssignmentPage {
 	return pages
 }
 
+// Preserve the server's status and code for diagnostics while exposing the
+// same dispositions for a replay response and a later assignment read.
+func typedBindingReadError(err error) error {
+	var remote *HTTPError
+	if errors.As(err, &remote) && remote.Status == http.StatusConflict {
+		switch remote.Code {
+		case "stale_source_binding":
+			return fmt.Errorf("%w: %w", ErrTypedBindingStale, err)
+		case "source_issuance_expired":
+			return fmt.Errorf("%w: %w", ErrTypedBindingExpired, err)
+		}
+	}
+	return err
+}
+
 // IssueVerifiedTypedBinding verifies the current service's codex_request_usage
 // v1 assignment chain. Persist the request before calling. Reuse its exact bytes
 // after transport failure. A superseded issuance carries a floor for a new ID;
@@ -267,7 +282,7 @@ func (c *DeviceClient) IssueVerifiedTypedBinding(ctx context.Context, orgID, per
 	// the service even after accepting that identity advances the floor.
 	receipt, err := c.IssueTypedBinding(ctx, orgID, personID, libraryID, workID, windowSHA256, request)
 	if err != nil {
-		return zero, err
+		return zero, typedBindingReadError(err)
 	}
 	switch receipt.Status {
 	case "superseded":
@@ -292,7 +307,7 @@ func (c *DeviceClient) IssueVerifiedTypedBinding(ctx context.Context, orgID, per
 		return zero, ErrTypedBindingExpired
 	}
 	if err != nil {
-		return zero, err
+		return zero, typedBindingReadError(err)
 	}
 	pages := [][]sourcewire.TypedAssignmentPage{chain}
 	body, err := json.Marshal(request)
