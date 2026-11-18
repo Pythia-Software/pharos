@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -197,4 +200,125 @@ func (f *teamsTestOriginTransport) ObserveSourceProtection(_ context.Context, _ 
 		return sourcewire.ProtectionReceipt{Status: "held", ObservationID: v.ObservationID, ObservationSHA256: sourcewire.ProtectionDigest(raw), SafetyPending: true}, nil
 	}
 	return sourcewire.ProtectionReceipt{Status: "accepted", ObservationID: v.ObservationID, Revision: v.Revision, ObservationSHA256: sourcewire.ProtectionDigest(raw), PrivacyRevision: 1, OriginProtection: v.Protection}, nil
+}
+
+func TestTeamsRecoveryOriginScanRequiresCompleteCursorChain(t *testing.T) {
+	opaque := func(b byte) string { return base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{b}, 32)) }
+	const run = "00000000-0000-4000-8000-000000000003"
+	start := sourcewire.RecoveryStartReceipt{Status: "proof_required", RunID: run, Generation: 3, ServerTime: 100, ExpiresAt: 200, UnacceptedFloor: 90, ExternalProofRequired: true}
+	requests := []sourcewire.RecoveryPageRequest{{Version: 1, Contract: sourcewire.SourceRecoveryContract, IssuedAt: 100, RunID: run, Family: "origins"}, {Version: 1, Contract: sourcewire.SourceRecoveryContract, IssuedAt: 101, RunID: run, Family: "origins", Cursor: "next"}}
+	origin := teamsRecoveryOrigin{Token: opaque(1), Witness: opaque(2), Revision: 4, EvidenceRevision: opaque(3), Protection: "unknown", Classification: sourcewire.Classification{State: "unclassified"}}
+	raw, _ := json.Marshal(origin)
+	pages := []sourcewire.RecoveryPageReceipt{{Status: "proof_required", RunID: run, Generation: 3, ServerTime: 101, UnacceptedFloor: 90, ExternalProofRequired: true, Family: "origins", Items: []json.RawMessage{raw}, NextCursor: "next"}, {Status: "proof_required", RunID: run, Generation: 3, ServerTime: 102, UnacceptedFloor: 91, ExternalProofRequired: true, Family: "origins", Items: []json.RawMessage{}}}
+	if rev, protection, err := teamsOriginRevisionFromRecoveryScan(start, requests, pages, origin.Token, origin.Witness); err != nil || rev != 4 || protection != "unknown" {
+		t.Fatalf("complete scan: %d %q %v", rev, protection, err)
+	}
+	if _, _, err := teamsOriginRevisionFromRecoveryScan(start, requests[:1], pages[:1], origin.Token, origin.Witness); err == nil {
+		t.Fatal("partial prefix accepted")
+	}
+	wrongRequests := append([]sourcewire.RecoveryPageRequest(nil), requests...)
+	wrongRequests[1].Cursor = "other"
+	if _, _, err := teamsOriginRevisionFromRecoveryScan(start, wrongRequests, pages, origin.Token, origin.Witness); err == nil {
+		t.Fatal("cursor splice accepted")
+	}
+	wrongPages := append([]sourcewire.RecoveryPageReceipt(nil), pages...)
+	wrongPages[1].UnacceptedFloor = 89
+	if _, _, err := teamsOriginRevisionFromRecoveryScan(start, requests, wrongPages, origin.Token, origin.Witness); err == nil {
+		t.Fatal("floor rollback accepted")
+	}
+	wrongPages = append([]sourcewire.RecoveryPageReceipt(nil), pages...)
+	wrongPages[1].Items = []json.RawMessage{raw}
+	if _, _, err := teamsOriginRevisionFromRecoveryScan(start, requests, wrongPages, origin.Token, origin.Witness); err == nil {
+		t.Fatal("cross-page duplicate accepted")
+	}
+	// All-zero opaque values are valid and must not collide with an
+	// implementation sentinel used while validating a whole scan.
+	zeros := origin
+	zeros.Token = opaque(0)
+	zeroRaw, _ := json.Marshal(zeros)
+	zeroPage := pages[1]
+	zeroPage.Items = []json.RawMessage{zeroRaw}
+	if _, err := teamsBuildRecoveryOriginScan(start, requests[:1], []sourcewire.RecoveryPageReceipt{zeroPage}); err != nil {
+		t.Fatalf("valid zero token: %v", err)
+	}
+	heldPages := append([]sourcewire.RecoveryPageReceipt(nil), pages...)
+	heldPages[0].Held = true
+	heldPages[0].Status = "held"
+	scan, err := teamsBuildRecoveryOriginScan(start, requests, heldPages)
+	if err != nil || !scan.held {
+		t.Fatalf("earlier hold lost: %v", err)
+	}
+	emptyPages := append([]sourcewire.RecoveryPageReceipt(nil), pages...)
+	emptyPages[0].Items = []json.RawMessage{}
+	if _, err = teamsBuildRecoveryOriginScan(start, requests, emptyPages); err == nil {
+		t.Fatal("empty non-final page accepted")
+	}
+	other := origin
+	other.Token = opaque(4)
+	other.Witness = origin.Witness
+	otherRaw, _ := json.Marshal(other)
+	duplicateWitness := append([]sourcewire.RecoveryPageReceipt(nil), pages...)
+	duplicateWitness[1].Items = []json.RawMessage{otherRaw}
+	if _, err = teamsBuildRecoveryOriginScan(start, requests, duplicateWitness); err == nil {
+		t.Fatal("duplicate witness accepted")
+	}
+	wrongPages = append([]sourcewire.RecoveryPageReceipt(nil), pages...)
+	wrongPages[1].NextCursor = "later"
+	if _, _, err := teamsOriginRevisionFromRecoveryScan(start, requests, wrongPages, origin.Token, origin.Witness); err == nil {
+		t.Fatal("unfinished scan accepted")
+	}
+}
+
+func TestTeamsRecoveryOriginScanMaximumBound(t *testing.T) {
+	const run = "00000000-0000-4000-8000-000000000003"
+	start := sourcewire.RecoveryStartReceipt{Status: "proof_required", RunID: run, Generation: 1, ServerTime: 100, ExpiresAt: 200, ExternalProofRequired: true}
+	var origins []teamsRecoveryOrigin
+	opaque := func(kind string, i int) string {
+		v := sha256.Sum256([]byte(fmt.Sprintf("synthetic-%s-%d", kind, i)))
+		return base64.RawURLEncoding.EncodeToString(v[:])
+	}
+	for i := 0; i < 2000; i++ {
+		origins = append(origins, teamsRecoveryOrigin{Token: opaque("token", i), Witness: opaque("witness", i), Revision: 1, EvidenceRevision: opaque("evidence", i), Protection: "unknown", Classification: sourcewire.Classification{State: "unclassified"}})
+	}
+	sort.Slice(origins, func(i, j int) bool { return origins[i].Token < origins[j].Token })
+	var requests []sourcewire.RecoveryPageRequest
+	var pages []sourcewire.RecoveryPageReceipt
+	for i := 0; i < 4; i++ {
+		cursor := ""
+		if i > 0 {
+			cursor = fmt.Sprintf("cursor-%d", i)
+		}
+		next := ""
+		if i < 3 {
+			next = fmt.Sprintf("cursor-%d", i+1)
+		}
+		requests = append(requests, sourcewire.RecoveryPageRequest{Version: 1, Contract: sourcewire.SourceRecoveryContract, IssuedAt: 100, RunID: run, Family: "origins", Cursor: cursor})
+		p := sourcewire.RecoveryPageReceipt{Status: "proof_required", RunID: run, Generation: 1, ServerTime: 101, ExternalProofRequired: true, Family: "origins", Items: []json.RawMessage{}, NextCursor: next}
+		for _, origin := range origins[i*500 : (i+1)*500] {
+			raw, _ := json.Marshal(origin)
+			p.Items = append(p.Items, raw)
+		}
+		pages = append(pages, p)
+	}
+	scan, err := teamsBuildRecoveryOriginScan(start, requests, pages)
+	if err != nil || len(scan.byToken) != 2000 || len(scan.byWitness) != 2000 {
+		t.Fatalf("maximum scan: %v", err)
+	}
+	for _, v := range origins {
+		rev, _, e := scan.lookup(v.Token, v.Witness)
+		if e != nil || rev != 1 {
+			t.Fatalf("lookup: %v", e)
+		}
+	}
+	requests = append(requests, requests[3])
+	pages = append(pages, pages[3])
+	if _, err = teamsBuildRecoveryOriginScan(start, requests, pages); err == nil {
+		t.Fatal("fifth page accepted")
+	}
+	oversized := pages[:1]
+	oversized[0].Items = []json.RawMessage{make([]byte, teamsRecoveryMaxOriginBytes+1)}
+	oversized[0].NextCursor = ""
+	if _, err = teamsBuildRecoveryOriginScan(start, requests[:1], oversized); err == nil {
+		t.Fatal("oversized receipt accepted")
+	}
 }

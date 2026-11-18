@@ -65,7 +65,7 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			for _, item := range s.teamsWorker.items {
 				items = append(items, item)
 			}
-			next, checking, problem := s.teamsWorker.next, s.teamsWorker.checking, s.teamsWorker.problem
+			next, checking, problem, sourceProblem := s.teamsWorker.next, s.teamsWorker.checking, s.teamsWorker.problem, s.teamsWorker.sourceProblem
 			generation, workScope := s.teamsWorker.generation, s.teamsWorker.scope
 			s.teamsWorker.mu.Unlock()
 			type row struct {
@@ -155,7 +155,11 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			if e = s.Catalog.reader().QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM teams_model_permission WHERE id=1 AND library_id=? AND instance_id=? AND org_id=? AND installation_id=? AND host_id=? AND settings_revision=?)`, d.ID, d.Instance, credential.OrgID, credential.InstallationID, currentHost().ID, settings.SettingsRevision).Scan(&modelApproved); e != nil {
 				return e
 			}
-			writeJSON(w, map[string]any{"enabled": settings.Enabled, "optOut": settings.MetricsOptOut, "settingsRevision": settings.SettingsRevision, "acknowledgedPolicy": settings.AcknowledgedPolicy, "nextCheck": next, "checking": checking, "problem": problem, "items": out, "modelApproved": modelApproved}, 200)
+			response := map[string]any{"enabled": settings.Enabled, "optOut": settings.MetricsOptOut, "settingsRevision": settings.SettingsRevision, "acknowledgedPolicy": settings.AcknowledgedPolicy, "nextCheck": next, "checking": checking, "problem": problem, "items": out, "modelApproved": modelApproved}
+			if teamsSourcePilotEnabled && workScope == scope && settings.Enabled && sourceProblem != "" {
+				response["sourceProblem"] = sourceProblem
+			}
+			writeJSON(w, response, 200)
 			return nil
 		case r.URL.Path == "/api/teams/worker/protection-policy" && r.Method == http.MethodGet:
 			acknowledged, e := readTeamsProtectionAcknowledgement(r.Context(), s.Catalog.reader(), d, credential)

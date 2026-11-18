@@ -1451,7 +1451,7 @@ var moveRetainedTables = []string{"ui_preferences", "query_table_query_snapshots
 	"teams_v2_uploads", "teams_v2_results", "teams_v2_declines", "teams_content_runs",
 	// Preserve exact source evidence and transport custody; copy parents before
 	// children. Settings stay disabled and continuity held after replacement.
-	"teams_origin_outbox", "teams_profile_outbox", "teams_profile_outbox_pages", "teams_recovery_stage_batches", "teams_recovery_stage_pages",
+	"teams_origin_outbox", "teams_origin_attempts", "teams_origin_runs", "teams_origin_run_pages", "teams_source_transfer_ack", "teams_profile_outbox", "teams_profile_outbox_pages", "teams_recovery_stage_batches", "teams_recovery_stage_pages",
 	"safety_state", "safety_cart", "safety_handoffs", "fix_state", "fix_cart", "fix_handoffs",
 	"source_states", "source_record_states", "source_item_states", "source_terminal_states", "sync_generations", "hosts", "protections", "repository_retirements", "library_delivery_checkpoints", "library_workspace_delivery_checkpoints"}
 
@@ -1484,6 +1484,18 @@ func cleanupDeliveredHistory(ctx context.Context, source Config, receipt library
 			return e
 		}
 		if active {
+			// The replacement catalog starts at format 34. Until a reviewed
+			// custody-preserving 35-to-35 move exists, retain the source and
+			// its host checkpoint instead of dropping journal evidence.
+			var format string
+			if e = catalog.DB.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='schema_version'`).Scan(&format); e != nil {
+				catalog.Close()
+				return e
+			}
+			if format == "35" {
+				catalog.Close()
+				return fmt.Errorf("source protection journal needs reconciliation before this library can be moved")
+			}
 			lease, e := catalog.teamsSharingLease()
 			if e != nil {
 				catalog.Close()
