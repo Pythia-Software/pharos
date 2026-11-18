@@ -54,7 +54,7 @@ func (c *Catalog) teamsTightenRetainedOrigin(ctx context.Context, cfg Config, cl
 			if !ok || old.Witness != item.Witness {
 				continue
 			}
-			stronger := (old.Protection == "non_private" && (item.Protection == "private" || item.Protection == "unknown")) || (old.Protection == "unknown" && item.Protection == "private")
+			stronger := (old.Protection == "non_private" && (item.Protection == "private" || item.Protection == "unknown")) || (old.Protection == "unknown" && item.Protection == "private") || (old.EvidenceRevision != item.EvidenceRevision && ((old.Protection == "explicit_private" && item.Protection == "private") || (old.Protection == "unknown" && item.Protection == "unknown")))
 			if !stronger {
 				continue
 			}

@@ -365,3 +365,40 @@ func (c *Catalog) completeTeamsLocalOriginRun(ctx context.Context, cfg Config, d
 		return e
 	})
 }
+
+// teamsRecoveryScanByRunIn reconstructs a complete checkpointed signed scan.
+func teamsRecoveryScanByRunIn(ctx context.Context, tx *sql.Tx, key string) (*teamsRecoveryOriginScan, error) {
+	var raw []byte
+	if err := tx.QueryRowContext(ctx, `SELECT start_receipt_json FROM teams_origin_runs WHERE run_key=? AND state='completed'`, key).Scan(&raw); err != nil {
+		return nil, err
+	}
+	var start sourcewire.RecoveryStartReceipt
+	if !teams.ValidUniqueJSON(raw) || json.Unmarshal(raw, &start) != nil {
+		return nil, errTeamsProtectionHeld
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT page_index,request_json,receipt_json FROM teams_origin_run_pages WHERE run_key=? ORDER BY page_index`, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var requests []sourcewire.RecoveryPageRequest
+	var receipts []sourcewire.RecoveryPageReceipt
+	for rows.Next() {
+		var i int
+		var a, b []byte
+		if err = rows.Scan(&i, &a, &b); err != nil {
+			return nil, err
+		}
+		req, e := sourcewire.DecodeRecoveryPage(a)
+		var receipt sourcewire.RecoveryPageReceipt
+		if i != len(requests) || e != nil || !teams.ValidUniqueJSON(b) || json.Unmarshal(b, &receipt) != nil {
+			return nil, errTeamsProtectionHeld
+		}
+		requests = append(requests, req)
+		receipts = append(receipts, receipt)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return teamsBuildRecoveryOriginScan(start, requests, receipts)
+}

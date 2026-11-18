@@ -172,7 +172,9 @@ func teamsJournalOriginIn(ctx context.Context, tx *sql.Tx, d LibraryDescriptor, 
 		}
 	}
 	if scope.tightening {
-		if !((protection == "non_private" && (nextProtection == "unknown" || nextProtection == "explicit_private")) || (protection == "unknown" && nextProtection == "explicit_private")) {
+		prior, exists := scan.byToken[item.Token]
+		sameRestrictionNewEvidence := exists && prior.EvidenceRevision != item.EvidenceRevision && ((protection == "explicit_private" && nextProtection == "explicit_private") || (protection == "unknown" && nextProtection == "unknown"))
+		if !((protection == "non_private" && (nextProtection == "unknown" || nextProtection == "explicit_private")) || (protection == "unknown" && nextProtection == "explicit_private") || sameRestrictionNewEvidence) {
 			return nil, errTeamsProtectionHeld
 		}
 	} else if protection != "" && protection != "unknown" && protection != nextProtection {

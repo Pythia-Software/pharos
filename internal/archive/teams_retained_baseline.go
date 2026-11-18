@@ -121,7 +121,7 @@ func teamsBaselineReconcileHistoryMode(ctx context.Context, tx *sql.Tx, d Librar
 		if !ok || item.Witness != origin.Witness {
 			return fmt.Errorf("origin evidence: %w", errTeamsProtectionHeld)
 		}
-		stronger := (origin.Protection == "non_private" && (item.Protection == "private" || item.Protection == "unknown")) || (origin.Protection == "unknown" && item.Protection == "private")
+		stronger := (origin.Protection == "non_private" && (item.Protection == "private" || item.Protection == "unknown")) || (origin.Protection == "unknown" && item.Protection == "private") || (origin.EvidenceRevision != item.EvidenceRevision && ((origin.Protection == "explicit_private" && item.Protection == "private") || (origin.Protection == "unknown" && item.Protection == "unknown")))
 		if item.EvidenceRevision != origin.EvidenceRevision && !(tightening && stronger) {
 			return fmt.Errorf("origin evidence: %w", errTeamsProtectionHeld)
 		}
@@ -387,7 +387,7 @@ func (c *Catalog) teamsProduceRetainedBaseline(ctx context.Context, cfg Config, 
 	// A durable zero attempt marker proves that no PUT began. Retire only
 	// those exact unsent rows under the same sharing/capture barriers.
 	err = c.writeTransaction(censusCtx, "teams-baseline-retire-unsent", func(tx *sql.Tx) error {
-		_, e := tx.ExecContext(censusCtx, `DELETE FROM teams_origin_outbox WHERE observation_id IN (SELECT o.observation_id FROM teams_origin_outbox o JOIN teams_origin_attempts a ON a.observation_id=o.observation_id WHERE o.origin=? AND o.org_id=? AND o.person_id=? AND o.installation_id=? AND o.library_id=? AND o.instance_id=? AND o.state='prepared' AND o.receipt_json IS NULL AND a.first_attempt_at=0 AND a.terminal_code='' ORDER BY o.observation_id LIMIT 8)`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance)
+		_, e := tx.ExecContext(censusCtx, `DELETE FROM teams_origin_outbox WHERE observation_id IN (SELECT o.observation_id FROM teams_origin_outbox o JOIN teams_origin_attempts a ON a.observation_id=o.observation_id WHERE o.origin=? AND o.org_id=? AND o.person_id=? AND o.installation_id=? AND o.library_id=? AND o.instance_id=? AND o.state='prepared' AND o.receipt_json IS NULL AND ((a.first_attempt_at=0 AND a.terminal_code='') OR (a.first_attempt_at>0 AND a.terminal_code IN ('first_rejected_source_issuance_expired','first_rejected_source_resync_required','first_rejected_stale_protection_revision'))) ORDER BY o.observation_id LIMIT 8)`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance)
 		return e
 	})
 	if err != nil {

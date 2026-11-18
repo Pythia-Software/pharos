@@ -280,4 +280,12 @@ func TestTeamsRetainedBaselineSyntheticLoopback(t *testing.T) {
 	if err = c.DB.QueryRow(`SELECT count(*) FROM teams_origin_outbox WHERE state='accepted' AND receipt_json IS NOT NULL`).Scan(&receiptCount); err != nil || receiptCount != 4 {
 		t.Fatalf("receipt history: %d %v", receiptCount, err)
 	}
+	var serverStatus struct {
+		Consumed int `json:"consumed"`
+		Receipts int `json:"receipts"`
+	}
+	control("/_test/source-refresh-status", map[string]string{}, &serverStatus)
+	if serverStatus.Consumed != 1 || serverStatus.Receipts != 4 {
+		t.Fatalf("server retained receipts and refresh: %+v", serverStatus)
+	}
 }

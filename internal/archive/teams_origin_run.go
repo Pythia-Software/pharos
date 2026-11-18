@@ -126,6 +126,12 @@ func (c *Catalog) teamsRecoveryPageForScope(ctx context.Context, cfg Config, cli
 			var priorKey string
 			e = tx.QueryRowContext(ctx, `SELECT run_key,start_json,start_receipt_json,expires_at FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=? AND token='batch-safety' AND state='completed' AND expires_at>? ORDER BY rowid DESC LIMIT 1`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, time.Now().UTC().Unix()).Scan(&priorKey, &row.start, &row.startReceipt, &row.expires)
 			if e == nil {
+				priorScan, x := teamsRecoveryScanByRunIn(ctx, tx, priorKey)
+				if x != nil || priorScan.held || teamsRequireRetainedRecoveryFloorIn(ctx, tx, d, credential, priorScan) != nil || teamsBaselineReconcileHistoryMode(ctx, tx, d, credential, snapshot, priorScan, true) != nil {
+					e = sql.ErrNoRows
+				}
+			}
+			if e == nil {
 				nonce, x := teamsCheckpointRandom()
 				if x != nil {
 					return x
@@ -211,6 +217,12 @@ func (c *Catalog) teamsRecoveryPageForScope(ctx context.Context, cfg Config, cli
 		})
 	}
 	var start sourcewire.RecoveryStartReceipt
+	retireStale := func() error {
+		return c.writeTransaction(ctx, "teams-origin-run-stale", func(tx *sql.Tx) error {
+			_, e := tx.ExecContext(ctx, `UPDATE teams_origin_runs SET state='completed' WHERE run_key=? AND state IN ('prepared','started','ready')`, row.key)
+			return e
+		})
+	}
 	if len(row.startReceipt) == 0 {
 		if err = recheck(); err != nil {
 			return nil, err
@@ -230,6 +242,12 @@ func (c *Catalog) teamsRecoveryPageForScope(ctx context.Context, cfg Config, cli
 				return nil, errTeamsPilotPending
 			}
 			return nil, errTeamsPilotRetry
+		}
+		if start.Status == "restart_required" {
+			if e := retireStale(); e != nil {
+				return nil, e
+			}
+			return nil, errTeamsPilotMore
 		}
 		if start.Status == "busy" || start.Status == "cleanup_pending" || start.Status == "restart_exhausted" || start.Status == "capacity_blocked" {
 			return nil, errTeamsPilotPending
@@ -392,6 +410,13 @@ func (c *Catalog) teamsRecoveryPageForScope(ctx context.Context, cfg Config, cli
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
+		}
+		var response *teams.HTTPError
+		if errors.As(err, &response) && response.Status == 409 && response.Code == "source_recovery_restart_required" {
+			if e := retireStale(); e != nil {
+				return nil, e
+			}
+			return nil, errTeamsPilotMore
 		}
 		if errors.Is(err, teams.ErrInvalidRecoveryPage) {
 			if e := hold(); e != nil {
