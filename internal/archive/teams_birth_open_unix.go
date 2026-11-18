@@ -16,6 +16,8 @@ func teamsOpenManagedCatalog(ctx context.Context, cfg Config) (*Catalog, bool, e
 	if !cfg.Library {
 		return nil, false, nil
 	}
+	descriptor, descriptorErr := readLibraryDescriptor(cfg)
+	managedMarker := descriptorErr == nil && descriptor.ManagedBirth
 	// Legacy catalogs keep their ordinary startup even if host credential
 	// storage is unavailable. This probe is read-only and does not Initialize.
 	db, e := sql.Open("sqlite", readerDSN(cfg.CatalogPath))
@@ -27,28 +29,28 @@ func teamsOpenManagedCatalog(ctx context.Context, cfg Config) (*Catalog, bool, e
 	_ = db.Close()
 	if e != nil {
 		// A damaged bound library must not fall back to the legacy opener.
-		if teamsHasRetainedBirth(cfg) {
+		if managedMarker || teamsHasRetainedBirth(cfg) {
 			return nil, true, errTeamsProtectionContinuity
 		}
 		return nil, false, nil
 	}
 	parent, e := filepath.EvalSymlinks(filepath.Dir(filepath.Dir(cfg.Path)))
 	if e != nil {
-		if version == "35" {
+		if version == "35" || managedMarker {
 			return nil, true, e
 		}
 		return nil, false, nil
 	}
 	path := filepath.Join(parent, filepath.Base(filepath.Dir(cfg.Path)))
 	if cfg.Application == "" {
-		if version == "35" {
+		if version == "35" || managedMarker {
 			return nil, true, errTeamsProtectionContinuity
 		}
 		return nil, false, nil
 	}
 	store, e := teamsCredentialStore(cfg)
 	if e != nil {
-		if version == "35" {
+		if version == "35" || managedMarker {
 			return nil, true, e
 		}
 		return nil, false, nil
@@ -58,12 +60,15 @@ func teamsOpenManagedCatalog(ctx context.Context, cfg Config) (*Catalog, bool, e
 	if version != "35" {
 		// A retained birth record prevents a restored older image from being
 		// silently opened as ordinary data. A reserved unrelated path is inert.
-		if e == nil && (r.Phase == "committed" || r.Phase == "image_bound") {
+		if managedMarker || (e == nil && (r.Phase == "committed" || r.Phase == "image_bound")) {
 			return nil, true, errTeamsProtectionContinuity
 		}
 		return nil, false, nil
 	}
 	if errors.Is(e, os.ErrNotExist) || (e == nil && (r.Phase == "reserved" || r.Phase == "abandoned")) {
+		if managedMarker {
+			return nil, true, errTeamsProtectionContinuity
+		}
 		// Existing authenticated v35 upgrades have their own host checkpoint;
 		// verify that continuity without inventing a birth record.
 		d, e := readLibraryDescriptor(cfg)
@@ -88,7 +93,7 @@ func teamsOpenManagedCatalog(ctx context.Context, cfg Config) (*Catalog, bool, e
 		return nil, true, err
 	}
 	d, err := readLibraryDescriptor(cfg)
-	if err != nil || d.ID != r.LibraryID || d.Instance != r.InstanceID {
+	if err != nil || !d.ManagedBirth || d.ID != r.LibraryID || d.Instance != r.InstanceID {
 		return nil, true, errTeamsProtectionContinuity
 	}
 	// mode=rw prevents accidentally replacing a missing catalog with an empty DB.
@@ -106,7 +111,7 @@ func teamsOpenManagedCatalog(ctx context.Context, cfg Config) (*Catalog, bool, e
 				return errTeamsProtectionContinuity
 			}
 			currentDescriptor, e := readLibraryDescriptor(cfg)
-			if e != nil || currentDescriptor.ID != r.LibraryID || currentDescriptor.Instance != r.InstanceID {
+			if e != nil || !currentDescriptor.ManagedBirth || currentDescriptor.ID != r.LibraryID || currentDescriptor.Instance != r.InstanceID {
 				return errTeamsProtectionContinuity
 			}
 			return teamsVerifyBirthLocation(path, r)

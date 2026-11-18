@@ -130,7 +130,25 @@ type Catalog struct {
 	sessionPreferences sessionPreferenceBuffer
 }
 
+// A path-only opener cannot authenticate a fresh managed birth. Callers with
+// application identity use teamsOpenManagedCatalog before any catalog work.
+func rejectUnboundManagedPath(path string) error {
+	descriptor := filepath.Join(filepath.Dir(filepath.Dir(path)), libraryDescriptorName)
+	data, err := os.ReadFile(descriptor)
+	if err != nil {
+		return nil
+	}
+	var d LibraryDescriptor
+	if json.Unmarshal(data, &d) == nil && d.ManagedBirth {
+		return errTeamsProtectionContinuity
+	}
+	return nil
+}
+
 func OpenCatalog(path string) (*Catalog, error) {
+	if err := rejectUnboundManagedPath(path); err != nil {
+		return nil, err
+	}
 	return openCatalog(path, func(c *Catalog) error { return c.initializeLocked(true) })
 }
 

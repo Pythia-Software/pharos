@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/gbdubs/pharos/internal/platform/credentialstore"
 )
 
 func TestTeamsBirthStagingExclusive(t *testing.T) {
@@ -69,6 +71,18 @@ func TestTeamsCreateManagedLibrary(t *testing.T) {
 	if err != nil || d.ID == "" || d.Instance == "" {
 		t.Fatalf("descriptor: %v", err)
 	}
+	if c, e := OpenCatalog(cfg.CatalogPath); e == nil {
+		_ = c.Close()
+		t.Fatal("path-only writer accepted managed birth")
+	}
+	if c, e := OpenCatalogForQuery(cfg.CatalogPath); e == nil {
+		_ = c.Close()
+		t.Fatal("path-only query accepted managed birth")
+	}
+	if c, e := openCatalogReadOnly(cfg.CatalogPath); e == nil {
+		_ = c.Close()
+		t.Fatal("path-only read accepted managed birth")
+	}
 	store, err := teamsCredentialStore(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -109,6 +123,7 @@ func TestTeamsCreateManagedLibrary(t *testing.T) {
 	if err = os.WriteFile(copyPath, copyBytes, 0600); err != nil {
 		t.Fatal(err)
 	}
+	initialImage := append([]byte(nil), copyBytes...)
 	redirected := cfg
 	redirected.CatalogPath = copyPath
 	if _, _, err = teamsOpenManagedCatalog(context.Background(), redirected); err == nil {
@@ -165,6 +180,19 @@ func TestTeamsCreateManagedLibrary(t *testing.T) {
 	if err = catalog.Close(); err != nil {
 		t.Fatal(err)
 	}
+	advancedImage, err := os.ReadFile(cfg.CatalogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(cfg.CatalogPath, initialImage, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = teamsOpenManagedCatalog(context.Background(), cfg); err == nil {
+		t.Fatal("rolled-back catalog accepted")
+	}
+	if err = os.WriteFile(cfg.CatalogPath, advancedImage, 0600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = teamsCreateManagedLibrary(context.Background(), cfg.Application, target, "Fresh"); err != nil {
 		t.Fatalf("registration retry: %v", err)
 	}
@@ -179,6 +207,19 @@ func TestTeamsCreateManagedLibrary(t *testing.T) {
 	}
 	if _, _, err = teamsOpenManagedCatalog(context.Background(), cfg); err == nil {
 		t.Fatal("unsafe sidecar accepted")
+	}
+	if err = os.Remove(filepath.Join(target, "catalog", "catalog.sqlite3-wal")); err != nil {
+		t.Fatal(err)
+	}
+	current, _, err := teamsReadBirthReservation(store, reservationKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Delete(reservationKey, current); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = teamsOpenManagedCatalog(context.Background(), cfg); err == nil {
+		t.Fatal("missing host birth record accepted")
 	}
 }
 
@@ -202,6 +243,15 @@ func TestTeamsBirthDoesNotClaimExistingLibrary(t *testing.T) {
 			_ = c.Close()
 		}
 		t.Fatalf("legacy library claimed: %v", err)
+	}
+	override(t, &teamsCredentialStore, func(Config) (credentialstore.Store, error) {
+		return nil, errors.New("synthetic unavailable host storage")
+	})
+	if c, found, err := teamsOpenManagedCatalog(context.Background(), cfg); err != nil || found {
+		if c != nil {
+			_ = c.Close()
+		}
+		t.Fatalf("legacy depended on birth storage: %v", err)
 	}
 }
 

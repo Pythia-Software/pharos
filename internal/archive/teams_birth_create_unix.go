@@ -155,7 +155,7 @@ func teamsCreateManagedLibrary(ctx context.Context, application, path, name stri
 		if e != nil {
 			return Config{}, e
 		}
-		d := LibraryDescriptor{Version: libraryFormatVersion, ID: lib, Instance: instance}
+		d := LibraryDescriptor{Version: libraryFormatVersion, ID: lib, Instance: instance, ManagedBirth: true}
 		stage, e := teamsStageBirth(absolute, name, image, d, libraryVolumeIdentity)
 		if e != nil {
 			return Config{}, e
