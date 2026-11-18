@@ -13,7 +13,17 @@ import (
 	"github.com/gbdubs/pharos/internal/teams/sourcewire"
 )
 
-var errTypedBinding = errors.New("invalid Teams typed binding response")
+var (
+	ErrTypedBinding            = errors.New("invalid Teams typed binding response")
+	ErrTypedBindingStale       = errors.New("Teams typed binding is stale")
+	ErrTypedBindingExpired     = errors.New("Teams typed binding expired")
+	ErrTypedBindingUnsupported = errors.New("unsupported Teams typed binding profile")
+)
+
+// TypedBindingSuperseded carries the server's floor for the next issuance.
+type TypedBindingSuperseded struct{ Floor TypedBindingFloor }
+
+func (*TypedBindingSuperseded) Error() string { return "Teams typed binding superseded" }
 
 // TypedBindingFloor is the service's issuance floor for the exact work and device.
 type TypedBindingFloor struct {
@@ -100,14 +110,14 @@ func validTypedFloor(f *TypedBindingFloor) bool {
 func (c *DeviceClient) TypedBindingFloor(ctx context.Context, workID string) (TypedBindingFloor, error) {
 	var out TypedBindingFloor
 	if !validDeviceID(workID) {
-		return out, errTypedBinding
+		return out, ErrTypedBinding
 	}
 	var raw json.RawMessage
 	if err := c.exchange(ctx, http.MethodGet, "/v1/device/work/"+workID+"/typed-source-bindings/floor", nil, &raw); err != nil {
 		return out, err
 	}
 	if len(raw) > 4096 || !exactTypedJSON(raw, &out) || !validTypedFloor(&out) {
-		return TypedBindingFloor{}, errTypedBinding
+		return TypedBindingFloor{}, ErrTypedBinding
 	}
 	return out, nil
 }
@@ -119,7 +129,7 @@ func (c *DeviceClient) IssueTypedBinding(ctx context.Context, orgID, personID, l
 	id, err := sourcewire.TypedBindingID(orgID, personID, c.installation, libraryID, workID, request)
 	const maxSafeInteger = 1<<53 - 1
 	if err != nil || id != request.BindingID || request.CatalogRevision != request.LocalRevision || !sourceDigest(windowSHA256) || request.InventoryRevision > maxSafeInteger || request.LocalRevision > maxSafeInteger || request.EvaluationRevision > maxSafeInteger || request.OwnershipRevision > maxSafeInteger || request.PrivacyRevision > maxSafeInteger {
-		return out, errTypedBinding
+		return out, ErrTypedBinding
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
@@ -130,39 +140,38 @@ func (c *DeviceClient) IssueTypedBinding(ctx context.Context, orgID, personID, l
 		return out, err
 	}
 	if len(raw) > 32768 || !exactTypedJSON(raw, &out) {
-		return TypedBindingReceipt{}, errTypedBinding
+		return TypedBindingReceipt{}, ErrTypedBinding
 	}
 	if out.Status == "superseded" {
 		if out.Binding != nil || out.BindingSHA256 != "" || out.EligibilityGeneration != nil || out.ValidUntil != nil || !validTypedFloor(out.Floor) || out.Floor.NextIssuedAt <= request.IssuedAt {
-			return TypedBindingReceipt{}, errTypedBinding
+			return TypedBindingReceipt{}, ErrTypedBinding
 		}
 		return out, nil
 	}
 	if (out.Status != "issued" && out.Status != "stale") || out.Floor != nil || out.Binding == nil || out.EligibilityGeneration == nil || *out.EligibilityGeneration < 0 || out.ValidUntil == nil || !out.ValidUntil.After(time.Unix(request.IssuedAt, 0).Add(-sourcewire.RecoveryFutureSkew)) {
-		return TypedBindingReceipt{}, errTypedBinding
+		return TypedBindingReceipt{}, ErrTypedBinding
 	}
 	b := out.Binding
 	_, digest, err := b.Bytes()
 	if err != nil || digest != out.BindingSHA256 || b.BindingID != request.BindingID || b.WorkID != workID || b.InstallationID != c.installation || b.LibraryID != libraryID || b.SnapshotID != request.SnapshotID || b.InventorySHA256 != request.InventorySHA256 || b.ConfigSHA256 != request.ConfigSHA256 || b.WindowSHA256 != windowSHA256 || b.LocalRevision != request.LocalRevision || b.CatalogRevision != request.CatalogRevision || b.EvaluationRevision != request.EvaluationRevision || b.OwnershipRevision != request.OwnershipRevision || b.PrivacyRevision != request.PrivacyRevision {
-		return TypedBindingReceipt{}, errTypedBinding
+		return TypedBindingReceipt{}, ErrTypedBinding
 	}
 	return out, nil
 }
 
 // TypedAssignments returns a complete verified profile chain, never a prefix.
 func (c *DeviceClient) TypedAssignments(ctx context.Context, workID string, receipt TypedBindingReceipt, profileID string, profileVersion int) ([]sourcewire.TypedAssignmentPage, error) {
-	totalBytes := 0
-	return c.typedAssignments(ctx, workID, receipt, profileID, profileVersion, &totalBytes)
+	return c.typedAssignments(ctx, workID, receipt, profileID, profileVersion, 8<<20)
 }
 
-func (c *DeviceClient) typedAssignments(ctx context.Context, workID string, receipt TypedBindingReceipt, profileID string, profileVersion int, totalBytes *int) ([]sourcewire.TypedAssignmentPage, error) {
+func (c *DeviceClient) typedAssignments(ctx context.Context, workID string, receipt TypedBindingReceipt, profileID string, profileVersion int, maxBytes int) ([]sourcewire.TypedAssignmentPage, error) {
 	b := receipt.Binding
 	if !validDeviceID(workID) || receipt.Status != "issued" || b == nil || b.WorkID != workID || b.InstallationID != c.installation || receipt.EligibilityGeneration == nil || *receipt.EligibilityGeneration < 0 || receipt.ValidUntil == nil || receipt.ValidUntil.IsZero() || receipt.Floor != nil {
-		return nil, errTypedBinding
+		return nil, ErrTypedBinding
 	}
 	_, digest, err := b.Bytes()
 	if err != nil || digest != receipt.BindingSHA256 {
-		return nil, errTypedBinding
+		return nil, ErrTypedBinding
 	}
 	var ref *sourcewire.ProfileReference
 	for i := range b.Profiles {
@@ -172,27 +181,28 @@ func (c *DeviceClient) typedAssignments(ctx context.Context, workID string, rece
 		}
 	}
 	if ref == nil {
-		return nil, errTypedBinding
+		return nil, ErrTypedBinding
 	}
 	pages := make([]sourcewire.TypedAssignmentPage, 0, ref.AssignmentPageCount)
+	totalBytes := 0
 	for i := 0; i < ref.AssignmentPageCount; i++ {
 		path := fmt.Sprintf("/v1/device/work/%s/typed-source-bindings/%s/profiles/%s/%d/assignments/%d", workID, b.BindingID, profileID, profileVersion, i)
 		var raw json.RawMessage
 		if err := c.exchange(ctx, http.MethodGet, path, nil, &raw); err != nil {
 			return nil, err
 		}
-		*totalBytes += len(raw)
-		if *totalBytes > 8<<20 {
-			return nil, errTypedBinding
+		totalBytes += len(raw)
+		if totalBytes > maxBytes {
+			return nil, ErrTypedBinding
 		}
 		var page sourcewire.TypedAssignmentPage
 		if len(raw) > sourcewire.MaxPageBytes || !exactTypedJSON(raw, &page) || page.Validate() != nil {
-			return nil, errTypedBinding
+			return nil, ErrTypedBinding
 		}
 		pages = append(pages, page)
 	}
 	if sourcewire.VerifyTypedAssignmentPages(digest, *ref, pages) != nil {
-		return nil, errTypedBinding
+		return nil, ErrTypedBinding
 	}
 	return pages, nil
 }
@@ -244,13 +254,14 @@ func (v VerifiedTypedBinding) Pages() [][]sourcewire.TypedAssignmentPage {
 	return pages
 }
 
-// IssueVerifiedTypedBinding obtains a fresh issuance and every committed profile
-// chain from this device's signed endpoints. A stale, superseded, expired, or
-// incomplete issuance never produces a verified result.
+// IssueVerifiedTypedBinding verifies the current service's codex_request_usage
+// v1 assignment chain. Persist the request before calling. Reuse its exact bytes
+// after transport failure. A superseded issuance carries a floor for a new ID;
+// a stale or expired issuance requires fresh work evaluation.
 func (c *DeviceClient) IssueVerifiedTypedBinding(ctx context.Context, orgID, personID, libraryID, workID, windowSHA256 string, request sourcewire.TypedBindingRequest) (VerifiedTypedBinding, error) {
 	var zero VerifiedTypedBinding
 	if c == nil {
-		return zero, errTypedBinding
+		return zero, ErrTypedBinding
 	}
 	// The floor is for allocating a new identity. Exact replays must reach
 	// the service even after accepting that identity advances the floor.
@@ -258,21 +269,32 @@ func (c *DeviceClient) IssueVerifiedTypedBinding(ctx context.Context, orgID, per
 	if err != nil {
 		return zero, err
 	}
-	if receipt.Status != "issued" || receipt.ValidUntil == nil || !time.Now().Before(*receipt.ValidUntil) {
-		return zero, errTypedBinding
-	}
-	pages := make([][]sourcewire.TypedAssignmentPage, 0, len(receipt.Binding.Profiles))
-	totalBytes := 0
-	for _, profile := range receipt.Binding.Profiles {
-		chain, err := c.typedAssignments(ctx, workID, receipt, profile.ProfileID, profile.ProfileVersion, &totalBytes)
-		if err != nil {
-			return zero, err
-		}
-		pages = append(pages, chain)
+	switch receipt.Status {
+	case "superseded":
+		return zero, &TypedBindingSuperseded{Floor: *receipt.Floor}
+	case "stale":
+		return zero, ErrTypedBindingStale
 	}
 	if !time.Now().Before(*receipt.ValidUntil) {
-		return zero, errTypedBinding
+		return zero, ErrTypedBindingExpired
 	}
+	// The service's issuer supports exactly this profile. The wire validation
+	// bounds its chain to MaxPages and commits each page's canonical bytes.
+	profiles := receipt.Binding.Profiles
+	if len(profiles) != 1 || profiles[0].ProfileID != "codex_request_usage" || profiles[0].ProfileVersion != 1 {
+		return zero, ErrTypedBindingUnsupported
+	}
+	fetchCtx, cancel := context.WithDeadline(ctx, *receipt.ValidUntil)
+	defer cancel()
+	profile := profiles[0]
+	chain, err := c.typedAssignments(fetchCtx, workID, receipt, profile.ProfileID, profile.ProfileVersion, profile.AssignmentPageCount*sourcewire.MaxPageBytes)
+	if !time.Now().Before(*receipt.ValidUntil) {
+		return zero, ErrTypedBindingExpired
+	}
+	if err != nil {
+		return zero, err
+	}
+	pages := [][]sourcewire.TypedAssignmentPage{chain}
 	body, err := json.Marshal(request)
 	if err != nil {
 		return zero, err

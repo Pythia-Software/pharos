@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -97,6 +98,18 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 				next := floor
 				next.NextIssuedAt++
 				json.NewEncoder(w).Encode(TypedBindingReceipt{Status: "superseded", Floor: &next})
+			case "multiple-profiles":
+				extra := b.Profiles[0]
+				extra.ProfileID = "future_usage"
+				v := b
+				v.Profiles = append(append([]sourcewire.ProfileReference{}, b.Profiles...), extra)
+				_, hash, e := v.Bytes()
+				if e != nil {
+					t.Fatal(e)
+				}
+				result := receipt
+				result.Binding, result.BindingSHA256 = &v, hash
+				json.NewEncoder(w).Encode(result)
 			case "stale":
 				x := receipt
 				x.Status = "stale"
@@ -191,7 +204,16 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 		t.Fatal("equivalent stored origin did not match")
 	}
 	credential.Origin = origin
+	_, otherKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(otherKey)
 	for _, altered := range []EnrollmentCredential{
+		{Origin: origin, InstallationID: b.InstallationID, OrgID: org, PersonID: person, LibraryID: b.LibraryID, key: otherKey},
+		{Origin: origin, InstallationID: org, OrgID: org, PersonID: person, LibraryID: b.LibraryID, key: key},
+		{Origin: origin, InstallationID: b.InstallationID, OrgID: person, PersonID: person, LibraryID: b.LibraryID, key: key},
+		{Origin: origin, InstallationID: b.InstallationID, OrgID: org, PersonID: person, LibraryID: "other", key: key},
 		{Origin: "https://other.invalid", InstallationID: b.InstallationID, OrgID: org, PersonID: person, LibraryID: b.LibraryID, key: key},
 		{Origin: origin, InstallationID: b.InstallationID, OrgID: org, PersonID: org, LibraryID: b.LibraryID, key: key},
 		{Origin: origin, InstallationID: b.InstallationID, OrgID: org, PersonID: person, LibraryID: b.LibraryID},
@@ -216,6 +238,17 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 		if result, e := verified(); e == nil || result.Unexpired(time.Now()) {
 			t.Fatalf("accepted %s", m)
 		}
+	}
+	for modeName, want := range map[string]error{"expired": ErrTypedBindingExpired, "stale": ErrTypedBindingStale, "page": ErrTypedBinding, "multiple-profiles": ErrTypedBindingUnsupported} {
+		mode = modeName
+		if _, e := verified(); !errors.Is(e, want) {
+			t.Fatalf("%s: %v", mode, e)
+		}
+	}
+	mode = "superseded"
+	var supersededErr *TypedBindingSuperseded
+	if _, e := verified(); !errors.As(e, &supersededErr) || supersededErr.Floor.NextIssuedAt != req.IssuedAt+1 {
+		t.Fatalf("superseded floor: %v", e)
 	}
 	mode = "ok"
 	belowFloor := floor
