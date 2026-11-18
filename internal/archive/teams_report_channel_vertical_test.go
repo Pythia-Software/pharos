@@ -29,6 +29,7 @@ func TestChannelReviewRequiresPilotExactCapabilityAndCollectionLabels(t *testing
 	}
 	w := teams.Work{Kind: "deterministic", Config: raw, ConfigSHA256: teamsPayloadHash(raw), PopulationKey: "current", Period: json.RawMessage(`{"key":"once"}`), ExpiresAt: time.Now().Add(time.Hour)}
 	m := teamsCapabilityManifest{SchemaVersion: 2, AppVersion: "0.10.0", Features: []string{"deterministic_query_v1", "reader_labels_v1", teamsChannelReportFeature, "source_snapshot_v2"}}
+	override(t, &teamsChannelReportPilotEnabled, false)
 	if _, err = teamsPlanFromWork(w); err == nil || teamsNumericWorkEligible(w, m) {
 		t.Fatal("disabled channel pilot admitted work")
 	}
