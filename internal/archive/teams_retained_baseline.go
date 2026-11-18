@@ -84,14 +84,15 @@ func teamsRetainedBaselineDraft(ctx context.Context, tx *sql.Tx, cfg Config, d L
 	return snapshot, scope, nil
 }
 
-// Only an authenticated empty origin scan with no outstanding floor can
-// authorize the first baseline. Existing server state requires reconciliation.
+// Only an authenticated empty origin scan with a valid, retained floor can
+// authorize the first baseline. The managed birth and empty local outbox prove
+// that no earlier origin attempt exists to be hidden below that floor.
 func teamsBaselineServerClear(scan *teamsRecoveryOriginScan, now time.Time) bool {
-	return scan != nil && !scan.held && len(scan.byToken) == 0 && len(scan.byWitness) == 0 && scan.start.UnacceptedFloor == 0 && scan.last.UnacceptedFloor == 0 && scan.last.NextCursor == "" && now.UTC().Unix() < scan.start.ExpiresAt
+	return scan != nil && !scan.held && len(scan.byToken) == 0 && len(scan.byWitness) == 0 && scan.start.UnacceptedFloor >= 0 && scan.last.UnacceptedFloor >= scan.start.UnacceptedFloor && scan.last.UnacceptedFloor <= scan.last.ServerTime && scan.last.NextCursor == "" && now.UTC().Unix() < scan.start.ExpiresAt
 }
 
 // teamsProduceRetainedBaseline bootstraps a new managed birth only after the
-// authenticated bounded server scan proves there is no preexisting floor.
+// authenticated bounded server scan proves there are no retained origins.
 // Nonempty or uncertain server history remains held for explicit recovery.
 func (c *Catalog) teamsProduceRetainedBaseline(ctx context.Context, cfg Config, client *teams.DeviceClient, d LibraryDescriptor, credential *teams.EnrollmentCredential) error {
 	if !d.ManagedBirth || c.teamsCheckpoint == nil || c.teamsCheckpoint.writer.validateBinding == nil || client == nil || !client.MatchesCredential(credential) {

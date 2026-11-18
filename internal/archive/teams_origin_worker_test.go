@@ -28,6 +28,9 @@ import (
 
 // The census proof hook is supplied by the independent native evidence slice;
 // this exercises the normal worker and signed wire while that proof is absent.
+func TestTeamsWorkerRetainedBaselineSignedRecovery(t *testing.T) {
+	runTeamsWorkerSourcePilotSignedOrigin(t, false, false, false, "retained-baseline")
+}
 func TestTeamsWorkerSourcePilotSignedOrigin(t *testing.T) {
 	runTeamsWorkerSourcePilotSignedOrigin(t, false, false, false, "")
 }
@@ -523,6 +526,45 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 		}
 		return snapshot, nil
 	})
+	if mode == "retained-baseline" {
+		// A real birth supplies this private, location-checked writer binding.
+		// This fixture focuses on the signed 038 journal and baseline CAS.
+		d.ManagedBirth = true
+		writer.validateBinding = func() error { return nil }
+		if err = c.writeTransaction(ctx, "hold before synthetic baseline", func(tx *sql.Tx) error {
+			_, e := tx.Exec(`UPDATE teams_protection_baseline SET state='held' WHERE id=1`)
+			return e
+		}); err != nil {
+			t.Fatal(err)
+		}
+		client, e := teams.NewDeviceClient(server.URL, installation, key, true)
+		if e != nil {
+			t.Fatal(e)
+		}
+		for turn := 0; turn < 8; turn++ {
+			e = c.teamsProduceRetainedBaseline(ctx, cfg, client, d, credential)
+			if e == nil {
+				break
+			}
+		}
+		if e != nil {
+			t.Fatalf("signed baseline: %v", e)
+		}
+		var state, run string
+		if e = c.DB.QueryRow(`SELECT state,proposal_sha256 FROM teams_protection_baseline WHERE id=1`).Scan(&state, &run); e != nil || state != "current" || run == "" {
+			t.Fatalf("baseline not checkpointed: %s %v", state, e)
+		}
+		if n := countRows(t, c, `SELECT count(*) FROM teams_origin_runs WHERE token='baseline' AND state='ready' AND start_receipt_json IS NOT NULL`); n != 1 {
+			t.Fatalf("signed run not retained: %d", n)
+		}
+		if starts != 2 || signedOrigins != 0 {
+			t.Fatalf("unexpected baseline effects: %d %d", starts, signedOrigins)
+		}
+		if e = c.teamsPilotCheckpointCurrent(ctx, d); e != nil {
+			t.Fatal(e)
+		}
+		return
+	}
 	store.rejectCurrent = true
 	if _, err = service.checkTeamsWork(ctx); err != nil {
 		t.Fatal(err)
