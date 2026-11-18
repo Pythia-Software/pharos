@@ -2604,3 +2604,27 @@ test('Teams reader name expiry survives a concurrent status refresh', { skip }, 
   assert.equal(await app.page.getByRole('button',{name:'Refresh names'}).isEnabled(),true);
   assert.equal(await app.page.getByRole('button',{name:'Approve and send this result'}).isEnabled(),true);
 });
+
+test('Teams channel audience remains visible for source and result review', { skip }, async t => {
+  const person='00000000-0000-4000-8000-000000000001'; let loaded=false, approved=false;
+  const target={workspace_id:'TTEST',installation_id:'00000000-0000-4000-8000-000000000002',channel_id:'CTEST',visibility:'public'};
+  const item={workId:'synthetic-channel',question:'Synthetic total',prompt:'',requester:'Requester',requesterId:person,readers:[person],state:'awaiting_source_consent',payloadHash:'payload',configHash:'digest',retention:{mode:'organization_controlled',duration_days:null},publicationV2:{descriptors:[{id:'report',readers:[{kind:'slack_channel_members',display_name:'synthetic',target}],destination:{kind:'slack_report_link',target},outputs:{fields:[{id:'total_tokens',unit:'tokens'}]}}]}};
+  const app=await open(t,{url:'/settings/teams',ready:'#teamsSettingsPage .teams-settings',api:{
+    'GET /api/teams/enrollment':{state:'connected_paused',available:true,library:'Synthetic',fingerprint:'',problem:''},
+    'GET /api/teams/worker':()=>({enabled:true,optOut:true,settingsRevision:4,acknowledgedPolicy:1,nextCheck:'',checking:false,problem:'',items:[{...item,generation:1,labelsToken:loaded?'token':undefined,labelsReady:loaded,readerLabels:loaded?{entries:[{person_id:person,status:'active',display_name:'Requester'}]}:undefined}],modelApproved:false}),
+    'GET /api/teams/source-accounts':{sourceRevision:0,settingsRevision:4,proofRequested:true,sources:[]},
+    'POST /api/teams/worker/reader-labels':()=>{loaded=true;return {loaded:true}},
+    'POST /api/teams/worker/allow-source':({body})=>{assert.equal(body.configHash,'digest');item.state='awaiting_review';item.payload={total_tokens:7};return {granted:true}},
+    'POST /api/teams/worker/approve-result':({body})=>{assert.equal(body.configHash,'digest');approved=true;return {approved:true}},
+  }});
+  for (const name of ['Allow source checks','Approve and send this result']) {
+    await app.page.getByRole('button',{name}).waitFor();
+    const disclosure=app.page.getByRole('region',{name:'Channel report disclosure'});
+    await disclosure.getByText(/current and future eligible members/).waitFor();
+    assert.match(await disclosure.innerText(), /CTEST/);
+    assert.match(await disclosure.innerText(), /join can read retained reports/);
+    const response=app.page.waitForResponse(r=>r.url().endsWith(name === 'Allow source checks' ? '/allow-source' : '/approve-result'));
+    await app.page.getByRole('button',{name}).click(); await response;
+  }
+  assert.equal(approved,true);
+});

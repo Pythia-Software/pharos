@@ -239,7 +239,9 @@ func teamsPlanFromWork(w teams.Work) (teamsQueryPlan, error) {
 		return plan, err
 	}
 	if len(config.PublicationV2) > 0 {
-		if _, e := parseTeamsReportSeries(config.PublicationV2); e != nil || config.Schedule != nil || config.ApprovalPolicy != "review" || len(config.Audiences.Publications) != 0 || len(config.Audiences.Exports) != 0 || len(plan.Metrics) != 1 || plan.Metrics[0].ID != "total_tokens" || plan.Metrics[0].Field != "total_tokens" {
+		_, seriesErr := parseTeamsReportSeries(config.PublicationV2)
+		_, channelErr := parseTeamsChannelReportPublication(config.PublicationV2)
+		if (seriesErr != nil && (!teamsChannelReportPilotEnabled || channelErr != nil)) || config.Schedule != nil || config.ApprovalPolicy != "review" || len(config.Audiences.Publications) != 0 || len(config.Audiences.Exports) != 0 || len(plan.Metrics) != 1 || plan.Metrics[0].ID != "total_tokens" || plan.Metrics[0].Field != "total_tokens" {
 			return teamsQueryPlan{}, errTeamsQueryUnsupported
 		}
 	}

@@ -19,7 +19,12 @@ func teamsConfigExactKeys(raw []byte) bool {
 	}
 	if rawSeries, exists := top["publication_v2"]; exists {
 		if _, err := parseTeamsReportSeries(rawSeries); err != nil {
-			return false
+			if !teamsChannelReportPilotEnabled {
+				return false
+			}
+			if _, err = parseTeamsChannelReportPublication(rawSeries); err != nil {
+				return false
+			}
 		}
 	}
 	if schedule, exists := top["schedule"]; exists {
