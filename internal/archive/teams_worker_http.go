@@ -128,6 +128,10 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 					_, e = teamsV2PlanFromWork(item.Work)
 				}
 				if e != nil {
+					if errors.Is(e, errTeamsScheduledPeriodEnded) {
+						out = append(out, row{WorkID: item.Work.ID, Question: "The collection period for this scheduled report has ended.", State: "period_ended"})
+						continue
+					}
 					out = append(out, row{WorkID: item.Work.ID, Question: "This request needs a newer Pharos build.", State: item.State})
 					continue
 				}

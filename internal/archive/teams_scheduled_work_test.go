@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -127,6 +128,38 @@ func TestScheduledResultDisplaysExactInteger(t *testing.T) {
 	view := teamsScheduledResultForDisplay(raw, teamsPayloadHash(raw))
 	if view == nil || view.Total != "9007199254740993" || view.ExactJSON != string(raw) || teamsScheduledResultForDisplay(raw, "") != nil {
 		t.Fatal("result view lost an exact integer or accepted an unbound payload")
+	}
+}
+
+func TestScheduledSecondPeriodFromIssuer(t *testing.T) {
+	// Period and assignment from consecutive leased production-role issuer calls.
+	const period = `{"key":"period:1","start_at":"2026-11-18T07:28:12.000000Z","end_at":"2026-11-19T07:28:12.000000Z","anchor_at":"2026-11-18T07:28:12.000000Z"}`
+	const assignment = `{"assignment_id":"2689dfb8-f8a0-48ce-8403-3f8db5e57988","period_key":"period:1","timezone":"UTC","start_at":"2026-11-18T07:28:12Z","deadline_at":"2026-11-19T08:28:12Z"}`
+	var a teams.ScheduledAssignment
+	if err := json.Unmarshal([]byte(assignment), &a); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile("testdata/teams-report-series/scheduled_series_config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := parseTeamsScheduledConfig(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Schedule.ResponseWindowSeconds = 172800
+	c.ScheduleBounds.AnchorAt = a.StartAt.AddDate(0, 0, -1)
+	c.ScheduleBounds.UntilAt = a.DeadlineAt
+	raw, err = json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := teams.Work{ID: a.AssignmentID, Kind: "deterministic", Config: raw, ConfigSHA256: teamsPayloadHash(raw), Period: json.RawMessage(period), ScheduledAssignment: &a, PopulationKey: "current", ExpiresAt: a.DeadlineAt}
+	if _, err = teamsV2PlanFromWorkAt(w, a.StartAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = teamsV2PlanFromWorkAt(w, a.DeadlineAt); !errors.Is(err, errTeamsScheduledPeriodEnded) {
+		t.Fatal("closed period did not report the deadline", err)
 	}
 }
 

@@ -371,6 +371,9 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 				}
 				if expired {
 					item.State = teamsExpiredScheduleState
+					if prior.State == "sending" || prior.State == "needs_reconcile" {
+						item.State = "unconfirmed"
+					}
 					item.Payload = nil
 					item.PayloadHash = ""
 					items[work.ID] = item

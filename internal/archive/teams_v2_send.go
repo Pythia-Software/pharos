@@ -225,6 +225,9 @@ func (c *Catalog) sendTeamsV2Approved(ctx context.Context, cfg Config, client *t
 	receipt, err := client.Submit(ctx, workID, draft.Submission, draft.PayloadHash)
 	if err != nil {
 		state, _ := teamsSubmitFailure(err)
+		if work.ScheduledAssignment != nil && teamsSourceDefinitelyExpired(err) {
+			state = "needs_reconcile"
+		}
 		c.markTeamsV2Outcome(workID, state)
 		return empty, err
 	}

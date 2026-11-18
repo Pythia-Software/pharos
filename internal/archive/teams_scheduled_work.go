@@ -15,11 +15,15 @@ import (
 // Only the v2 source path can prepare a scheduled publication. The legacy
 // manifest and result paths continue to reject this assignment.
 func teamsV2PlanFromWork(w teams.Work) (teamsQueryPlan, error) {
+	return teamsV2PlanFromWorkAt(w, time.Now())
+}
+
+func teamsV2PlanFromWorkAt(w teams.Work, now time.Time) (teamsQueryPlan, error) {
 	if w.ScheduledAssignment == nil {
 		return teamsPlanFromWork(w)
 	}
 	if w.VerifyConfig() != nil || w.Kind != "deterministic" || w.PopulationKey != "current" ||
-		!time.Now().Before(w.ExpiresAt) || (len(w.RunDecision) != 0 && !bytes.Equal(bytes.TrimSpace(w.RunDecision), []byte("null"))) {
+		(len(w.RunDecision) != 0 && !bytes.Equal(bytes.TrimSpace(w.RunDecision), []byte("null"))) {
 		return teamsQueryPlan{}, errTeamsQueryUnsupported
 	}
 	config, err := parseTeamsScheduledConfig(w.Config)
@@ -33,8 +37,11 @@ func teamsV2PlanFromWork(w teams.Work) (teamsQueryPlan, error) {
 		return teamsQueryPlan{}, errTeamsQueryUnsupported
 	}
 	expected := teamsScheduledAssignment{AssignmentID: w.ID, PeriodKey: period.Key, Timezone: config.Schedule.Timezone, StartAt: *period.StartAt, DeadlineAt: w.ExpiresAt}
-	if time.Now().Before(expected.StartAt) || !matchesTeamsScheduledPeriod(config, expected, *w.ScheduledAssignment, period.EndAt) {
+	if now.Before(expected.StartAt) || !matchesTeamsScheduledPeriod(config, expected, *w.ScheduledAssignment, period.EndAt) {
 		return teamsQueryPlan{}, errTeamsQueryUnsupported
+	}
+	if !now.Before(w.ExpiresAt) {
+		return teamsQueryPlan{}, errTeamsScheduledPeriodEnded
 	}
 	return teamsQueryPlan{Metrics: []teamsMetric{{ID: "total_tokens", Field: "total_tokens"}}}, nil
 }
@@ -92,11 +99,17 @@ func teamsScheduledResultForDisplay(raw []byte, hash string) *teamsScheduledResu
 
 const teamsExpiredScheduleState = "source_authorization_expired"
 
+var errTeamsScheduledPeriodEnded = errors.New("scheduled collection period has ended")
+
+func teamsSourceDefinitelyExpired(err error) bool {
+	var remote *teams.HTTPError
+	return errors.As(err, &remote) && remote.Status == 409 && remote.Code == teamsExpiredScheduleState
+}
+
 // A definite, scoped expiry can retire this upload. An offline check, a missing
 // authorization, and a missing result receipt cannot establish expiry.
 func (c *Catalog) scheduledSourceFailure(ctx context.Context, w teams.Work, d LibraryDescriptor, credential *teams.EnrollmentCredential, err error, fallback string) string {
-	var remote *teams.HTTPError
-	if w.ScheduledAssignment == nil || credential == nil || !errors.As(err, &remote) || remote.Status != 409 || remote.Code != teamsExpiredScheduleState {
+	if w.ScheduledAssignment == nil || credential == nil || !teamsSourceDefinitelyExpired(err) {
 		return fallback
 	}
 	lease, e := c.teamsSharingLease()
@@ -104,6 +117,7 @@ func (c *Catalog) scheduledSourceFailure(ctx context.Context, w teams.Work, d Li
 		return fallback
 	}
 	defer lease.Close()
+	state := teamsExpiredScheduleState
 	e = c.writeTransaction(ctx, "teams-expired-scheduled-source", func(tx *sql.Tx) error {
 		u, e := readTeamsV2Upload(ctx, tx, w.ID)
 		if e != nil {
@@ -112,11 +126,21 @@ func (c *Catalog) scheduledSourceFailure(ctx context.Context, w teams.Work, d Li
 		if u.LibraryID != d.ID || u.InstanceID != d.Instance || u.OrgID != credential.OrgID || u.InstallationID != credential.InstallationID || u.ConfigHash != w.ConfigSHA256 || !u.matchesSourceProof(w.ScheduledAssignment) {
 			return errTeamsConsentStale
 		}
+		var prior string
+		if e = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT state FROM teams_v2_results WHERE work_id=?),'')`, w.ID).Scan(&prior); e != nil {
+			return e
+		}
+		switch prior {
+		case "accepted":
+			return errTeamsConsentStale
+		case "sending", "needs_reconcile":
+			state = "unconfirmed"
+		}
 		_, e = tx.ExecContext(ctx, `UPDATE teams_v2_uploads SET state='abandoned' WHERE work_id=?`, w.ID)
 		return e
 	})
 	if e != nil {
 		return fallback
 	}
-	return teamsExpiredScheduleState
+	return state
 }

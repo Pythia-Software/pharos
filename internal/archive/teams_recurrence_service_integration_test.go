@@ -21,18 +21,22 @@ import (
 // This is only for the dedicated unsigned-control, literal-loopback harness.
 // Its catalog, source data, installation key and identities are all synthetic.
 func TestTeamsRecurringSyntheticPostgres(t *testing.T) {
-	testTeamsRecurringResult(t, os.Getenv("PHAROS_TEAMS_SYNTHETIC_RECURRENCE_ORIGIN"), false, false)
+	testTeamsRecurringResult(t, os.Getenv("PHAROS_TEAMS_SYNTHETIC_RECURRENCE_ORIGIN"), false, false, false)
 }
 
 func TestTeamsScheduledReportAutomaticPostgres(t *testing.T) {
-	testTeamsRecurringResult(t, os.Getenv("PHAROS_TEAMS_SYNTHETIC_SCHEDULED_ORIGIN"), true, false)
+	testTeamsRecurringResult(t, os.Getenv("PHAROS_TEAMS_SYNTHETIC_SCHEDULED_ORIGIN"), true, false, false)
 }
 
 func TestTeamsScheduledReportReviewedPostgres(t *testing.T) {
-	testTeamsRecurringResult(t, os.Getenv("PHAROS_TEAMS_SYNTHETIC_SCHEDULED_ORIGIN"), true, true)
+	testTeamsRecurringResult(t, os.Getenv("PHAROS_TEAMS_SYNTHETIC_SCHEDULED_ORIGIN"), true, true, false)
 }
 
-func testTeamsRecurringResult(t *testing.T, origin string, scheduledReport, optOut bool) {
+func TestTeamsScheduledReportReconcilePostgres(t *testing.T) {
+	testTeamsRecurringResult(t, os.Getenv("PHAROS_TEAMS_SYNTHETIC_SCHEDULED_ORIGIN"), true, false, true)
+}
+
+func testTeamsRecurringResult(t *testing.T, origin string, scheduledReport, optOut, replaceReceipt bool) {
 	t.Helper()
 	if origin == "" {
 		t.Skip("no synthetic integration harness")
@@ -196,6 +200,27 @@ func testTeamsRecurringResult(t *testing.T, origin string, scheduledReport, optO
 	override(t, &teamsWorkerCapabilities, func() teamsCapabilityManifest { return manifest })
 	override(t, &teamsLoadSourceConfig, func(string) (Config, error) { return cfg, nil })
 	service := testServer(t, cfg, c)
+	attempts := 0
+	if replaceReceipt {
+		path, err := teams.WorkPath(work.ID, "result")
+		if err != nil {
+			t.Fatal(err)
+		}
+		transport := http.DefaultTransport
+		var replacement http.RoundTripper = cloudRoundTripper(func(req *http.Request) (*http.Response, error) {
+			response, err := transport.RoundTrip(req)
+			if req.URL.Host == u.Host && req.URL.Path == path && req.Method == http.MethodPut {
+				attempts++
+				if err == nil && response.StatusCode < 300 {
+					response.Body.Close()
+					response.StatusCode = http.StatusConflict
+					response.Body = io.NopCloser(strings.NewReader(`{"error":{"code":"source_authorization_expired"}}`))
+				}
+			}
+			return response, err
+		})
+		override(t, &http.DefaultTransport, replacement)
+	}
 	if _, err = service.checkTeamsWork(ctx); err != nil {
 		t.Fatalf("worker check: %v", err)
 	}
@@ -214,6 +239,17 @@ func testTeamsRecurringResult(t *testing.T, origin string, scheduledReport, optO
 		reviewScheduledSyntheticWork(t, service, *work)
 		if _, err = service.checkTeamsWork(ctx); err != nil {
 			t.Fatal(err)
+		}
+	}
+	if replaceReceipt {
+		draft, err := readTeamsV2Draft(ctx, c.reader(), work.ID)
+		upload, uploadErr := readTeamsV2Upload(ctx, c.reader(), work.ID)
+		if err != nil || uploadErr != nil || draft.State != "needs_reconcile" || upload.State != "abandoned" {
+			t.Fatal("attempted result did not retain receipt recovery after source expiry", draft.State, upload.State)
+		}
+		service = testServer(t, cfg, c)
+		if _, err = service.checkTeamsWork(ctx); err != nil || attempts != 1 {
+			t.Fatal("fresh worker failed to reconcile without another submission", attempts, err)
 		}
 	}
 	draft, err := readTeamsV2Draft(ctx, c.reader(), work.ID)
