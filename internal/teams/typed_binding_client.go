@@ -207,8 +207,9 @@ type VerifiedTypedBinding struct {
 	publicKey                                  []byte
 }
 
-// Valid reports whether the verified issuance remains usable at now.
-func (v VerifiedTypedBinding) Valid(now time.Time) bool {
+// Unexpired checks the locally retained receipt deadline. The server rechecks
+// current privacy, ownership and eligibility before accepting a result.
+func (v VerifiedTypedBinding) Unexpired(now time.Time) bool {
 	if len(v.request) == 0 || len(v.receipt) == 0 || v.pages == nil {
 		return false
 	}
@@ -219,7 +220,7 @@ func (v VerifiedTypedBinding) Valid(now time.Time) bool {
 // MatchesCredential binds the verified response to the service and device that
 // supplied it, as well as the scope used to derive the request identity.
 func (v VerifiedTypedBinding) MatchesCredential(c *EnrollmentCredential) bool {
-	return c != nil && v.origin == c.Origin && v.installation == c.InstallationID && v.org == c.OrgID && v.person == c.PersonID && v.library == c.LibraryID && len(c.key) == ed25519.PrivateKeySize && bytes.Equal(v.publicKey, c.key.Public().(ed25519.PublicKey))
+	return c != nil && credentialOriginMatches(v.origin, c.Origin) && v.installation == c.InstallationID && v.org == c.OrgID && v.person == c.PersonID && v.library == c.LibraryID && len(c.key) == ed25519.PrivateKeySize && bytes.Equal(v.publicKey, c.key.Public().(ed25519.PublicKey))
 }
 
 // RequestBytes returns the exact bytes signed for issuance.

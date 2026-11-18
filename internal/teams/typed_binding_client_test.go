@@ -175,17 +175,22 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 	verified := func() (VerifiedTypedBinding, error) {
 		return c.IssueVerifiedTypedBinding(ctx, org, person, b.LibraryID, b.WorkID, b.WindowSHA256, req)
 	}
-	if (VerifiedTypedBinding{}).Valid(time.Now()) {
+	if (VerifiedTypedBinding{}).Unexpired(time.Now()) {
 		t.Fatal("zero result is valid")
 	}
 	v, err := verified()
-	if err != nil || !v.Valid(time.Now()) || v.Valid(until) {
+	if err != nil || !v.Unexpired(time.Now()) || v.Unexpired(until) {
 		t.Fatalf("verified issuance: %v", err)
 	}
 	credential := &EnrollmentCredential{Origin: origin, InstallationID: b.InstallationID, OrgID: org, PersonID: person, LibraryID: b.LibraryID, key: key}
 	if !v.MatchesCredential(credential) || (VerifiedTypedBinding{}).MatchesCredential(credential) {
 		t.Fatal("verified binding lost its credential scope")
 	}
+	credential.Origin = origin + "/"
+	if !c.MatchesCredential(credential) || !v.MatchesCredential(credential) {
+		t.Fatal("equivalent stored origin did not match")
+	}
+	credential.Origin = origin
 	for _, altered := range []EnrollmentCredential{
 		{Origin: "https://other.invalid", InstallationID: b.InstallationID, OrgID: org, PersonID: person, LibraryID: b.LibraryID, key: key},
 		{Origin: origin, InstallationID: b.InstallationID, OrgID: org, PersonID: org, LibraryID: b.LibraryID, key: key},
@@ -208,7 +213,7 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 	}
 	for _, m := range []string{"incomplete", "page", "expired", "stale", "superseded"} {
 		mode = m
-		if result, e := verified(); e == nil || result.Valid(time.Now()) {
+		if result, e := verified(); e == nil || result.Unexpired(time.Now()) {
 			t.Fatalf("accepted %s", m)
 		}
 	}
@@ -216,13 +221,13 @@ func TestTypedBindingSignedTransport(t *testing.T) {
 	belowFloor := floor
 	belowFloor.NextIssuedAt++
 	floor = belowFloor
-	if result, e := verified(); e != nil || !result.Valid(time.Now()) {
+	if result, e := verified(); e != nil || !result.Unexpired(time.Now()) {
 		t.Fatalf("exact receipt replay after the issuance floor advanced: %v", e)
 	}
 	floor.NextIssuedAt--
 	wrongRequest := req
 	wrongRequest.InventoryRevision++
-	if result, e := c.IssueVerifiedTypedBinding(ctx, org, person, b.LibraryID, b.WorkID, b.WindowSHA256, wrongRequest); e == nil || result.Valid(time.Now()) {
+	if result, e := c.IssueVerifiedTypedBinding(ctx, org, person, b.LibraryID, b.WorkID, b.WindowSHA256, wrongRequest); e == nil || result.Unexpired(time.Now()) {
 		t.Fatal("accepted request with mismatched binding identity")
 	}
 	if _, err = c.TypedBindingFloor(ctx, b.WorkID); err != nil {
