@@ -56,7 +56,7 @@ func (c *Catalog) prepareTeamsV2UploadAt(ctx context.Context, w teams.Work, d Li
 			return out, err
 		}
 	} else {
-		plan, err := teamsPlanFromWork(w)
+		plan, err := teamsV2PlanFromWork(w)
 		if err != nil || len(plan.Metrics) != 1 || plan.Metrics[0].Field != "total_tokens" || !teamsNumericWorkEligible(w, manifest) {
 			return out, errTeamsQueryUnsupported
 		}
@@ -119,6 +119,9 @@ func (c *Catalog) prepareTeamsV2UploadAt(ctx context.Context, w teams.Work, d Li
 			if old.VersionID != w.VersionID || old.LibraryID != d.ID || old.InstanceID != d.Instance || old.OrgID != s.OrgID || old.InstallationID != s.InstallationID || old.ConfigHash != w.ConfigSHA256 || old.EvaluationRevision != w.EvaluationRevision || old.SettingsRevision != s.SettingsRevision || old.SourceRevision != sourceRevision || old.PrivacyRevision != privacyRevision || old.Generation != g.all || old.Mode != mode || old.PolicyVersion != policyVersion || old.State == "abandoned" {
 				return errTeamsConsentStale
 			}
+			if !matchesTeamsSourceAuthorization(old.Authorization, w.ScheduledAssignment) {
+				return errTeamsConsentStale
+			}
 			seal, e := sourcewire.DecodeSeal(old.Seal)
 			if e != nil {
 				return errTeamsConsentStale
@@ -165,7 +168,7 @@ func (c *Catalog) prepareTeamsV2UploadAt(ctx context.Context, w teams.Work, d Li
 		if mode == "reviewed" {
 			decisionID = randomUUID()
 		}
-		authorization, e := json.Marshal(teams.SourceAuthorization{SnapshotID: snapshotID, InventoryRevision: inventoryRevision, InventorySHA256: pages.InventorySHA256, LocalRevision: local, EvaluationRevision: w.EvaluationRevision, ConfigSHA256: w.ConfigSHA256, Mode: mode, DecisionID: decisionID, DecidedAt: time.Now().UTC(), SettingsRevision: s.SettingsRevision, OrgPolicyVersion: policyVersion})
+		authorization, e := json.Marshal(teams.SourceAuthorization{ScheduledAssignment: w.ScheduledAssignment, SnapshotID: snapshotID, InventoryRevision: inventoryRevision, InventorySHA256: pages.InventorySHA256, LocalRevision: local, EvaluationRevision: w.EvaluationRevision, ConfigSHA256: w.ConfigSHA256, Mode: mode, DecisionID: decisionID, DecidedAt: time.Now().UTC(), SettingsRevision: s.SettingsRevision, OrgPolicyVersion: policyVersion})
 		if e != nil {
 			return e
 		}

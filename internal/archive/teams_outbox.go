@@ -174,7 +174,7 @@ func validateTeamsNumericPayload(plan teamsQueryPlan, result teamsNumericResult,
 }
 
 func teamsPlanFromWork(w teams.Work) (teamsQueryPlan, error) {
-	if w.VerifyConfig() != nil || w.Kind != "deterministic" || w.PopulationKey != "current" || w.ExpiresAt.IsZero() || !time.Now().Before(w.ExpiresAt) || (len(w.RunDecision) != 0 && !bytes.Equal(bytes.TrimSpace(w.RunDecision), []byte("null"))) {
+	if w.ScheduledAssignment != nil || w.VerifyConfig() != nil || w.Kind != "deterministic" || w.PopulationKey != "current" || w.ExpiresAt.IsZero() || !time.Now().Before(w.ExpiresAt) || (len(w.RunDecision) != 0 && !bytes.Equal(bytes.TrimSpace(w.RunDecision), []byte("null"))) {
 		return teamsQueryPlan{}, errTeamsQueryUnsupported
 	}
 	var config struct {
@@ -612,7 +612,7 @@ func (c *Catalog) grantTeamsQuestionForView(ctx context.Context, w teams.Work, d
 		if _, err := teamsLLMFromWork(w, manifest.AppVersion); err != nil {
 			return err
 		}
-	} else if _, err := teamsPlanFromWork(w); err != nil {
+	} else if _, err := teamsV2PlanFromWork(w); err != nil {
 		return err
 	}
 	if _, err := teams.WorkPath(w.VersionID, "status"); err != nil {

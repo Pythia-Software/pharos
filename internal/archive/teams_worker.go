@@ -397,7 +397,7 @@ func (s *Server) checkTeamsWork(ctx context.Context) (bool, error) {
 				items[work.ID] = item
 				continue
 			}
-			if _, e = teamsPlanFromWork(work); e != nil {
+			if _, e = teamsV2PlanFromWork(work); e != nil {
 				item.State = "needs_update"
 				items[work.ID] = item
 				continue

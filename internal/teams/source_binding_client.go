@@ -64,17 +64,18 @@ type SourceWatermark struct {
 }
 
 type SourceAuthorization struct {
-	SnapshotID         string    `json:"snapshot_id"`
-	InventoryRevision  int64     `json:"inventory_revision"`
-	InventorySHA256    string    `json:"inventory_sha256"`
-	LocalRevision      int64     `json:"local_revision"`
-	EvaluationRevision int64     `json:"evaluation_revision"`
-	ConfigSHA256       string    `json:"config_sha256"`
-	Mode               string    `json:"mode"`
-	DecisionID         string    `json:"decision_id"`
-	DecidedAt          time.Time `json:"decided_at"`
-	SettingsRevision   int64     `json:"settings_revision"`
-	OrgPolicyVersion   int64     `json:"org_policy_version"`
+	ScheduledAssignment *ScheduledAssignment `json:"scheduled_assignment,omitempty"`
+	SnapshotID          string               `json:"snapshot_id"`
+	InventoryRevision   int64                `json:"inventory_revision"`
+	InventorySHA256     string               `json:"inventory_sha256"`
+	LocalRevision       int64                `json:"local_revision"`
+	EvaluationRevision  int64                `json:"evaluation_revision"`
+	ConfigSHA256        string               `json:"config_sha256"`
+	Mode                string               `json:"mode"`
+	DecisionID          string               `json:"decision_id"`
+	DecidedAt           time.Time            `json:"decided_at"`
+	SettingsRevision    int64                `json:"settings_revision"`
+	OrgPolicyVersion    int64                `json:"org_policy_version"`
 }
 type SourceAuthorizationReceipt struct {
 	SnapshotID          string    `json:"snapshot_id"`
@@ -91,7 +92,19 @@ func (c *DeviceClient) AuthorizeSourceDisclosure(ctx context.Context, workID str
 		return out, errSourceBinding
 	}
 	var auth SourceAuthorization
-	if sourceResponse(raw, &auth, "snapshot_id", "inventory_revision", "inventory_sha256", "local_revision", "evaluation_revision", "config_sha256", "mode", "decision_id", "decided_at", "settings_revision", "org_policy_version") != nil || !validDeviceID(auth.SnapshotID) || auth.InventoryRevision < 1 || !sourceDigest(auth.InventorySHA256) || auth.LocalRevision < 1 || auth.EvaluationRevision < 1 || !sourceDigest(auth.ConfigSHA256) || auth.DecidedAt.IsZero() || auth.SettingsRevision < 1 {
+	keys := []string{"snapshot_id", "inventory_revision", "inventory_sha256", "local_revision", "evaluation_revision", "config_sha256", "mode", "decision_id", "decided_at", "settings_revision", "org_policy_version"}
+	fields, err := pollObject(raw)
+	if err != nil {
+		return out, errSourceBinding
+	}
+	if assignment, present := fields["scheduled_assignment"]; present {
+		parsed, err := decodeScheduledAssignment(assignment)
+		if err != nil || parsed.AssignmentID != workID {
+			return out, errSourceBinding
+		}
+		keys = append(keys, "scheduled_assignment")
+	}
+	if sourceResponse(raw, &auth, keys...) != nil || !validDeviceID(auth.SnapshotID) || auth.InventoryRevision < 1 || !sourceDigest(auth.InventorySHA256) || auth.LocalRevision < 1 || auth.EvaluationRevision < 1 || !sourceDigest(auth.ConfigSHA256) || auth.DecidedAt.IsZero() || auth.SettingsRevision < 1 {
 		return out, errSourceBinding
 	}
 	switch auth.Mode {

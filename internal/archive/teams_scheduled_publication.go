@@ -260,11 +260,15 @@ type teamsScheduledDisclosure struct {
 	AnchorAt, UntilAt                                                time.Time
 }
 
+func teamsScheduledTerms(c teamsScheduledConfig) teamsScheduledDisclosure {
+	return teamsScheduledDisclosure{Cadence: c.Schedule.Cadence, Timezone: c.Schedule.Timezone, CatchUp: c.Schedule.CatchUp, TriggerID: c.Publication.Descriptors[0].Triggers[0].ID, DisclosureRevision: c.Publication.DisclosureRevision, ResponseWindowSeconds: c.Schedule.ResponseWindowSeconds, AnchorAt: c.ScheduleBounds.AnchorAt, UntilAt: c.ScheduleBounds.UntilAt, Field: "Combined captured tokens from all available history (sum)", Coverage: "Aggregate counts: complete, incomplete inventory, opted out, unavailable, declined and pending", DefaultAndOptOut: "Collection readers can see attributable values. Report readers see only the aggregate and approved coverage. Only privacy-safe numeric sources are eligible. The organization default applies; opt out of automatic sharing or choose review.", Cutoff: "Accepted by the response deadline; an accepted result remains eligible after a later opt-out. Each input retains its observed and computed times.", Inference: "A report with one contributor reveals that person's value; comparing snapshots may reveal contributions.", Withdrawal: "Withdrawal does not remove already published snapshots."}
+}
+
 // labels must already be scoped to this exact consent config by the caller.
 // Unknown requester can use the frozen signed name; inactive identities remain
 // visible as inactive, matching the existing reader-review behavior.
 func renderTeamsScheduledDisclosure(c teamsScheduledConfig, labels map[string]teams.ReaderLabel) (teamsScheduledDisclosure, error) {
-	out := teamsScheduledDisclosure{Cadence: c.Schedule.Cadence, Timezone: c.Schedule.Timezone, CatchUp: c.Schedule.CatchUp, TriggerID: c.Publication.Descriptors[0].Triggers[0].ID, DisclosureRevision: c.Publication.DisclosureRevision, ResponseWindowSeconds: c.Schedule.ResponseWindowSeconds, AnchorAt: c.ScheduleBounds.AnchorAt, UntilAt: c.ScheduleBounds.UntilAt, Field: "Combined captured tokens from all available history (sum)", Coverage: "Aggregate counts: complete, incomplete inventory, opted out, unavailable, declined and pending", DefaultAndOptOut: "Collection readers can see attributable values. Report readers see only the aggregate and approved coverage. Only privacy-safe numeric sources are eligible. The organization default applies; opt out of automatic sharing or choose review.", Cutoff: "Accepted by the response deadline; an accepted result remains eligible after a later opt-out. Each input retains its observed and computed times.", Inference: "A report with one contributor reveals that person's value; comparing snapshots may reveal contributions.", Withdrawal: "Withdrawal does not remove already published snapshots."}
+	out := teamsScheduledTerms(c)
 	reader := func(id string) (teamsScheduledDisplayReader, error) {
 		l, ok := labels[id]
 		if !ok || l.PersonID != id || (l.Status != "active" && l.Status != "inactive" && l.Status != "unknown") {
@@ -309,15 +313,13 @@ func renderTeamsScheduledDisclosure(c teamsScheduledConfig, labels map[string]te
 // period is a sibling of config and is not authenticated by the config hash.
 // Server acceptance must independently verify its calendar derivation and
 // bind these exact fields into the device-signed result before activation.
-type teamsScheduledAssignment struct {
-	AssignmentID string    `json:"assignment_id"`
-	PeriodKey    string    `json:"period_key"`
-	Timezone     string    `json:"timezone"`
-	StartAt      time.Time `json:"start_at"`
-	DeadlineAt   time.Time `json:"deadline_at"`
-}
+type teamsScheduledAssignment = teams.ScheduledAssignment
 
 func matchesPersistedTeamsScheduledAssignment(c teamsScheduledConfig, persisted, submitted teamsScheduledAssignment) bool {
+	return matchesTeamsScheduledPeriod(c, persisted, submitted, nil)
+}
+
+func matchesTeamsScheduledPeriod(c teamsScheduledConfig, persisted, submitted teamsScheduledAssignment, periodEnd *time.Time) bool {
 	if persisted.AssignmentID != submitted.AssignmentID || persisted.PeriodKey != submitted.PeriodKey || persisted.Timezone != submitted.Timezone || !persisted.StartAt.Equal(submitted.StartAt) || !persisted.DeadlineAt.Equal(submitted.DeadlineAt) || persisted.Timezone != c.Schedule.Timezone || !teamsPeriodKey.MatchString(persisted.PeriodKey) || persisted.StartAt.Before(c.ScheduleBounds.AnchorAt) || !persisted.StartAt.Before(c.ScheduleBounds.UntilAt) {
 		return false
 	}
@@ -328,8 +330,8 @@ func matchesPersistedTeamsScheduledAssignment(c teamsScheduledConfig, persisted,
 	if err != nil || index > 9998 || strconv.Itoa(index) != strings.TrimPrefix(persisted.PeriodKey, "period:") {
 		return false
 	}
-	start, _, err := (teamsScheduledCalendar{Cadence: c.Schedule.Cadence, Timezone: c.Schedule.Timezone, AnchorAt: c.ScheduleBounds.AnchorAt}).Window(index)
-	if err != nil || !start.Equal(persisted.StartAt) {
+	start, end, err := (teamsScheduledCalendar{Cadence: c.Schedule.Cadence, Timezone: c.Schedule.Timezone, AnchorAt: c.ScheduleBounds.AnchorAt}).Window(index)
+	if err != nil || !start.Equal(persisted.StartAt) || (periodEnd != nil && !end.Equal(*periodEnd)) {
 		return false
 	}
 	deadline := persisted.StartAt.Add(time.Duration(c.Schedule.ResponseWindowSeconds) * time.Second)

@@ -69,7 +69,7 @@ func (c *Catalog) registerTeamsV2(ctx context.Context, cfg Config, client *teams
 			current = &poll.Work[i]
 		}
 	}
-	if current == nil || current.LibraryID != d.ID || current.VersionID != requested.VersionID || current.ConfigSHA256 != requested.ConfigSHA256 || !bytes.Equal(current.Config, requested.Config) || current.EvaluationRevision != requested.EvaluationRevision || current.BaselineRevision != requested.BaselineRevision {
+	if current == nil || !sameTeamsScheduledAssignment(current.ScheduledAssignment, requested.ScheduledAssignment) || current.LibraryID != d.ID || current.VersionID != requested.VersionID || current.ConfigSHA256 != requested.ConfigSHA256 || !bytes.Equal(current.Config, requested.Config) || current.EvaluationRevision != requested.EvaluationRevision || current.BaselineRevision != requested.BaselineRevision {
 		return out, errTeamsConsentStale
 	}
 	watermark, err := client.SourceWatermark(ctx, d.ID)

@@ -14,21 +14,36 @@ import (
 
 // These are public protocol DTOs. Config and payload remain raw bytes because
 // their hashes and approvals bind exact serialized bytes, not reconstructed JSON.
+// ScheduledAssignment binds an all-history snapshot to one finite collection period.
+// Its identity is separate from the source assignment digest.
+type ScheduledAssignment struct {
+	AssignmentID string    `json:"assignment_id"`
+	PeriodKey    string    `json:"period_key"`
+	Timezone     string    `json:"timezone"`
+	StartAt      time.Time `json:"start_at"`
+	DeadlineAt   time.Time `json:"deadline_at"`
+}
+
+func (a ScheduledAssignment) Equal(b *ScheduledAssignment) bool {
+	return b != nil && a.AssignmentID == b.AssignmentID && a.PeriodKey == b.PeriodKey && a.Timezone == b.Timezone && a.StartAt.Equal(b.StartAt) && a.DeadlineAt.Equal(b.DeadlineAt)
+}
+
 type Work struct {
-	ID                    string          `json:"id"`
-	RequestID             string          `json:"request_id"`
-	VersionID             string          `json:"version_id"`
-	LibraryID             string          `json:"library_id"`
-	Kind                  string          `json:"kind"`
-	ConfigSHA256          string          `json:"config_sha256"`
-	Config                json.RawMessage `json:"config"`
-	Period                json.RawMessage `json:"period"`
-	PopulationKey         string          `json:"population_key"`
-	ExpiresAt             time.Time       `json:"expires_at"`
-	EvaluationRevision    int64           `json:"evaluation_revision"`
-	RequiredLocalRevision int64           `json:"required_local_revision"`
-	BaselineRevision      int64           `json:"baseline_revision"`
-	RunDecision           json.RawMessage `json:"run_decision,omitempty"`
+	ScheduledAssignment   *ScheduledAssignment `json:"scheduled_assignment,omitempty"`
+	ID                    string               `json:"id"`
+	RequestID             string               `json:"request_id"`
+	VersionID             string               `json:"version_id"`
+	LibraryID             string               `json:"library_id"`
+	Kind                  string               `json:"kind"`
+	ConfigSHA256          string               `json:"config_sha256"`
+	Config                json.RawMessage      `json:"config"`
+	Period                json.RawMessage      `json:"period"`
+	PopulationKey         string               `json:"population_key"`
+	ExpiresAt             time.Time            `json:"expires_at"`
+	EvaluationRevision    int64                `json:"evaluation_revision"`
+	RequiredLocalRevision int64                `json:"required_local_revision"`
+	BaselineRevision      int64                `json:"baseline_revision"`
+	RunDecision           json.RawMessage      `json:"run_decision,omitempty"`
 }
 type Cancellation struct {
 	WorkID      string    `json:"work_id"`
@@ -122,20 +137,21 @@ type Approval struct {
 	OrgPolicyVersion      int64     `json:"org_policy_version,omitempty"`
 }
 type Submission struct {
-	IdempotencyKey     string          `json:"idempotency_key"`
-	ConfigSHA256       string          `json:"config_sha256"`
-	EvaluationRevision int64           `json:"evaluation_revision"`
-	LocalRevision      int64           `json:"local_revision"`
-	ManifestSHA256     string          `json:"manifest_sha256"`
-	SourceBindingID    string          `json:"source_binding_id,omitempty"`
-	AssignmentSHA256   string          `json:"assignment_sha256,omitempty"`
-	InventoryRevision  int64           `json:"inventory_revision,omitempty"`
-	CatalogRevision    int64           `json:"catalog_revision,omitempty"`
-	OwnershipRevision  int64           `json:"ownership_revision"`
-	BaselineRevision   int64           `json:"baseline_revision"`
-	PayloadSHA256      string          `json:"payload_sha256"`
-	Approval           Approval        `json:"approval"`
-	Payload            json.RawMessage `json:"payload"`
+	ScheduledAssignment *ScheduledAssignment `json:"scheduled_assignment,omitempty"`
+	IdempotencyKey      string               `json:"idempotency_key"`
+	ConfigSHA256        string               `json:"config_sha256"`
+	EvaluationRevision  int64                `json:"evaluation_revision"`
+	LocalRevision       int64                `json:"local_revision"`
+	ManifestSHA256      string               `json:"manifest_sha256"`
+	SourceBindingID     string               `json:"source_binding_id,omitempty"`
+	AssignmentSHA256    string               `json:"assignment_sha256,omitempty"`
+	InventoryRevision   int64                `json:"inventory_revision,omitempty"`
+	CatalogRevision     int64                `json:"catalog_revision,omitempty"`
+	OwnershipRevision   int64                `json:"ownership_revision"`
+	BaselineRevision    int64                `json:"baseline_revision"`
+	PayloadSHA256       string               `json:"payload_sha256"`
+	Approval            Approval             `json:"approval"`
+	Payload             json.RawMessage      `json:"payload"`
 }
 type Row struct {
 	Key    []json.RawMessage          `json:"key"`

@@ -92,6 +92,9 @@ func teamsNumericWorkEligible(w teams.Work, m teamsCapabilityManifest) bool {
 	if json.Unmarshal(w.Config, &c) != nil {
 		return false
 	}
+	if w.ScheduledAssignment != nil {
+		return p.Key != "once" && len(c.PublicationV2) > 0 && teamsBuildEligible(m, "reader_labels_v1") && teamsBuildEligible(m, "report_automatic_metrics_v1")
+	}
 	if len(c.PublicationV2) > 0 && (!teamsBuildEligible(m, "report_deterministic_v2") || p.Key != "once") {
 		return false
 	}
