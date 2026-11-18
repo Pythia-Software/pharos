@@ -15,6 +15,16 @@ import (
 
 var teamsBirthHardwareUUID = func() (string, error) { return platformUUID([]time.Duration{2 * time.Second}) }
 
+// Fault injection stops before host finalization; production leaves it nil.
+var teamsBirthFault func(string) error
+
+func teamsBirthFaultAt(stage string) error {
+	if teamsBirthFault != nil {
+		return teamsBirthFault(stage)
+	}
+	return nil
+}
+
 // teamsVerifyFreshSQL checks the exact image on the same private connection
 // that will transition it into WAL and reconcile its independent checkpoint.
 func teamsVerifyFreshSQL(ctx context.Context, w *teamsProtectedWriter, expected *teamsCheckpointTuple) error {
@@ -275,7 +285,13 @@ func teamsCreateManagedLibrary(ctx context.Context, application, path, name stri
 	if err != nil {
 		return Config{}, err
 	}
-	predecessor := sha256.Sum256(raw)
+	bound := record
+	bound.Phase = "image_bound"
+	boundBytes, e := teamsEncodeBirthReservation(bound)
+	if e != nil {
+		return Config{}, e
+	}
+	predecessor := sha256.Sum256(boundBytes)
 	if hostRecord.Scope != record.Scope || (hostRecord.Phase == "pending" && (hostRecord.Previous != nil || hostRecord.PreviousUnactivated != hex.EncodeToString(predecessor[:]) || hostRecord.Next == nil || *hostRecord.Next != *record.Tuple)) || (hostRecord.Phase == "current" && (hostRecord.Current == nil || *hostRecord.Current != *record.Tuple)) || (hostRecord.Phase != "pending" && hostRecord.Phase != "current") {
 		return Config{}, errTeamsProtectionContinuity
 	}
@@ -312,9 +328,15 @@ func teamsCreateManagedLibrary(ctx context.Context, application, path, name stri
 		}
 		record = verified
 	}
+	if err = teamsBirthFaultAt("verified"); err != nil {
+		return Config{}, err
+	}
 	var mode string
 	if err = w.db.QueryRowContext(ctx, `PRAGMA journal_mode=WAL`).Scan(&mode); err != nil || mode != "wal" {
 		return Config{}, errTeamsProtectionContinuity
+	}
+	if err = teamsBirthFaultAt("wal_enabled"); err != nil {
+		return Config{}, err
 	}
 	w.requireFence = true
 	w.expectedInstance = teamsCheckpointInstance(record.LibraryID, record.InstanceID)

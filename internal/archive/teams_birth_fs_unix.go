@@ -228,7 +228,15 @@ func teamsEnsureManagedParent(path string) error {
 		return err
 	}
 	for current := path; ; current = filepath.Dir(current) {
-		fd, err := unix.Open(current, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		openPath := current
+		if current == ancestor {
+			var e error
+			openPath, e = filepath.EvalSymlinks(current)
+			if e != nil {
+				return e
+			}
+		}
+		fd, err := unix.Open(openPath, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if err != nil {
 			return err
 		}

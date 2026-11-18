@@ -324,3 +324,58 @@ func TestTeamsBirthAbandonsUnpublishedReservation(t *testing.T) {
 		t.Fatalf("missing tombstone: %v", err)
 	}
 }
+
+type teamsLoadUnsafeStore struct{ credentialstore.Store }
+
+func (teamsLoadUnsafeStore) Load(string) ([]byte, error) { return nil, credentialstore.ErrUnsafe }
+
+func TestLegacyV35IgnoresUnavailableBirthLoad(t *testing.T) {
+	useHost(t, "synthetic-legacy-v35")
+	t.Setenv("PHAROS_SUPPORT_DIR", t.TempDir())
+	parent := t.TempDir()
+	cfg, err := InitLibrary(filepath.Join(parent, "legacy"), libraryVolumeIdentity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Application = filepath.Join(parent, "Synthetic.app")
+	image, _, err := teamsBuildFreshImage(context.Background(), "legacy-library", "legacy-instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(cfg.CatalogPath, image, 0600); err != nil {
+		t.Fatal(err)
+	}
+	override(t, &teamsCredentialStore, func(Config) (credentialstore.Store, error) { return teamsLoadUnsafeStore{}, nil })
+	if c, found, err := teamsOpenManagedCatalog(context.Background(), cfg); err != nil || found {
+		if c != nil {
+			_ = c.Close()
+		}
+		t.Fatalf("legacy v35 birth dependency: %v", err)
+	}
+}
+
+func TestTeamsBirthRetriesPendingVerifiedImage(t *testing.T) {
+	for _, stage := range []string{"verified", "wal_enabled"} {
+		t.Run(stage, func(t *testing.T) {
+			useHost(t, "synthetic-birth-crash-"+stage)
+			t.Setenv("PHAROS_SUPPORT_DIR", t.TempDir())
+			override(t, &teamsBirthHardwareUUID, func() (string, error) { return "synthetic-hardware", nil })
+			parent := t.TempDir()
+			target, app := filepath.Join(parent, "fresh"), filepath.Join(parent, "Synthetic.app")
+			hit := false
+			override(t, &teamsBirthFault, func(at string) error {
+				if at == stage && !hit {
+					hit = true
+					return errors.New("synthetic interruption")
+				}
+				return nil
+			})
+			if _, err := teamsCreateManagedLibrary(context.Background(), app, target, "Fresh"); err == nil || !hit {
+				t.Fatalf("missing interruption: %v", err)
+			}
+			if _, err := teamsCreateManagedLibrary(context.Background(), app, target, "Fresh"); err != nil {
+				t.Fatalf("pending verified retry: %v", err)
+			}
+		})
+	}
+}

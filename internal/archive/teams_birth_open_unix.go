@@ -18,6 +18,31 @@ func teamsOpenManagedCatalog(ctx context.Context, cfg Config) (*Catalog, bool, e
 	}
 	descriptor, descriptorErr := readLibraryDescriptor(cfg)
 	managedMarker := descriptorErr == nil && descriptor.ManagedBirth
+	if managedMarker {
+		if cfg.Application == "" {
+			return nil, true, errTeamsProtectionContinuity
+		}
+		parent, e := filepath.EvalSymlinks(filepath.Dir(filepath.Dir(cfg.Path)))
+		if e != nil {
+			return nil, true, e
+		}
+		path := filepath.Join(parent, filepath.Base(filepath.Dir(cfg.Path)))
+		store, e := teamsCredentialStore(cfg)
+		if e != nil {
+			return nil, true, e
+		}
+		_, r, e := teamsReadBirthReservation(store, teamsBirthReservationName(installationID(cfg.Application), path))
+		if e != nil || r.Phase != "committed" {
+			return nil, true, errTeamsProtectionContinuity
+		}
+		actual, e := filepath.EvalSymlinks(cfg.CatalogPath)
+		if e != nil || actual != filepath.Join(path, "catalog", "catalog.sqlite3") {
+			return nil, true, errTeamsProtectionContinuity
+		}
+		if e = teamsVerifyBirthLocation(path, r); e != nil {
+			return nil, true, e
+		}
+	}
 	// Legacy catalogs keep their ordinary startup even if host credential
 	// storage is unavailable. This probe is read-only and does not Initialize.
 	db, e := sql.Open("sqlite", readerDSN(cfg.CatalogPath))
@@ -79,13 +104,16 @@ func teamsOpenManagedCatalog(ctx context.Context, cfg Config) (*Catalog, bool, e
 			if _, witnessErr := store.Load(teamsBirthIdentityName(scope)); witnessErr == nil {
 				return nil, true, errTeamsProtectionContinuity
 			} else if !errors.Is(witnessErr, os.ErrNotExist) {
-				return nil, true, witnessErr
+				return nil, false, nil
 			}
 		}
 		return nil, false, nil
 	}
 
 	if e != nil {
+		if !managedMarker {
+			return nil, false, nil
+		}
 		return nil, true, e
 	}
 	witness, e := store.Load(teamsBirthIdentityName(r.Scope))
