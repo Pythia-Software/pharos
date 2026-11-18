@@ -48,3 +48,32 @@ func (c *DeviceClient) ObserveSourceProtection(ctx context.Context, library stri
 
 	return out, nil
 }
+
+// LookupSourceProtectionReceipt reads an already accepted exact observation.
+// A missing or unavailable receipt is not evidence that no effect occurred.
+// The caller must separately enforce current identity and source consent.
+func (c *DeviceClient) LookupSourceProtectionReceipt(ctx context.Context, library string, raw []byte) (sourcewire.ProtectionReceipt, error) {
+	var out sourcewire.ProtectionReceipt
+	v, err := sourcewire.DecodeProtectionObservation(raw)
+	if err != nil {
+		return out, err
+	}
+	want, err := sourcewire.ProtectionObservationID(v, c.installation, library)
+	if err != nil || want != v.ObservationID {
+		return out, errors.New("invalid Teams protection identity")
+	}
+	path, err := LibraryPath(library, "source-protection")
+	if err != nil {
+		return out, err
+	}
+	digest := sourcewire.ProtectionDigest(raw)
+	path += "/" + v.ObservationID + "/receipts/" + digest
+	var response json.RawMessage
+	if err = c.exchange(ctx, http.MethodGet, path, nil, &response); err != nil {
+		return out, err
+	}
+	if sourceResponse(response, &out, "status", "observation_id", "revision", "observation_sha256", "privacy_revision", "origin_protection", "safety_pending") != nil || out.Status != "accepted" || out.ObservationID != v.ObservationID || out.ObservationSHA256 != digest || out.Revision != v.Revision || out.PrivacyRevision < 1 || out.OriginProtection != v.Protection {
+		return sourcewire.ProtectionReceipt{}, errors.New("invalid Teams protection receipt")
+	}
+	return out, nil
+}

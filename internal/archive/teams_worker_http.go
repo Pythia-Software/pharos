@@ -3,6 +3,7 @@ package archive
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -47,6 +48,23 @@ func (c *Catalog) setTeamsUserPolicy(ctx context.Context, d LibraryDescriptor, c
 
 func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	if r.URL.Path == "/api/teams/worker/source-reconcile" && r.Method == http.MethodPost {
+		var body struct{}
+		if err := teamsLocalAction(w, r, &body, map[string]bool{}); err != nil {
+			writeError(w, errors.New("Source protection is unavailable; try again later"), http.StatusConflict)
+			return
+		}
+		if err := s.reconcileTeamsSourceReceipt(r.Context()); err != nil {
+			if errors.Is(err, errTeamsSourceReceiptUnavailable) {
+				writeJSON(w, map[string]bool{"found": false}, http.StatusOK)
+				return
+			}
+			writeError(w, errors.New("Source protection could not be checked"), http.StatusConflict)
+			return
+		}
+		writeJSON(w, map[string]bool{"found": true}, http.StatusOK)
+		return
+	}
 	err := s.withTeamsLibraryClient(r.Context(), func(client *teams.DeviceClient, d LibraryDescriptor, credential *teams.EnrollmentCredential) error {
 		settings, e := readTeamsSettings(r.Context(), s.Catalog.reader())
 		if e != nil {
@@ -176,6 +194,34 @@ func (s *Server) teamsWorkerHTTP(w http.ResponseWriter, r *http.Request) {
 			response := map[string]any{"enabled": settings.Enabled, "optOut": settings.MetricsOptOut, "settingsRevision": settings.SettingsRevision, "acknowledgedPolicy": settings.AcknowledgedPolicy, "nextCheck": next, "checking": checking, "problem": problem, "items": out, "modelApproved": modelApproved}
 			if teamsSourcePilotEnabled && workScope == scope && settings.Enabled && sourceProblem != "" {
 				response["sourceProblem"] = sourceProblem
+				var available bool
+				var hasAttempts bool
+				if e = s.Catalog.reader().QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='teams_origin_attempts')`).Scan(&hasAttempts); e != nil {
+					return e
+				}
+				if hasAttempts {
+					e = s.Catalog.reader().QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM teams_origin_outbox o JOIN teams_origin_attempts a ON a.observation_id=o.observation_id WHERE o.origin=? AND o.org_id=? AND o.person_id=? AND o.installation_id=? AND o.library_id=? AND o.instance_id=? AND o.work_id='' AND o.snapshot_id='' AND o.state='prepared' AND o.receipt_json IS NULL AND a.first_attempt_at>0 AND a.terminal_code IN ('','unknown_source_resync_required','unknown_stale_protection_revision') AND `+teamsSourceLookupLiveIssuanceSQL+`)`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, teamsSourceLookupEarliestIssued()).Scan(&available)
+					if e != nil {
+						return e
+					}
+				}
+				if available {
+					local, le := readTeamsProtectionAcknowledgement(r.Context(), s.Catalog.reader(), d, credential)
+					transfer, te := readTeamsSourceTransferAcknowledgement(r.Context(), s.Catalog.reader(), d, credential)
+					key := credential.SigningKey()
+					fingerprint := ""
+					if len(key) == ed25519.PrivateKeySize {
+						fingerprint = teamsPayloadHash(key.Public().(ed25519.PublicKey))
+					}
+					clear(key)
+					checkpoint := s.Catalog.teamsCheckpoint
+					available = le == nil && te == nil && local && transfer && settings.Enabled && settings.LibraryID == d.ID && settings.InstanceID == d.Instance && settings.OrgID == credential.OrgID && settings.InstallationID == credential.InstallationID && fingerprint != "" && settings.KeyFingerprint == fingerprint && checkpoint != nil
+					if available {
+						_, host, he := teamsCheckpointLoad(checkpoint.store, checkpoint.name)
+						available = he == nil && host.Scope == checkpoint.scope && host.Phase == "current" && host.Current != nil && host.Current.Instance == teamsCheckpointInstance(d.ID, d.Instance)
+					}
+				}
+				response["sourceLookupAvailable"] = available
 			}
 			writeJSON(w, response, 200)
 			return nil

@@ -60,8 +60,8 @@ func (c *Catalog) teamsRunIndependentSourcePilot(ctx context.Context, cfg Config
 	if err != nil {
 		return err
 	}
-	// A request that may already have reached the server must replay its exact
-	// bytes before attempting a new 038 run, even after that run's deadline.
+	// A previously attempted request blocks a new scan until its exact
+	// outcome is known. An expired attempt remains parked for read-only recovery.
 
 	// An older census or a held spelling cannot hide an attempted 031 whose
 	// terminal receipt is still unknown. Never start a new scan around it.
@@ -111,7 +111,7 @@ func (c *Catalog) teamsRunIndependentSourcePilot(ctx context.Context, cfg Config
 			release()
 			return e
 		}
-		state, e := teamsLocalOriginStateCheckedIn(censusCtx, tx, cfg, d, credential, snapshot, scope, id, false, true, &item)
+		state, e := teamsLocalOriginStateCheckedIn(censusCtx, tx, cfg, d, credential, snapshot, scope, id, false, true, &item, false)
 		if e != nil {
 			_ = tx.Rollback()
 			release()
@@ -214,7 +214,7 @@ func (c *Catalog) completeTeamsLocalOriginRun(ctx context.Context, cfg Config, d
 			if e != nil {
 				return e
 			}
-			state, e := teamsLocalOriginStateCheckedIn(ctx, tx, cfg, d, credential, snapshot, scope, id, false, true, &item)
+			state, e := teamsLocalOriginStateCheckedIn(ctx, tx, cfg, d, credential, snapshot, scope, id, false, true, &item, false)
 			if e != nil {
 				return e
 			}
