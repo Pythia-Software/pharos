@@ -37,7 +37,7 @@ func teamsBirthWriteAt(dir int, name string, data []byte) error {
 	f := os.NewFile(uintptr(fd), name)
 	_, err = f.Write(data)
 	if err == nil {
-		err = syncToDrive(f)
+		err = teamsBirthSyncFile(f)
 	}
 	if e := f.Close(); err == nil {
 		err = e
@@ -168,6 +168,73 @@ func teamsVerifyBirthImage(path string, r teamsBirthReservation) error {
 	}
 	if hex.EncodeToString(h.Sum(nil)) != r.ImageSHA256 {
 		return errTeamsProtectionContinuity
+	}
+	return nil
+}
+
+// teamsVerifyBirthLocation uses only stat-style operations; it must not open
+// and close the main file while another SQLite connection holds POSIX locks.
+func teamsVerifyBirthLocation(path string, r teamsBirthReservation) error {
+	var d, c unix.Stat_t
+	if unix.Lstat(path, &d) != nil || d.Mode&unix.S_IFMT != unix.S_IFDIR || d.Uid != uint32(os.Geteuid()) || uint64(d.Dev) != r.DirectoryDevice || d.Ino != r.DirectoryInode {
+		return errTeamsProtectionContinuity
+	}
+	cat := filepath.Join(path, "catalog")
+	var cd unix.Stat_t
+	if unix.Lstat(cat, &cd) != nil || cd.Mode&unix.S_IFMT != unix.S_IFDIR || cd.Uid != uint32(os.Geteuid()) {
+		return errTeamsProtectionContinuity
+	}
+	main := filepath.Join(cat, "catalog.sqlite3")
+	if unix.Lstat(main, &c) != nil || c.Mode&unix.S_IFMT != unix.S_IFREG || c.Nlink != 1 || c.Uid != uint32(os.Geteuid()) || uint64(c.Dev) != r.CatalogDevice || c.Ino != r.CatalogInode {
+		return errTeamsProtectionContinuity
+	}
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		var side unix.Stat_t
+		err := unix.Lstat(main+suffix, &side)
+		if errors.Is(err, unix.ENOENT) {
+			continue
+		}
+		if err != nil || side.Mode&unix.S_IFMT != unix.S_IFREG || side.Nlink != 1 || side.Uid != uint32(os.Geteuid()) {
+			return errTeamsProtectionContinuity
+		}
+	}
+	return nil
+}
+
+// teamsEnsureManagedParent durably establishes only the app-owned parent;
+// the destination leaf remains create-only and is reserved separately.
+func teamsEnsureManagedParent(path string) error {
+	ancestor := path
+	for {
+		_, err := os.Lstat(ancestor)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		next := filepath.Dir(ancestor)
+		if next == ancestor {
+			return errTeamsProtectionContinuity
+		}
+		ancestor = next
+	}
+	if err := os.MkdirAll(path, 0700); err != nil {
+		return err
+	}
+	for current := path; ; current = filepath.Dir(current) {
+		fd, err := unix.Open(current, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if err != nil {
+			return err
+		}
+		err = unix.Fsync(fd)
+		_ = unix.Close(fd)
+		if err != nil {
+			return err
+		}
+		if current == ancestor {
+			break
+		}
 	}
 	return nil
 }

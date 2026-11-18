@@ -37,6 +37,7 @@ type teamsProtectedWriter struct {
 	requireFence     bool
 	expectedInstance string
 	upgradePreflight bool
+	validateBinding  func() error
 	// Set only by the checkpoint protocol while it owns the writer transaction.
 	// Until that protocol is implemented, no production path grants authority.
 	authorized atomic.Bool
@@ -115,6 +116,11 @@ func teamsOpenProtectedWriterDSN(dsn string) (*teamsProtectedWriter, error) {
 }
 
 func teamsBeginProtectedWrite(ctx context.Context, w *teamsProtectedWriter) (*sql.Tx, error) {
+	if w.validateBinding != nil {
+		if err := w.validateBinding(); err != nil {
+			return nil, err
+		}
+	}
 	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err

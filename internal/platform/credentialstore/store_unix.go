@@ -39,8 +39,40 @@ func (s *protectedFiles) openRoot(create bool) (int, error) {
 		return -1, ErrUnsafe
 	}
 	if create {
+		// Persist newly created ancestor entries before publishing credentials.
+		// Otherwise a durable record can disappear after a power loss because
+		// its containing directory was never committed by its parent.
+		ancestor := s.root
+		for {
+			_, e := os.Lstat(ancestor)
+			if e == nil {
+				break
+			}
+			if !errors.Is(e, os.ErrNotExist) {
+				return -1, ErrUnsafe
+			}
+			next := filepath.Dir(ancestor)
+			if next == ancestor {
+				return -1, ErrUnsafe
+			}
+			ancestor = next
+		}
 		if err := os.MkdirAll(s.root, 0700); err != nil {
 			return -1, ErrUnsafe
+		}
+		for path := s.root; ; path = filepath.Dir(path) {
+			fd, e := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+			if e != nil {
+				return -1, ErrUnsafe
+			}
+			e = unix.Fsync(fd)
+			_ = unix.Close(fd)
+			if e != nil {
+				return -1, ErrUnsafe
+			}
+			if path == ancestor {
+				break
+			}
 		}
 	}
 	parent, err := unix.Open(filepath.Dir(s.root), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
@@ -152,7 +184,7 @@ func writeTemp(root int, secret []byte) (string, error) {
 		return "", err
 	}
 	if _, err = f.Write(secret); err == nil {
-		err = f.Sync()
+		err = durableFileSync(int(f.Fd()))
 	}
 	if e := f.Close(); err == nil {
 		err = e

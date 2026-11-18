@@ -1011,7 +1011,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 			if location == "" && strings.HasPrefix(m.registry.Application, "/Volumes/") {
 				path = filepath.Join(filepath.Dir(m.registry.Application), "Libraries", name)
 			}
-			err = os.MkdirAll(filepath.Dir(path), 0o700)
+			err = teamsEnsureManagedParent(filepath.Dir(path))
 		} else {
 			path = expandPath(path)
 			if !filepath.IsAbs(path) {
@@ -1019,7 +1019,7 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 			} else if location != "ssd" && canonical(filepath.Dir(path)) == canonical(filepath.Join(pharosSupportDir(), "Libraries")) {
 				// Editing the proposed default sends an explicit path on a fresh
 				// install. Only this managed parent may be created implicitly.
-				err = os.MkdirAll(filepath.Dir(path), 0o700)
+				err = teamsEnsureManagedParent(filepath.Dir(path))
 			} else {
 				_, err = os.Stat(filepath.Dir(path))
 			}
@@ -1033,18 +1033,12 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 		}
 		create := m.operations.begin(OperationSpec{Kind: "library.create", Subject: name, Trigger: triggerUser})
 		var config Config
-		config, err = InitLibrary(path, libraryVolumeIdentity)
+		config, err = teamsCreateManagedLibrary(r.Context(), m.registry.Application, path, name)
 		create.Finish(err)
 		if err != nil {
 			break
 		}
-		d, e := readLibraryDescriptor(config)
-		if e != nil {
-			err = e
-			break
-		}
-		d.Name = name
-		if err = durableJSON(descriptorPath(config), d); err != nil {
+		if _, err = readLibraryDescriptor(config); err != nil {
 			break
 		}
 		var id string

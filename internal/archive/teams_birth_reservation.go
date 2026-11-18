@@ -20,6 +20,7 @@ type teamsBirthReservation struct {
 	Application     string                `json:"application"`
 	Path            string                `json:"path"`
 	Host            string                `json:"host"`
+	Volume          string                `json:"volume"`
 	UID             int                   `json:"uid"`
 	LibraryID       string                `json:"library_id"`
 	InstanceID      string                `json:"instance_id"`
@@ -75,10 +76,10 @@ func teamsAdvanceBirthReservation(store credentialstore.Store, name string, oldR
 	if old.Phase == "reserved" && next.Phase != "image_bound" || old.Phase == "image_bound" && next.Phase != "committed" || old.Phase == "committed" {
 		return nil, errTeamsProtectionContinuity
 	}
-	if old.Version != next.Version || old.Scope != next.Scope || old.Application != next.Application || old.Path != next.Path || old.Host != next.Host || old.UID != next.UID || old.LibraryID != next.LibraryID || old.InstanceID != next.InstanceID {
+	if old.Version != next.Version || old.Scope != next.Scope || old.Application != next.Application || old.Path != next.Path || old.Host != next.Host || old.Volume != next.Volume || old.UID != next.UID || old.LibraryID != next.LibraryID || old.InstanceID != next.InstanceID {
 		return nil, errTeamsProtectionContinuity
 	}
-	if old.Phase == "image_bound" && (old.ImageSHA256 != next.ImageSHA256 || old.Tuple == nil || next.Tuple == nil || *old.Tuple != *next.Tuple) {
+	if old.Phase == "image_bound" && (old.ImageSHA256 != next.ImageSHA256 || old.DirectoryDevice != next.DirectoryDevice || old.DirectoryInode != next.DirectoryInode || old.CatalogDevice != next.CatalogDevice || old.CatalogInode != next.CatalogInode || old.Tuple == nil || next.Tuple == nil || *old.Tuple != *next.Tuple) {
 		return nil, errTeamsProtectionContinuity
 	}
 	encoded, err := teamsEncodeBirthReservation(next)

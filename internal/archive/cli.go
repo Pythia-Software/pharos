@@ -265,15 +265,39 @@ func Run(arguments []string) error {
 	if command == "add-this-mac" {
 		return runAddThisMacCLI(config, args, os.Stdin, os.Stdout)
 	}
-	if err := config.EnsureDirs(); err != nil {
-		return err
-	}
 	if command == "serve" {
-		catalog, err := OpenCatalog(config.CatalogPath)
+		catalog, managed, err := teamsOpenManagedCatalog(context.Background(), config)
+		if err != nil {
+			return err
+		}
+		if !managed {
+			if err = config.EnsureDirs(); err != nil {
+				return err
+			}
+			catalog, err = OpenCatalog(config.CatalogPath)
+			if err == nil {
+				var version string
+				if e := catalog.DB.QueryRow(`SELECT value FROM meta WHERE key='schema_version'`).Scan(&version); e != nil {
+					_ = catalog.reads.Close()
+					_ = catalog.DB.Close()
+					return e
+				}
+				if version == "35" {
+					_ = catalog.reads.Close()
+					_ = catalog.DB.Close()
+					return errTeamsProtectionContinuity
+				}
+			}
+		}
 		if err != nil {
 			return err
 		}
 		defer catalog.Close()
+		if managed {
+			if err = config.EnsureDirs(); err != nil {
+				return err
+			}
+		}
 		if err := catalog.scheduleDefaultModelBackfill(context.Background()); err != nil {
 			return err
 		}
@@ -301,6 +325,9 @@ func Run(arguments []string) error {
 		// (see releasedMarkerName) ends.
 		server.life.listening = func() { _ = os.Remove(releasedMarker(config.CatalogPath)) }
 		return server.Serve()
+	}
+	if err := config.EnsureDirs(); err != nil {
+		return err
 	}
 	// Every other command opens the catalog under a lease (§6.5): taken
 	// before the open, so its Initialize is seen, and released after the
