@@ -210,6 +210,7 @@ func TestTeamsWaitingContentDeclineHandler(t *testing.T) {
 	var pollStatus int
 	var advertised teams.Work
 	var statusEntered, statusRelease chan struct{}
+	var pollEntered, pollRelease chan struct{}
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		paths = append(paths, r.URL.Path)
@@ -217,12 +218,17 @@ func TestTeamsWaitingContentDeclineHandler(t *testing.T) {
 		status := pollStatus
 		work := advertised
 		entered, release := statusEntered, statusRelease
+		pollIn, pollOut := pollEntered, pollRelease
 		mu.Unlock()
 		if r.URL.Path == "/v1/device/capabilities" {
 			_ = json.NewEncoder(w).Encode(map[string]any{"manifest_schema_versions": []int{1}})
 			return
 		}
 		if r.URL.Path == "/v1/device/poll" {
+			if pollIn != nil {
+				close(pollIn)
+				<-pollOut
+			}
 			if status != 0 {
 				w.WriteHeader(status)
 				return
@@ -420,6 +426,41 @@ func TestTeamsWaitingContentDeclineHandler(t *testing.T) {
 	}
 	mu.Lock()
 	pollStatus = 0
+	before = len(paths)
+	mu.Unlock()
+	// A settings withdrawal during an in-flight poll cannot publish its views.
+	mu.Lock()
+	pollStatus = 0
+	advertised = teams.Work{ID: "a4c09e42-d0a6-45f0-89ef-2a03b7cff633", LibraryID: d.ID, Config: json.RawMessage(`{}`), ConfigSHA256: "synthetic", ExpiresAt: time.Now().Add(time.Hour)}
+	pollEntered = make(chan struct{})
+	pollRelease = make(chan struct{})
+	enteredPoll, releasePoll := pollEntered, pollRelease
+	mu.Unlock()
+	service.teamsWorker.mu.Lock()
+	service.teamsWorker.items = map[string]teamsWorkerItem{"old": {State: "awaiting_review", Payload: []byte("old")}}
+	service.teamsWorker.scope = teamsCredentialScope(d, credential)
+	service.teamsWorker.settingsValid = true
+	service.teamsWorker.mu.Unlock()
+	checkDone := make(chan error, 1)
+	go func() { _, e := service.checkTeamsWork(t.Context()); checkDone <- e }()
+	<-enteredPoll
+	if _, e := c.setTeamsLocalSettings(t.Context(), d.ID, d.Instance, credential.OrgID, credential.InstallationID, teamsPayloadHash(key.Public().(ed25519.PublicKey)), false, false, 1); e != nil {
+		t.Fatal(e)
+	}
+	close(releasePoll)
+	if e := <-checkDone; !errors.Is(e, errTeamsConsentStale) {
+		t.Fatalf("concurrent consent change accepted: %v", e)
+	}
+	service.teamsWorker.mu.Lock()
+	live := service.teamsWorker.scope
+	n := len(service.teamsWorker.items)
+	valid := service.teamsWorker.settingsValid
+	service.teamsWorker.mu.Unlock()
+	if live != "" || n != 0 || valid {
+		t.Fatal("concurrent withdrawal retained an actionable view")
+	}
+	mu.Lock()
+	pollEntered, pollRelease = nil, nil
 	before = len(paths)
 	mu.Unlock()
 	// A database failure in the decline gate must also fail before network.

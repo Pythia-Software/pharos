@@ -174,9 +174,36 @@ func TestTeamsV2SyntheticPostgres(t *testing.T) {
 	override(t, &teamsWorkerCapabilities, func() teamsCapabilityManifest { return manifest })
 	override(t, &teamsLoadSourceConfig, func(string) (Config, error) { return cfg, nil })
 	service := testServer(t, cfg, c)
-	if _, err = service.checkTeamsWork(ctx); err != nil {
+	active, err := service.checkTeamsWork(ctx)
+	if err != nil {
 		t.Fatalf("worker check: %v", err)
 	}
+	service.teamsWorker.mu.Lock()
+	first := service.teamsWorker.items[work.ID]
+	service.teamsWorker.mu.Unlock()
+	if !active || first.State != "pending" || len(first.Payload) != 0 {
+		t.Fatalf("changed post-visit input retained an actionable view: active=%v state=%s", active, first.State)
+	}
+	var second teamsWorkerItem
+	settled := false
+	for turn := 0; turn < 4; turn++ {
+		nextActive, e := service.checkTeamsWork(ctx)
+		if e != nil {
+			t.Fatalf("stable worker revisit: %v", e)
+		}
+		service.teamsWorker.mu.Lock()
+		var present bool
+		second, present = service.teamsWorker.items[work.ID]
+		service.teamsWorker.mu.Unlock()
+		if (!present && !nextActive) || (present && second.State != "pending" && len(second.Payload) > 0) {
+			settled = true
+			break
+		}
+	}
+	if !settled {
+		t.Fatal("stable revisits did not restore or evict completed work")
+	}
+
 	draft, err := readTeamsV2Draft(ctx, c.reader(), work.ID)
 	if err != nil || draft.State != "accepted" {
 		t.Fatalf("worker draft: %s %v", draft.State, err)

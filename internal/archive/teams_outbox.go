@@ -596,6 +596,9 @@ type teamsPreparedManifest struct {
 // this immutable config and its audience. It grants computation/registration,
 // not delivery of a result that has not yet been reviewed.
 func (c *Catalog) grantTeamsQuestion(ctx context.Context, w teams.Work, descriptor LibraryDescriptor, expectedSettings int64) error {
+	return c.grantTeamsQuestionForView(ctx, w, descriptor, expectedSettings, "", "")
+}
+func (c *Catalog) grantTeamsQuestionForView(ctx context.Context, w teams.Work, descriptor LibraryDescriptor, expectedSettings int64, scope, expectedView string) error {
 	lease, err := c.teamsSharingLease()
 	if err != nil {
 		return err
@@ -622,6 +625,26 @@ func (c *Catalog) grantTeamsQuestion(ctx context.Context, w teams.Work, descript
 		}
 		if !s.Enabled || s.LibraryID != descriptor.ID || s.InstanceID != descriptor.Instance || w.LibraryID != descriptor.ID || s.SettingsRevision != expectedSettings {
 			return errTeamsConsentStale
+		}
+		if expectedView != "" {
+			var source, privacy int64
+			if e := tx.QueryRowContext(ctx, `SELECT revision FROM teams_source_revision WHERE id=1`).Scan(&source); e != nil {
+				return e
+			}
+			if e := tx.QueryRowContext(ctx, `SELECT revision FROM teams_privacy_revision WHERE id=1`).Scan(&privacy); e != nil {
+				return e
+			}
+			g, e := readCacheGenerations(ctx, tx)
+			if e != nil {
+				return e
+			}
+			current, e := teamsWorkViewBindingIn(ctx, tx, scope, w, s, source, privacy, g.all)
+			if e != nil {
+				return e
+			}
+			if current != expectedView {
+				return errTeamsConsentStale
+			}
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO teams_request_grants(version_id,library_id,instance_id,org_id,installation_id,config_hash,settings_revision,granted_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(version_id) DO UPDATE SET library_id=excluded.library_id,instance_id=excluded.instance_id,org_id=excluded.org_id,installation_id=excluded.installation_id,config_hash=excluded.config_hash,settings_revision=excluded.settings_revision,granted_at=excluded.granted_at`, w.VersionID, w.LibraryID, s.InstanceID, s.OrgID, s.InstallationID, w.ConfigSHA256, s.SettingsRevision, time.Now().UTC().Format(time.RFC3339Nano))
 		return err
