@@ -152,6 +152,11 @@ func (c *Catalog) journalTeamsLocalOriginBatch(ctx context.Context, cfg Config, 
 		if !teamsSamePilotSnapshot(current, snapshot) {
 			return errTeamsSnapshotChanged
 		}
+		if teamsNonPrivateSourceProofEnabled {
+			if e = teamsCheckRetainedBaselineFloor(ctx, tx, scan); e != nil {
+				return e
+			}
+		}
 		for binding, revision := range current.exposures {
 			if e = reserveTeamsSourceExposure(ctx, tx, d, credential, binding, revision); e != nil {
 				return e

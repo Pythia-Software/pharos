@@ -124,6 +124,9 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 	var unconfirmedPage []byte
 	var requestRun string
 	startBodies := map[string][]byte{}
+	runGenerations := map[string]int64{}
+	runHeld := map[string]bool{}
+	safetyHeldOnce := false
 	accepted := map[string]sourcewire.ProtectionObservation{}
 	invalidateOnPage, invalidated := false, false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -172,7 +175,21 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 				t.Error("new generation did not request restart")
 			}
 			runID := fmt.Sprintf("00000000-0000-4000-8000-%012d", len(accepted)+6)
-			_ = json.NewEncoder(w).Encode(sourcewire.RecoveryStartReceipt{Status: "proof_required", RunID: runID, Generation: int64(len(accepted) + 1), ServerTime: now, ExpiresAt: now + 3600, UnacceptedFloor: now - 1, ExternalProofRequired: true})
+			generation := int64(len(accepted) + 1)
+			status := "proof_required"
+			held := false
+			if mode == "retained-baseline" || mode == "nonprivate-stale" {
+				runID = fmt.Sprintf("00000000-0000-4000-8000-%012d", starts+100)
+				generation = int64(starts)
+				if len(accepted) > 0 && !safetyHeldOnce {
+					held = true
+					status = "held"
+					safetyHeldOnce = true
+				}
+			}
+			runGenerations[runID] = generation
+			runHeld[runID] = held
+			_ = json.NewEncoder(w).Encode(sourcewire.RecoveryStartReceipt{Status: status, Held: held, RunID: runID, Generation: generation, ServerTime: now, ExpiresAt: now + 3600, UnacceptedFloor: now - 1, ExternalProofRequired: true})
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/source-recovery/") && strings.HasSuffix(r.URL.Path, "/pages"):
 			request, e := sourcewire.DecodeRecoveryPage(raw)
 			if e != nil {
@@ -303,7 +320,17 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 					return
 				}
 			}
-			_ = json.NewEncoder(w).Encode(sourcewire.RecoveryPageReceipt{Status: "proof_required", RunID: request.RunID, Generation: int64(len(accepted) + 1), ServerTime: now, UnacceptedFloor: now - 1, ExternalProofRequired: true, Family: "origins", Items: items, NextCursor: cursor})
+			generation := int64(len(accepted) + 1)
+			status := "proof_required"
+			held := false
+			if mode == "retained-baseline" || mode == "nonprivate-stale" {
+				generation = runGenerations[request.RunID]
+				held = runHeld[request.RunID]
+				if held {
+					status = "held"
+				}
+			}
+			_ = json.NewEncoder(w).Encode(sourcewire.RecoveryPageReceipt{Status: status, Held: held, RunID: request.RunID, Generation: generation, ServerTime: now, UnacceptedFloor: now - 1, ExternalProofRequired: true, Family: "origins", Items: items, NextCursor: cursor})
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/source-protection/") && strings.Contains(r.URL.Path, "/receipts/"):
 			lookups++
 			if len(raw) != 0 {
@@ -382,7 +409,7 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 				return
 			}
 			signedOrigins++
-			_ = json.NewEncoder(w).Encode(sourcewire.ProtectionReceipt{Status: "accepted", ObservationID: v.ObservationID, Revision: v.Revision, ObservationSHA256: sourcewire.ProtectionDigest(raw), PrivacyRevision: 1, OriginProtection: v.Protection, SafetyPending: mode == "retained-baseline"})
+			_ = json.NewEncoder(w).Encode(sourcewire.ProtectionReceipt{Status: "accepted", ObservationID: v.ObservationID, Revision: v.Revision, ObservationSHA256: sourcewire.ProtectionDigest(raw), PrivacyRevision: 1, OriginProtection: v.Protection, SafetyPending: mode == "retained-baseline" || mode == "nonprivate-stale"})
 		default:
 			t.Errorf("unexpected synthetic route %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(404)
@@ -533,7 +560,7 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 		}
 		return snapshot, nil
 	})
-	if mode == "retained-baseline" {
+	if mode == "retained-baseline" || mode == "nonprivate-stale" {
 		override(t, &teamsNonPrivateSourceProofEnabled, true)
 		// A real birth supplies this private, location-checked writer binding.
 		// This fixture focuses on the signed 038 journal and baseline CAS.
@@ -567,6 +594,22 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 		}
 		if starts != 2 || signedOrigins != 0 {
 			t.Fatalf("unexpected baseline effects: %d %d", starts, signedOrigins)
+		}
+		if mode == "nonprivate-stale" {
+			for turn := 0; turn < 12 && originAttempts == 0; turn++ {
+				_ = c.teamsRunIndependentSourcePilot(ctx, cfg, client, d, credential, teams.CapabilityManifest{}, true)
+			}
+			if originAttempts != 1 || signedOrigins != 0 {
+				t.Fatalf("expected uncertain first attempt: %d %d", originAttempts, signedOrigins)
+			}
+			invalidated = true
+			for turn := 0; turn < 3; turn++ {
+				_ = c.teamsRunIndependentSourcePilot(ctx, cfg, client, d, credential, teams.CapabilityManifest{}, true)
+			}
+			if originAttempts != 1 || signedOrigins != 0 {
+				t.Fatal("changed evidence replayed uncertain non-private origin")
+			}
+			return
 		}
 		// Publish every bounded synthetic origin through the existing signed
 		// worker, then rebuild from the retained receipts and server floor.

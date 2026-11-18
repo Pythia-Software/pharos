@@ -144,7 +144,7 @@ func (c *Catalog) teamsRunIndependentSourcePilot(ctx context.Context, cfg Config
 					break
 				}
 				current, ok := prior.byToken[observation.Token]
-				if !ok || current.Witness != observation.Witness || current.Revision != observation.Revision || current.Protection != observation.Protection || current.EvidenceRevision != observation.EvidenceRevision {
+				if !ok || current.Witness != observation.Witness || current.Revision != observation.Revision || current.Protection != observation.Protection || current.EvidenceRevision != observation.EvidenceRevision || !teamsSafetyOriginPermits(observation, current) {
 					safetyAlreadyProved = false
 					break
 				}
@@ -216,7 +216,7 @@ func (c *Catalog) teamsRunIndependentSourcePilot(ctx context.Context, cfg Config
 			return errTeamsPilotPending
 		}
 		origin, found := scan.byToken[observation.Token]
-		if !found || origin.Witness != observation.Witness || origin.EvidenceRevision != observation.EvidenceRevision {
+		if !found || origin.Witness != observation.Witness || origin.EvidenceRevision != observation.EvidenceRevision || !teamsSafetyOriginPermits(observation, origin) {
 			return errTeamsPilotPending
 		}
 	}
@@ -265,6 +265,13 @@ func (c *Catalog) teamsRunIndependentSourcePilot(ctx context.Context, cfg Config
 		return err
 	}
 	return errTeamsPilotMore
+}
+
+func teamsSafetyOriginPermits(observation sourcewire.ProtectionObservation, origin teamsRecoveryOrigin) bool {
+	if observation.Protection != "non_private" {
+		return true
+	}
+	return origin.Protection == "non_private" && origin.FlagFloor != "unknown" && (!origin.Classification.Required || (origin.Classification.State == "clear" && origin.Classification.EvidenceRevision == origin.EvidenceRevision))
 }
 
 // Reuse a retained, fully verified non-held scan only to finish the same

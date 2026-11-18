@@ -88,6 +88,37 @@ func (c *Catalog) teamsRecoveryPageForScope(ctx context.Context, cfg Config, cli
 		} else if !errors.Is(e, sql.ErrNoRows) {
 			return e
 		}
+		if errors.Is(e, sql.ErrNoRows) && token == "batch" && workID == "" && scope.snapshotID == "" {
+			// The baseline is already a contributor to this live server run.
+			// Reuse its exact signed start and pages for the first batch rather
+			// than inventing a conflicting start ID in the same generation.
+			var baselineKey string
+			e = tx.QueryRowContext(ctx, `SELECT r.run_key,r.start_json,r.start_receipt_json,r.expires_at FROM teams_origin_runs r JOIN teams_protection_baseline b ON b.id=1 AND b.state='current' AND b.proposal_sha256=r.run_key WHERE r.origin=? AND r.org_id=? AND r.person_id=? AND r.installation_id=? AND r.library_id=? AND r.instance_id=? AND r.token='baseline' AND r.state='completed' AND r.inventory_sha256=? AND r.settings_revision=? AND r.source_revision=? AND r.privacy_revision=? AND r.cache_generation=? AND r.expires_at>?`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance, scope.inventoryHash, scope.settingsRevision, scope.sourceRevision, scope.privacyRevision, scope.generation, time.Now().UTC().Unix()).Scan(&baselineKey, &row.start, &row.startReceipt, &row.expires)
+			if e == nil {
+				nonce, x := teamsCheckpointRandom()
+				if x != nil {
+					return x
+				}
+				row.key = teamsPayloadHash([]byte("baseline-batch-alias:" + baselineKey + ":" + nonce))
+				row.state = "ready"
+				_, x = tx.ExecContext(ctx, `INSERT INTO teams_origin_runs(run_key,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,token,start_json,start_receipt_json,expires_at,state) SELECT ?,origin,org_id,person_id,installation_id,library_id,instance_id,work_id,snapshot_id,inventory_sha256,settings_revision,source_revision,privacy_revision,cache_generation,'batch',start_json,start_receipt_json,expires_at,'ready' FROM teams_origin_runs WHERE run_key=? AND token='baseline' AND state='completed'`, row.key, baselineKey)
+				if x != nil {
+					return x
+				}
+				result, x := tx.ExecContext(ctx, `INSERT INTO teams_origin_run_pages(run_key,page_index,request_json,receipt_json) SELECT ?,page_index,request_json,receipt_json FROM teams_origin_run_pages WHERE run_key=? AND receipt_json IS NOT NULL ORDER BY page_index`, row.key, baselineKey)
+				if x != nil {
+					return x
+				}
+				n, x := result.RowsAffected()
+				if x != nil || n < 1 || n > teamsRecoveryMaxOriginPages {
+					return errTeamsProtectionHeld
+				}
+				return nil
+			}
+			if !errors.Is(e, sql.ErrNoRows) {
+				return e
+			}
+		}
 		var otherActive bool
 		if e = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM teams_origin_runs WHERE origin=? AND org_id=? AND person_id=? AND installation_id=? AND library_id=? AND instance_id=? AND state IN ('prepared','started','ready'))`, credential.Origin, credential.OrgID, credential.PersonID, credential.InstallationID, d.ID, d.Instance).Scan(&otherActive); e != nil {
 			return e
@@ -304,8 +335,13 @@ func (c *Catalog) teamsRecoveryPageForScope(ctx context.Context, cfg Config, cli
 				// Retain this signed held scan, but permit a later independent
 				// status scan. No origin or receipt is changed here.
 				if e = c.writeTransaction(ctx, "teams-origin-safety-held", func(tx *sql.Tx) error {
-					_, x := tx.ExecContext(ctx, `UPDATE teams_origin_runs SET state='completed' WHERE run_key=? AND token='batch-safety' AND state='ready'`, row.key)
-					return x
+					if x := check(ctx, tx); x != nil {
+						return x
+					}
+					if _, x := tx.ExecContext(ctx, `UPDATE teams_origin_runs SET state='completed' WHERE run_key=? AND token='batch-safety' AND state='ready'`, row.key); x != nil {
+						return x
+					}
+					return teamsPruneSupersededBaselineRuns(ctx, tx, d, credential, row.key, "batch-safety", scan, true)
 				}); e != nil {
 					return nil, e
 				}

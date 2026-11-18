@@ -186,6 +186,47 @@ func teamsBaselineReconcileHistory(ctx context.Context, tx *sql.Tx, d LibraryDes
 	return nil
 }
 
+func teamsCheckRetainedBaselineFloor(ctx context.Context, tx *sql.Tx, scan *teamsRecoveryOriginScan) error {
+	var key string
+	var raw []byte
+	if err := tx.QueryRowContext(ctx, `SELECT r.run_key,r.start_receipt_json FROM teams_protection_baseline b JOIN teams_origin_runs r ON r.run_key=b.proposal_sha256 AND r.token='baseline' AND r.state='completed' WHERE b.id=1 AND b.state='current'`).Scan(&key, &raw); err != nil {
+		return errTeamsProtectionHeld
+	}
+	var start sourcewire.RecoveryStartReceipt
+	if !teams.ValidUniqueJSON(raw) || json.Unmarshal(raw, &start) != nil {
+		return errTeamsProtectionHeld
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT page_index,request_json,receipt_json FROM teams_origin_run_pages WHERE run_key=? ORDER BY page_index`, key)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var requests []sourcewire.RecoveryPageRequest
+	var receipts []sourcewire.RecoveryPageReceipt
+	for rows.Next() {
+		var i int
+		var reqRaw, resRaw []byte
+		if err = rows.Scan(&i, &reqRaw, &resRaw); err != nil {
+			return err
+		}
+		req, e := sourcewire.DecodeRecoveryPage(reqRaw)
+		var res sourcewire.RecoveryPageReceipt
+		if i != len(requests) || e != nil || !teams.ValidUniqueJSON(resRaw) || json.Unmarshal(resRaw, &res) != nil {
+			return errTeamsProtectionHeld
+		}
+		requests = append(requests, req)
+		receipts = append(receipts, res)
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	prior, err := teamsBuildRecoveryOriginScan(start, requests, receipts)
+	if err != nil || !teamsBaselineScanDominates(scan, prior) {
+		return errTeamsProtectionHeld
+	}
+	return nil
+}
+
 // A newer complete scan can replace older scan bytes only if it retains every
 // witness, monotone floor and all previously restrictive server protections.
 func teamsBaselineScanDominates(newer, older *teamsRecoveryOriginScan) bool {
@@ -197,13 +238,14 @@ func teamsBaselineScanDominates(newer, older *teamsRecoveryOriginScan) bool {
 		if !ok || now.Witness != old.Witness || now.Revision < old.Revision {
 			return false
 		}
-		if now.Revision == old.Revision && (now.Protection != old.Protection || now.EvidenceRevision != old.EvidenceRevision || now.FlagFloor != old.FlagFloor || now.Classification != old.Classification) {
+		classificationClear := old.Classification.Required && old.Classification.State != "clear" && now.Classification.Required && now.Classification.State == "clear" && now.Classification.EvidenceRevision == now.EvidenceRevision && validRecordHash(now.Classification.PolicySHA256)
+		if now.Revision == old.Revision && (now.Protection != old.Protection || now.EvidenceRevision != old.EvidenceRevision || now.FlagFloor != old.FlagFloor || (now.Classification != old.Classification && !classificationClear)) {
 			return false
 		}
 		if old.FlagFloor != "" && now.FlagFloor != old.FlagFloor {
 			return false
 		}
-		if old.Classification.Required && old.Classification.State != "clear" && (!now.Classification.Required || now.Classification.State != old.Classification.State) {
+		if old.Classification.Required && old.Classification.State != "clear" && (!now.Classification.Required || (now.Classification.State != old.Classification.State && !(now.Classification.State == "clear" && now.Classification.EvidenceRevision == now.EvidenceRevision && validRecordHash(now.Classification.PolicySHA256)))) {
 			return false
 		}
 		if (old.Protection == "explicit_private" || old.Protection == "inherited_private" || old.Protection == "flagged") && now.Protection != old.Protection && now.Protection != "explicit_private" {
@@ -272,12 +314,15 @@ func teamsPruneSupersededBaselineRuns(ctx context.Context, tx *sql.Tx, d Library
 			return err
 		}
 		previous, e := teamsBuildRecoveryOriginScan(start, requests, receipts)
-		if e == nil && allowHeld && previous.held && !scan.held {
-			copy := *previous
-			copy.held = false
-			previous = &copy
+		comparison := scan
+		if e == nil && allowHeld {
+			oldCopy, newCopy := *previous, *scan
+			oldCopy.held = false
+			newCopy.held = false
+			previous = &oldCopy
+			comparison = &newCopy
 		}
-		if e != nil || !teamsBaselineScanDominates(scan, previous) {
+		if e != nil || !teamsBaselineScanDominates(comparison, previous) {
 			return errTeamsProtectionHeld
 		}
 		if _, e = tx.ExecContext(ctx, `DELETE FROM teams_origin_runs WHERE run_key=? AND token=? AND state='completed'`, old.key, token); e != nil {
