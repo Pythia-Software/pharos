@@ -677,6 +677,33 @@ func runTeamsWorkerSourcePilotSignedOrigin(t *testing.T, multipage, malformed, f
 		if e = c.teamsPilotCheckpointCurrent(ctx, d); e != nil {
 			t.Fatal(e)
 		}
+		// A higher floor retained by a safety scan must fence a later baseline
+		// or batch even when the original baseline had a lower floor.
+		if e = c.writeTransaction(ctx, "synthetic-safety-floor", func(tx *sql.Tx) error {
+			result, x := tx.Exec(`UPDATE teams_origin_run_pages SET receipt_json=json_set(receipt_json,'$.unaccepted_floor',?) WHERE run_key=(SELECT run_key FROM teams_origin_runs WHERE token='batch-safety' AND state='completed' ORDER BY rowid DESC LIMIT 1)`, time.Now().Unix()+120)
+			if x != nil {
+				return x
+			}
+			n, x := result.RowsAffected()
+			if x != nil {
+				return x
+			}
+			if n < 1 {
+				return errTeamsProtectionHeld
+			}
+			return nil
+		}); e != nil {
+			t.Fatal(e)
+		}
+		tx, e := c.reader().BeginTx(ctx, nil)
+		if e != nil {
+			t.Fatal(e)
+		}
+		e = teamsRequireRetainedRecoveryFloorIn(ctx, tx, d, credential, &teamsRecoveryOriginScan{last: sourcewire.RecoveryPageReceipt{UnacceptedFloor: time.Now().Unix() - 1}})
+		_ = tx.Rollback()
+		if !errors.Is(e, errTeamsProtectionHeld) {
+			t.Fatalf("higher safety floor lost: %v", e)
+		}
 		return
 	}
 	store.rejectCurrent = true
