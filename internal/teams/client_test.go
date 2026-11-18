@@ -122,10 +122,10 @@ func TestPollNegotiatesManifestAndFallsBack(t *testing.T) {
 				return
 			}
 			versions = append(versions, body.Manifest.SchemaVersion)
-			if body.Manifest.SchemaVersion == 2 && !slices.Contains(body.Manifest.Features, "report_deterministic_v2") {
+			if body.Manifest.SchemaVersion == 2 && (!slices.Contains(body.Manifest.Features, "report_deterministic_v2") || !slices.Contains(body.Manifest.Features, "reader_labels_v1")) {
 				t.Error("missing negotiated v2 feature")
 			}
-			if body.Manifest.SchemaVersion == 1 && slices.Contains(body.Manifest.Capabilities, "report_deterministic_v2") {
+			if body.Manifest.SchemaVersion == 1 && (slices.Contains(body.Manifest.Capabilities, "report_deterministic_v2") || slices.Contains(body.Manifest.Capabilities, "reader_labels_v1")) {
 				t.Error("v2 feature leaked into v1 fallback")
 			}
 			if body.Manifest.SchemaVersion == 2 && reject {
@@ -146,7 +146,7 @@ func TestPollNegotiatesManifestAndFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := PollRequest{AppVersion: "0.10.0", LibraryIDs: []string{}, CapabilityManifest: &CapabilityManifest{SchemaVersion: 1, AppVersion: "0.10.0", Capabilities: []string{"deterministic_query_v1", "source_snapshot_v2"}, V2OnlyFeatures: []string{"report_deterministic_v2"}}}
+	request := PollRequest{AppVersion: "0.10.0", LibraryIDs: []string{}, CapabilityManifest: &CapabilityManifest{SchemaVersion: 1, AppVersion: "0.10.0", Capabilities: []string{"deterministic_query_v1", "source_snapshot_v2"}, V2OnlyFeatures: []string{"reader_labels_v1", "report_deterministic_v2"}}}
 	for i := 0; i < 3; i++ {
 		if _, err = client.Poll(context.Background(), request); err != nil {
 			t.Fatal(err)
@@ -239,5 +239,45 @@ func TestPollRejectsManualSeriesOnLegacyCarrier(t *testing.T) {
 	}
 	if len(out.Work) != 1 || string(out.Work[0].Config) != string(valid) || len(out.Cancellations) != 1 {
 		t.Fatalf("lost valid work or cancellation: %+v", out)
+	}
+}
+
+func TestPollLegacyDiscoveryUsesOnlyV1Capabilities(t *testing.T) {
+	_, key, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var polls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/device/capabilities" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Path != "/v1/device/poll" {
+			http.NotFound(w, r)
+			return
+		}
+		polls++
+		var body struct {
+			Manifest struct {
+				SchemaVersion int             `json:"schema_version"`
+				Capabilities  []string        `json:"capabilities"`
+				Features      json.RawMessage `json:"features"`
+			} `json:"capability_manifest"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || body.Manifest.SchemaVersion != 1 || len(body.Manifest.Features) != 0 || slices.Contains(body.Manifest.Capabilities, "reader_labels_v1") || slices.Contains(body.Manifest.Capabilities, "report_deterministic_v2") {
+			t.Error("legacy server received v2 declaration")
+		}
+		json.NewEncoder(w).Encode(PollResponse{Work: []Work{}, Cancellations: []Cancellation{}})
+	}))
+	defer server.Close()
+	client, err := NewDeviceClient(server.URL, "a4c09e42-d0a6-45f0-89ef-2a03b7cff630", key, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Destroy()
+	m := CapabilityManifest{SchemaVersion: 1, AppVersion: "0.10.0", Capabilities: []string{"deterministic_query_v1", "source_snapshot_v2"}, V2OnlyFeatures: []string{"reader_labels_v1", "report_deterministic_v2"}}
+	if _, err = client.Poll(context.Background(), PollRequest{AppVersion: m.AppVersion, LibraryIDs: []string{}, CapabilityManifest: &m}); err != nil || polls != 1 {
+		t.Fatalf("legacy poll: %v, calls=%d", err, polls)
 	}
 }
