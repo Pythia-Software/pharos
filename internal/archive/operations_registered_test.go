@@ -35,6 +35,7 @@ var unregisteredWorkAllowed = map[string]allowedWork{
 	"application.go:updateRefusal":                   {1, "asks each library's service in parallel whether an update may stop it: a read bounded by brokerFreshTimeout that writes nothing"},
 	"capture.go:newHash":                             {1, "a hashing pipeline stage inside a capture, which is the operation"},
 	"backup.go:boundWAL":                             {1, "a WAL poller inside a backup, which is the operation"},
+	"backup_locations.go:backupLocationConnected":    {1, "one stat of a backup manifest, abandoned after backupLocationProbeLimit so a hung network share cannot stall status; writes nothing"},
 	"catalog_compact.go:writeCompacted":              {1, "a size poller for progress inside a compaction, which is the operation"},
 	"cli.go:Run":                                     {1, "opens the browser for serve --open"},
 	"drive.go:cachedVolumeIdentity":                  {1, "subprocess: a diskutil lookup for a status read; writes nothing"},

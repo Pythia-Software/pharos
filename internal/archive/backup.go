@@ -33,7 +33,8 @@ import (
 // that is fsynced and renamed, so an interrupted backup leaves every file
 // either as it was or complete. Nothing is deleted from DEST without --prune.
 // Each finished backup is recorded in the library's backups.json, which also
-// holds the random library id that ties a destination to one library.
+// holds the random library id that ties a destination to one library, and the
+// locations the library is kept backed up to (backup_locations.go).
 const (
 	backupRecordName      = "backups.json"
 	backupRecordLockName  = ".backups.json.lock"
@@ -41,8 +42,10 @@ const (
 	backupManifestVersion = 1
 	backupTempSuffix      = ".pharos-backup-tmp"
 	backupLockName        = ".pharos-backup.lock"
-	backupHistoryLimit    = 50
+	backupReservationsDir = ".backup-reservations"
 )
+
+var backupHistoryLimit = 50
 
 type backupRecord struct {
 	StartedAt       string  `json:"started_at"`
@@ -60,12 +63,17 @@ type backupRecord struct {
 	Missing []string `json:"missing,omitempty"`
 }
 
-// backupHistory is backups.json: the library's id and its finished backups,
-// newest first.
+// backupHistory is backups.json: the library's id, its backup locations and
+// its finished backups, newest first. Locations is nil until the list is first
+// changed, and empty once every location has been removed; omitzero keeps the
+// two apart on disk.
 type backupHistory struct {
-	Version   int            `json:"version"`
-	LibraryID string         `json:"library_id,omitempty"`
-	Backups   []backupRecord `json:"backups"`
+	Version        int              `json:"version"`
+	LibraryID      string           `json:"library_id,omitempty"`
+	Locations      []backupLocation `json:"locations,omitzero"`
+	Reservations   []string         `json:"reservations,omitempty"`
+	UnfinishedRuns []BackupRun      `json:"unfinished_runs,omitzero"`
+	Backups        []backupRecord   `json:"backups"`
 }
 
 func backupRecordPath(config Config) string {
@@ -145,10 +153,9 @@ func updateBackupHistory(config Config, update func(*backupHistory) bool) (backu
 
 func recordBackup(config Config, record backupRecord) error {
 	_, err := updateBackupHistory(config, func(history *backupHistory) bool {
+		clearBackupOutcome(history, record.Destination)
 		history.Backups = append([]backupRecord{record}, history.Backups...)
-		if len(history.Backups) > backupHistoryLimit {
-			history.Backups = history.Backups[:backupHistoryLimit]
-		}
+		trimBackupHistory(history)
 		return true
 	})
 	return err
@@ -298,6 +305,7 @@ func planBackup(config Config) (backupPlan, error) {
 	record := backupRecordPath(config)
 	plan.exclude[canonical(record)] = true
 	plan.exclude[canonical(filepath.Join(filepath.Dir(record), backupRecordLockName))] = true
+	plan.exclude[canonical(filepath.Join(filepath.Dir(record), backupReservationsDir))] = true
 	if config.StagingRoot != "" {
 		plan.exclude[canonical(config.StagingRoot)] = true
 	}
@@ -543,6 +551,9 @@ func prepareBackup(config Config, dest string, prune bool) (*backupJob, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := backupLocationOverlap(loadBackupHistory(config), dest); err != nil {
+		return nil, err
+	}
 	previous, err := readBackupDestination(dest, plan.library)
 	if err != nil {
 		return nil, err
@@ -609,7 +620,23 @@ func (j *backupJob) Run(ctx context.Context, progress func(BackupRun)) BackupRun
 	j.ctx, j.progress, j.started = ctx, progress, time.Now()
 	j.run.State, j.run.StartedAt = "running", now()
 	var err error
-	withCaptureIOPolicy(func() { err = j.execute() })
+	var release func()
+	defer func() {
+		if release != nil {
+			// Cleanup can wait for the history lock. Record the terminal
+			// outcome first so that wait cannot change its finish order.
+			withCaptureIOPolicy(release)
+		}
+	}()
+	withCaptureIOPolicy(func() {
+		if !j.ephemeral {
+			release, err = reserveBackupLocation(j.config, j.dest)
+			if err != nil {
+				return
+			}
+		}
+		err = j.execute()
+	})
 	if err != nil {
 		j.fail("", err)
 	}
@@ -632,7 +659,13 @@ func (j *backupJob) Run(ctx context.Context, progress func(BackupRun)) BackupRun
 		j.run.State = "complete"
 	}
 	j.run.Phase = j.run.State
-	j.run.CompletedAt = now()
+	j.run.UpdatedAt = now()
+	j.run.CompletedAt = j.run.UpdatedAt
+	if !j.ephemeral && (j.run.State == "failed" || j.run.State == "cancelled") {
+		if err := recordBackupOutcome(j.config, j.run); err != nil {
+			j.run.Warnings = append(j.run.Warnings, fmt.Sprintf("recording the backup outcome failed: %v", err))
+		}
+	}
 	j.report()
 	return j.run.clone()
 }
@@ -640,6 +673,11 @@ func (j *backupJob) Run(ctx context.Context, progress func(BackupRun)) BackupRun
 var errBackupDestinationBusy = errors.New("another backup to this destination is running")
 
 func (j *backupJob) execute() error {
+	if !j.ephemeral {
+		if err := backupLocationOverlap(loadBackupHistory(j.config), j.dest); err != nil {
+			return err
+		}
+	}
 	if err := os.MkdirAll(j.dest, 0o700); err != nil {
 		return toBackupDestination(err)
 	}
@@ -731,7 +769,11 @@ func (j *backupJob) phase(name string) {
 }
 
 func (j *backupJob) report() {
-	j.run.UpdatedAt = now()
+	// Delivering a completed run after a slow history write must not make
+	// its outcome look newer than another run that finished meanwhile.
+	if j.run.CompletedAt == "" {
+		j.run.UpdatedAt = now()
+	}
 	if j.progress != nil {
 		j.progress(j.run.clone())
 	}
@@ -1383,6 +1425,11 @@ func runBackupCLI(config Config, args []string) error {
 	}
 	for _, warning := range job.run.Warnings {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+	}
+	// Before the run: its record would otherwise replace the last destination
+	// that a library from before the list counts as its location.
+	if err := addBackupLocation(config, job.dest); err != nil {
+		return fmt.Errorf("cannot add backup location %s: %w", job.dest, err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

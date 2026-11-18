@@ -90,8 +90,15 @@ func (s *Server) freshness(ctx context.Context, views []opView, cachedOnly bool)
 		break
 	}
 	s.runsMu.RUnlock()
-	if _, runs := s.backups.status(); len(runs) > 0 && runs[0].State == "failed" {
-		in.backupFailedAt = defaultString(runs[0].UpdatedAt, runs[0].StartedAt)
+	_, runs := s.backups.status()
+	if in.files != nil && in.files.backupHistory != nil {
+		runs = currentBackupRuns(*in.files.backupHistory, runs)
+	}
+	if len(runs) > 0 {
+		if failed := failedBackupRuns(runs); len(failed) > 0 {
+			in.backupFailedAt = defaultString(failed[0].UpdatedAt, failed[0].StartedAt)
+			in.backupLocationFailed = true
+		}
 	}
 	return s.Catalog.freshness(ctx, in)
 }
@@ -196,7 +203,9 @@ func readFreshnessFiles(catalog *Catalog, root string, config *Config, previous 
 	files := &freshnessFiles{at: time.Now()}
 	if config != nil {
 		files.backupKnown = true
-		for _, record := range loadBackupHistory(*config).Backups { // newest first
+		history := loadBackupHistory(*config)
+		files.backupHistory = &history
+		for _, record := range history.Backups { // newest first
 			if !record.Partial {
 				files.backupAt = record.FinishedAt
 				break

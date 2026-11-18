@@ -94,6 +94,10 @@
 .pharos-check>div{font-size:13px}
 .pharos-backup{background:var(--panel,#fff);border:1px solid var(--line,#ccc);border-radius:14px;padding:16px 18px;margin-top:14px}
 .pharos-backup h3{margin:0 0 8px}
+.pharos-backup-locations{margin:0 0 10px;border-top:1px solid var(--line,#ccc)}
+.pharos-backup-locations .pharos-check{grid-template-columns:18px minmax(0,1fr)}
+.pharos-backup-locations .pharos-check-title{overflow-wrap:anywhere}
+.pharos-backup-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .pharos-backup form{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
 .pharos-backup label{color:var(--muted,#666)}
 .pharos-backup input{flex:1 1 320px;min-width:0;padding:7px 10px;border:1px solid var(--line,#ccc);border-radius:8px;background:var(--bg,#fff);color:var(--ink,#222);font:12px ui-monospace,SFMono-Regular,monospace}
@@ -625,12 +629,78 @@
     return item;
   }
 
+  // Starts a backup or changes the list; the panel redraws from the result.
+  async function backupAction(action) {
+    backupBusy = true;
+    try {
+      await action();
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      backupBusy = false;
+      refreshSettings();
+    }
+  }
+
+  function backupLocationOutcome(location) {
+    const last = location.last_backup, run = location.last_run;
+    const partial = Boolean(last?.partial || run?.state === 'partial');
+    const missing = [...new Set([...(last?.partial ? last.missing || [] : []), ...(run?.state === 'partial' ? run.missing || [] : [])])];
+    return {partial, missing};
+  }
+
+  function backupLocationItem(location, backup, latestRun) {
+    const item = node('div', 'pharos-check');
+    const running = backup.active && backup.run?.destination === location.path;
+    const run = location.last_run, failed = !running && run?.state === 'failed';
+    const outcome = backupLocationOutcome(location);
+    const dot = failed ? 'bad' : outcome.partial ? 'warn' : !location.connected ? 'idle' : '';
+    item.append(node('span', 'pharos-dot ' + dot), node('div', 'pharos-check-title', location.path));
+    const line = node('div', 'pharos-sub');
+    const last = location.last_backup;
+    if (last) line.append(node('span', '', 'Last backup '), when(last.finished_at), node('span', '', ` · ${size(last.bytes_total)}`));
+    else line.append(node('span', '', 'No finished backup yet'));
+    if (running) line.append(node('span', '', ' · Backing up now'));
+    else if (!location.connected) line.append(node('span', '', ' · Drive not connected'));
+    item.append(line);
+    if (outcome.partial) item.append(node('div', 'pharos-warn', `The last finished backup omitted ${outcome.missing.join(', ') || 'parts of the library'}; those sources could not be read. Any earlier copies were kept.`));
+    // The latest run's errors are already listed in full below the locations.
+    if (failed && run.id !== latestRun?.id) item.append(node('div', 'pharos-error', run.errors?.[0]?.error || 'The last backup here failed.'));
+    const actions = node('div', 'pharos-backup-actions');
+    const now = button('Back up now', '', () => backupAction(() => post('/api/backup', {destination: location.path})));
+    const remove = button('Remove', '', () => backupAction(async () => {
+      await post('/api/backup/locations/remove', {path: location.path});
+      toast(`Pharos will no longer back up to ${location.path}. The backup already there was not deleted.`);
+    }));
+    now.disabled = backup.active || backupBusy;
+    remove.disabled = running || backupBusy;
+    now.setAttribute('aria-label', `Back up now to ${location.path}`);
+    remove.setAttribute('aria-label', `Remove backup location ${location.path}`);
+    actions.append(now, remove);
+    item.append(actions);
+    return item;
+  }
+
   function backupPanel(backup, driveLabel) {
     const box = node('div', 'pharos-backup');
     box.id = 'pharosBackupPage';
-    box.append(node('h3', '', 'Back up to another drive'));
+    box.append(node('h3', '', 'Back up to other drives'));
+    const locations = backup.locations || [];
     const last = backup.last_success;
-    if (last) {
+    if (locations.length) {
+      const list = node('div', 'pharos-backup-locations');
+      list.append(...locations.map(location => backupLocationItem(location, backup, backup.run)));
+      box.append(list);
+      if (locations.filter(location => location.connected).length > 1) {
+        const all = button('Back up all connected', '', () => backupAction(async () => {
+          await post('/api/background/run', {item: 'backup'});
+          // The pass starts from the queue, a moment after this answer.
+          setTimeout(refreshSettings, 1000);
+        }));
+        all.disabled = backup.active || backupBusy;
+        box.append(all);
+      }
+    } else if (last) {
       const line = node('p', '');
       line.append(node('span', '', 'Last backup '), when(last.finished_at), node('span', '', ` to ${last.destination} · ${size(last.bytes_total)} (${size(last.bytes_copied)} copied)`));
       box.append(line);
@@ -654,7 +724,7 @@
       (run.warnings || []).forEach(warning => problems.append(node('li', 'pharos-warn', warning)));
       if (problems.childElementCount) box.append(problems);
     }
-    const form = node('form'), label = node('label', '', 'Back up to'), input = node('input'), go = node('button', 'pharos-button primary', 'Back up now');
+    const form = node('form'), label = node('label', '', locations.length ? 'Add a location' : 'Back up to'), input = node('input'), go = node('button', 'pharos-button primary', locations.length ? 'Add and back up' : 'Back up now');
     label.htmlFor = input.id = 'pharosBackupDestinationPage';
     input.value = backupDraft ?? backup.suggested_destination ?? '';
     input.placeholder = '/Volumes/Other Drive/Pharos Backup';
@@ -686,7 +756,7 @@
       error.setAttribute('role', 'alert');
       box.append(error);
     }
-    box.append(node('p', 'pharos-sub', 'Choose a folder on another drive, or on a FileVault-protected Mac you trust. The library’s own drive is refused: a backup there would be lost with it. Later backups copy only what changed.'));
+    box.append(node('p', 'pharos-sub', 'Choose a folder on another drive, or on a FileVault-protected Mac you trust. The library’s own drive is refused: a backup there would be lost with it. Each location holds its own full backup, and later backups copy only what changed.'));
     return box;
   }
 
@@ -734,7 +804,7 @@
     // in-place renderer, and whether this page is starting an index.
     ensureChip, updateLiveChildren, localBusy: () => headerCaptureIndexRunning, status: () => status, runs, refreshSettings, refreshSyncControls: renderHeaderAction, onStatus: listener => listeners.add(listener),
     // A pure helper, for web/tests/unit/page/library.test.mjs.
-    appUpdatePresentation};
+    appUpdatePresentation, backupLocationOutcome};
   window.dispatchEvent(new Event('pharos:drive-view-ready'));
   const sheet = node('style');
   sheet.textContent = CSS;

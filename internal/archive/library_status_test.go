@@ -441,8 +441,11 @@ func TestBackupStatusSuggestsADestination(t *testing.T) {
 	if err := recordBackup(config, backupRecord{FinishedAt: now(), Destination: "/Volumes/Other/Pharos Backup"}); err != nil {
 		t.Fatal(err)
 	}
-	if status := libraryStatusCall(t, server, "/api/backup"); status["suggested_destination"] != "/Volumes/Other/Pharos Backup" {
-		t.Fatalf("suggestion after a backup: %#v", status["suggested_destination"])
+	// The last destination is now a location, so there is nothing to suggest.
+	status := libraryStatusCall(t, server, "/api/backup")
+	locations, _ := status["locations"].([]any)
+	if status["suggested_destination"] != "" || len(locations) != 1 || locations[0].(map[string]any)["path"] != "/Volumes/Other/Pharos Backup" {
+		t.Fatalf("status after a backup: %#v", status)
 	}
 }
 

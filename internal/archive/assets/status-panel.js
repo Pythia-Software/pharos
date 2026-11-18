@@ -195,7 +195,7 @@
   }
   // Running pulses, as the header chip's dot does; queued (Up next) is
   // steady.
-  const SCHEDULE_DOTS = {current: '', running: 'busy pulse', queued: 'busy', failed: 'bad', missed: 'warn', never: 'warn', paused: 'paused', manual: 'paused', unavailable: 'paused', power: 'paused'};
+  const SCHEDULE_DOTS = {current: '', running: 'busy pulse', queued: 'busy', failed: 'bad', missed: 'warn', never: 'warn', paused: 'paused', manual: 'paused', unavailable: 'paused', power: 'paused', drive: 'paused'};
   const CADENCE_ICONS = {frequent: '↻', hourly: '◷', daily: '☾', manual: '⚐'};
   const ROUTINE_TONES = new Set(['good', 'busy']);
 

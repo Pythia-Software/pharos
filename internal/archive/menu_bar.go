@@ -320,8 +320,8 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 			problem = "Capture failed. Open Background Processing for details."
 		}
 	}
-	_, backups := s.backups.status()
-	if problem == "" && len(backups) > 0 && backups[0].State == "failed" {
+	_, backups := s.backupRunsStatus(false)
+	if problem == "" && len(failedBackupRuns(backups)) > 0 {
 		problem = "Backup failed. Open Backups for details."
 		status["error_path"] = "/settings/backups"
 	}

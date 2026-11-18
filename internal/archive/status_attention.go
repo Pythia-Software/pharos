@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -61,6 +62,10 @@ func (s *Server) attentionRunning() bool {
 // saying nothing it cannot back up, and the verdict, not this list, decides
 // whether ejecting is safe.
 func (s *Server) attention(ctx context.Context) []attentionItem {
+	return s.attentionFor(ctx, false)
+}
+
+func (s *Server) attentionFor(ctx context.Context, cachedOnly bool) []attentionItem {
 	items := []attentionItem{}
 	hostID := currentHost().ID
 	enabled := map[string]bool{}
@@ -207,14 +212,24 @@ func (s *Server) attention(ctx context.Context) []attentionItem {
 		}
 	}
 
-	// 6. The latest local backup failed.
-	if _, backups := s.backups.status(); len(backups) > 0 && backups[0].State == "failed" {
-		detail := ""
-		for _, failure := range backups[0].Errors {
-			detail = joinDetail(detail, failure.Error)
-			break
+	// 6. The latest local backup to some location failed.
+	_, backups := s.backupRunsStatus(cachedOnly)
+	if failed := failedBackupRuns(backups); len(failed) > 0 {
+		title, detail := "The last backup failed", ""
+		if len(failed) > 1 {
+			title = fmt.Sprintf("Backups to %d locations failed", len(failed))
 		}
-		items = append(items, attentionItem{ID: "backup-failed", Rule: 6, Severity: "error", Title: "The last backup failed", Detail: detail, Action: openBackups})
+		for _, run := range failed {
+			for _, failure := range run.Errors {
+				if len(failed) > 1 {
+					detail = joinDetail(detail, run.Destination+": "+failure.Error)
+				} else {
+					detail = joinDetail(detail, failure.Error)
+				}
+				break
+			}
+		}
+		items = append(items, attentionItem{ID: "backup-failed", Rule: 6, Severity: "error", Title: title, Detail: detail, Action: openBackups})
 	}
 
 	// 7. A scheduled cloud backup failed, or the latest verification did.

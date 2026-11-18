@@ -166,33 +166,3 @@ func (s *Server) captureAndIndexProgress(ctx context.Context, op *Op, names []st
 	}
 	return failure
 }
-
-// backgroundBackup backs up to the last backup's destination, when its
-// drive is connected; otherwise it waits for the next day.
-func (s *Server) backgroundBackup(ctx context.Context, op *Op) error {
-	config := s.Config()
-	history := loadBackupHistory(config)
-	if len(history.Backups) == 0 {
-		return nil
-	}
-	job, err := prepareBackup(config, history.Backups[0].Destination, false)
-	if err != nil {
-		return err
-	}
-	started := job.run.clone()
-	backupCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	if err := s.backups.begin(started, cancel); err != nil {
-		return err
-	}
-	_, child := op.Child(OperationSpec{Kind: "backup.local", Subject: started.Destination, Trigger: triggerChained, Legacy: started.ID})
-	run := started
-	defer func() { s.backups.update(run, true) }()
-	run = job.Run(backupCtx, func(progress BackupRun) {
-		s.backups.update(progress, false)
-		mirrorBackup(child, progress)
-	})
-	err = backupOutcome(backupCtx, run)
-	child.Finish(err)
-	return err
-}

@@ -781,6 +781,26 @@ func TestStatusSnapshotCarriesTheLedger(t *testing.T) {
 	if local.AsOf == nil || *local.AsOf != "2026-10-26T10:00:00Z" {
 		t.Fatalf("the backup's age is reported: %+v", local)
 	}
+	// Another process's failure and recovery are file-derived too. A fresh
+	// release check must use the cached outcomes instead of touching the disk.
+	failed := BackupRun{ID: "outside", Destination: "/Volumes/B", State: "failed", UpdatedAt: "2026-10-27T10:00:00Z", Errors: []captureError{{Error: "full"}}}
+	if err := recordBackupOutcome(f.config, failed); err != nil {
+		t.Fatal(err)
+	}
+	expectRow(t, find(server.freshness(t.Context(), views(), true), "backup.local"), "backup.local", freshUnknown, "no-schedule", "")
+	if item := firstItem(server.attentionFor(t.Context(), true), "backup-failed"); item != nil {
+		t.Fatal("release attention read uncached backup outcomes")
+	}
+	override(t, &freshnessFilesMaxAge, time.Duration(0))
+	expectRow(t, find(server.freshness(t.Context(), views(), false), "backup.local"), "backup.local", freshBehind, "failed", "")
+	if err := recordBackup(f.config, backupRecord{FinishedAt: "2026-10-28T10:00:00Z", Destination: "/Volumes/B"}); err != nil {
+		t.Fatal(err)
+	}
+	expectRow(t, find(server.freshness(t.Context(), views(), true), "backup.local"), "backup.local", freshBehind, "failed", "")
+	if item := firstItem(server.attentionFor(t.Context(), true), "backup-failed"); item == nil {
+		t.Fatal("release attention discarded its cached backup outcome")
+	}
+	expectRow(t, find(server.freshness(t.Context(), views(), false), "backup.local"), "backup.local", freshUnknown, "no-schedule", "")
 	// Another configuration's files are not the cached ones.
 	server.configMu.Lock()
 	server.config.CaptureRoot = t.TempDir()

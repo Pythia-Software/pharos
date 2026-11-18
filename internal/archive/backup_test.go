@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -848,7 +849,7 @@ func TestBackupKeepsTheLiveCatalogOutOfTrees(t *testing.T) {
 	if !backupFileExists(t, filepath.Join(preserved, "package", "a.json")) || !backupFileExists(t, filepath.Join(dest, "captures", "host-a", "claude", "files", "x.jsonl")) {
 		t.Fatal("the archive or captures are missing from the backup")
 	}
-	for _, name := range []string{"catalog.sqlite3", "catalog.sqlite3-wal", "catalog.sqlite3-shm", "backups.json", backupRecordLockName, "captures", "staging", "archive.toml"} {
+	for _, name := range []string{"catalog.sqlite3", "catalog.sqlite3-wal", "catalog.sqlite3-shm", "backups.json", backupRecordLockName, backupReservationsDir, "captures", "staging", "archive.toml"} {
 		if backupFileExists(t, filepath.Join(preserved, name)) {
 			t.Errorf("preserved/%s was copied", name)
 		}
@@ -1373,4 +1374,710 @@ func TestEnsureFreeKeepsItsMargin(t *testing.T) {
 	if total, free := diskUsage(dir); total != 0 || free != 0 {
 		t.Fatalf("the display reading of an unknown capacity: %d, %d", total, free)
 	}
+}
+
+func backupLocationPaths(config Config) []string {
+	paths := []string{}
+	for _, location := range loadBackupHistory(config).locations() {
+		paths = append(paths, location.Path)
+	}
+	return paths
+}
+
+// A library from before the list keeps its one location; adding to it keeps
+// that one, and removing every location stays removed.
+func TestBackupLocationsListChanges(t *testing.T) {
+	config, first := backupFixture(t)
+	second := filepath.Join(filepath.Dir(first), "Second")
+	if got := backupLocationPaths(config); len(got) != 0 {
+		t.Fatalf("no backup yet: %v", got)
+	}
+	runBackup(t, config, first, false)
+	data, err := os.ReadFile(backupRecordPath(config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"locations"`) {
+		t.Fatalf("a backup alone wrote the list: %s", data)
+	}
+	if got := backupLocationPaths(config); !slices.Equal(got, []string{first}) {
+		t.Fatalf("the last destination is the location: %v", got)
+	}
+	// The command line adds its folder without losing the earlier location.
+	if err := runBackupCLI(config, []string{second}); err != nil {
+		t.Fatal(err)
+	}
+	if err := addBackupLocation(config, second); err != nil {
+		t.Fatal(err)
+	}
+	if got := backupLocationPaths(config); !slices.Equal(got, []string{first, second}) {
+		t.Fatalf("after adding: %v", got)
+	}
+	if _, err := prepareBackup(config, filepath.Join(first, "inside"), false); err == nil || !strings.Contains(err.Error(), "overlaps") {
+		t.Fatalf("a folder inside a location: %v", err)
+	}
+	for _, path := range []string{first, second} {
+		if removed, err := removeBackupLocation(config, path); err != nil || !removed {
+			t.Fatalf("remove %s: %v %v", path, removed, err)
+		}
+	}
+	if removed, err := removeBackupLocation(config, second); err != nil || removed {
+		t.Fatalf("remove twice: %v %v", removed, err)
+	}
+	if got := backupLocationPaths(config); len(got) != 0 {
+		t.Fatalf("removing every location came undone: %v", got)
+	}
+	if !backupFileExists(t, filepath.Join(first, backupManifestName)) {
+		t.Fatal("removing a location deleted its backup")
+	}
+	for _, entry := range []string{"CLI", "API"} {
+		t.Run("overlap registered during "+entry+" preparation", func(t *testing.T) {
+			config, parent := backupFixture(t)
+			runBackup(t, config, parent, false)
+			if err := addBackupLocation(config, parent); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := removeBackupLocation(config, parent); err != nil {
+				t.Fatal(err)
+			}
+			earlier, err := prepareBackup(config, parent, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			child := filepath.Join(parent, "captures", "nested-backup")
+			later, err := prepareBackup(config, child, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := probeServer(t, config.Path)
+			original, registered := lockBackupHistory, false
+			override(t, &lockBackupHistory, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+				if !registered {
+					registered = true
+					// Another process commits its registration after this
+					// invocation's read-only preparation, before its locked update.
+					if err := addBackupLocation(config, child); err != nil {
+						t.Fatal(err)
+					}
+					if run := later.Run(t.Context(), nil); run.State != "complete" {
+						t.Fatalf("child backup: %+v", run)
+					}
+				}
+				return original(file, mode, wait)
+			})
+			if entry == "CLI" {
+				if err := runBackupCLI(config, []string{"--prune", parent}); !errors.Is(err, errBackupLocationOverlap) {
+					t.Fatalf("overlap registration: %v", err)
+				}
+			} else {
+				if code, body := probeCall(t, server, http.MethodPost, "/api/backup", fmt.Sprintf(`{"destination":%q,"prune":true}`, parent)); code != http.StatusBadRequest {
+					t.Fatalf("overlap registration: %d %v", code, body)
+				}
+				if active, runs := server.backups.status(); active || len(runs) != 0 {
+					t.Fatalf("rejected backup started: %v %+v", active, runs)
+				}
+			}
+			if got := backupLocationPaths(config); !slices.Equal(got, []string{child}) {
+				t.Fatalf("overlapping locations were registered: %v", got)
+			}
+			// A previously prepared job also rechecks before writing, even
+			// when invoked directly instead of through either entry point.
+			if run := earlier.Run(t.Context(), nil); run.State != "failed" {
+				t.Fatalf("stale parent job ran: %+v", run)
+			}
+			if !backupFileExists(t, filepath.Join(child, backupManifestName)) {
+				t.Fatal("parent prune deleted the nested backup")
+			}
+		})
+		t.Run("registration failure through "+entry, func(t *testing.T) {
+			config, dest := backupFixture(t)
+			server := probeServer(t, config.Path)
+			refused := errors.New("cannot lock backup history")
+			override(t, &lockBackupHistory, func(*os.File, filelock.Mode, filelock.WaitMode) error { return refused })
+			if entry == "CLI" {
+				if err := runBackupCLI(config, []string{dest}); !errors.Is(err, refused) {
+					t.Fatalf("registration failure: %v", err)
+				}
+			} else {
+				if code, body := probeCall(t, server, http.MethodPost, "/api/backup", fmt.Sprintf(`{"destination":%q}`, dest)); code != http.StatusInternalServerError {
+					t.Fatalf("registration failure: %d %v", code, body)
+				}
+				if active, runs := server.backups.status(); active || len(runs) != 0 {
+					t.Fatalf("unregistered backup started: %v %+v", active, runs)
+				}
+			}
+			if _, err := os.Stat(dest); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unregistered backup wrote its destination: %v", err)
+			}
+		})
+	}
+	t.Run("running CLI reserves its removed location", func(t *testing.T) {
+		config, parent := backupFixture(t)
+		runBackup(t, config, parent, false)
+		if err := addBackupLocation(config, parent); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := removeBackupLocation(config, parent); err != nil {
+			t.Fatal(err)
+		}
+		child := filepath.Join(parent, "captures", "nested-backup")
+		staleChild, err := prepareBackup(config, child, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		job, err := prepareBackup(config, parent, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := addBackupLocation(config, parent); err != nil {
+			t.Fatal(err)
+		}
+		server := probeServer(t, config.Path)
+		removed := false
+		run := job.Run(t.Context(), func(progress BackupRun) {
+			if removed || progress.Phase != "catalog" {
+				return
+			}
+			removed = true
+			if code, body := probeCall(t, server, http.MethodPost, "/api/backup/locations/remove", fmt.Sprintf(`{"path":%q}`, parent)); code != http.StatusOK {
+				t.Fatalf("remove running CLI location: %d %v", code, body)
+			}
+			if err := addBackupLocation(config, child); !errors.Is(err, errBackupLocationOverlap) {
+				t.Fatalf("nested registration during active prune: %v", err)
+			}
+			if attempted := staleChild.Run(t.Context(), nil); attempted.State != "failed" {
+				t.Fatalf("stale nested job ran during active prune: %+v", attempted)
+			}
+		})
+		if !removed || run.State != "complete" {
+			t.Fatalf("parent backup: %+v", run)
+		}
+		history := loadBackupHistory(config)
+		if len(history.locations()) != 0 || len(history.Reservations) != 0 {
+			t.Fatalf("finished CLI retained its location or reservation: %+v", history)
+		}
+		if err := addBackupLocation(config, child); err != nil {
+			t.Fatalf("finished CLI kept its reservation: %v", err)
+		}
+	})
+	t.Run("abandoned reservations are reclaimed", func(t *testing.T) {
+		config, parent := backupFixture(t)
+		name := backupReservationPath(config, parent)
+		if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := updateBackupHistory(config, func(history *backupHistory) bool { history.Reservations = []string{parent}; return true }); err != nil {
+			t.Fatal(err)
+		}
+		if err := addBackupLocation(config, filepath.Join(parent, "nested")); err != nil {
+			t.Fatalf("abandoned reservation blocked registration: %v", err)
+		}
+		if got := loadBackupHistory(config).Reservations; len(got) != 0 {
+			t.Fatalf("abandoned reservation retained: %v", got)
+		}
+		if _, err := os.Stat(name); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("abandoned lock was not reclaimed: %v", err)
+		}
+	})
+	t.Run("reservation save failure releases its lock", func(t *testing.T) {
+		config, dest := backupFixture(t)
+		if err := os.Mkdir(backupRecordPath(config), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if release, err := reserveBackupLocation(config, dest); err == nil || release != nil {
+			t.Fatalf("reservation with unwritable history: %v", err)
+		}
+		file, err := os.OpenFile(backupReservationPath(config, dest), os.O_RDWR, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		if err := filelock.Lock(file, filelock.Exclusive, filelock.Try); err != nil {
+			t.Fatalf("failed reservation retained its shared lock: %v", err)
+		}
+	})
+	t.Run("CLI outcome after removal", func(t *testing.T) {
+		config, dest := backupFixture(t)
+		runBackup(t, config, dest, false)
+		if err := addBackupLocation(config, dest); err != nil {
+			t.Fatal(err)
+		}
+		job, err := prepareBackup(config, dest, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		server := probeServer(t, config.Path)
+		override(t, &lockBackupDestination, func(*os.File, filelock.Mode, filelock.WaitMode) error {
+			if code, body := probeCall(t, server, http.MethodPost, "/api/backup/locations/remove", fmt.Sprintf(`{"path":%q}`, dest)); code != http.StatusOK {
+				t.Fatalf("remove during CLI backup: %d %v", code, body)
+			}
+			return errors.New("destination became unavailable")
+		})
+		if run := job.Run(t.Context(), nil); run.State != "failed" {
+			t.Fatalf("CLI backup: %+v", run)
+		}
+		history := loadBackupHistory(config)
+		if len(history.locations()) != 0 || len(history.UnfinishedRuns) != 0 {
+			t.Fatalf("late CLI outcome restored the removed location: %+v", history)
+		}
+		if _, runs := server.backupRunsStatus(false); len(failedBackupRuns(runs)) != 0 {
+			t.Fatal("removed CLI location still reports an error")
+		}
+	})
+	t.Run("remove during a pass", func(t *testing.T) {
+		config, first := backupFixture(t)
+		second := filepath.Join(filepath.Dir(first), "Second")
+		for _, path := range []string{first, second} {
+			runBackup(t, config, path, false)
+			if err := addBackupLocation(config, path); err != nil {
+				t.Fatal(err)
+			}
+		}
+		server := probeServer(t, config.Path)
+		original, removed := lockBackupDestination, false
+		override(t, &lockBackupDestination, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+			if filepath.Dir(file.Name()) == first && !removed {
+				// A refused preparation must not hide the active destination.
+				// Keep the active run even past the recent-run display limit.
+				for range 12 {
+					server.backups.recordRefused(second, errors.New("unavailable"))
+				}
+				active, runs := server.backups.status()
+				if !active || len(runs) == 0 || runs[0].Destination != first {
+					t.Fatalf("refused preparations hid the active backup: %v %+v", active, runs)
+				}
+				if code, _ := probeCall(t, server, http.MethodPost, "/api/backup/locations/remove", fmt.Sprintf(`{"path":%q}`, first)); code != http.StatusConflict {
+					t.Fatalf("removed an active location: %d", code)
+				}
+				if code, body := probeCall(t, server, http.MethodPost, "/api/backup/locations/remove", fmt.Sprintf(`{"path":%q}`, second)); code != http.StatusOK {
+					t.Fatalf("remove: %d %v", code, body)
+				}
+				removed = true
+			}
+			return original(file, mode, wait)
+		})
+		ctx, op := server.begin(withBackgroundExplicit(t.Context(), true), OperationSpec{Kind: "background.update", Variant: "requested", Trigger: triggerUser})
+		defer op.Finish(nil)
+		if err := server.backgroundBackup(withBackgroundExplicit(ctx, true), op); err != nil {
+			t.Fatal(err)
+		}
+		if !removed {
+			t.Fatal("the pass did not start")
+		}
+		count := 0
+		for _, record := range loadBackupHistory(config).Backups {
+			if record.Destination == second {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("removed location was backed up again: %d records", count)
+		}
+	})
+}
+
+// Daily backups to one drive do not push out the record of a drive that is
+// rarely connected.
+func TestBackupHistoryKeepsEachLocationsLastBackup(t *testing.T) {
+	override(t, &backupHistoryLimit, 3)
+	config, _ := backupFixture(t)
+	for _, path := range []string{"/Volumes/Away/Backup", "/Volumes/Daily/Backup"} {
+		if err := addBackupLocation(config, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := recordBackup(config, backupRecord{FinishedAt: "2026-01-01T00:00:00Z", Destination: "/Volumes/Away/Backup"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordBackup(config, backupRecord{FinishedAt: "2026-01-01T00:00:00Z", Destination: "/Volumes/Removed/Backup"}); err != nil {
+		t.Fatal(err)
+	}
+	for range backupHistoryLimit + 5 {
+		if err := recordBackup(config, backupRecord{FinishedAt: "2026-02-01T00:00:00Z", Destination: "/Volumes/Daily/Backup"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	history := loadBackupHistory(config)
+	if history.lastBackupTo("/Volumes/Away/Backup") == nil || history.lastBackupTo("/Volumes/Removed/Backup") != nil || len(history.Backups) != backupHistoryLimit+1 {
+		t.Fatalf("kept %d records: %+v", len(history.Backups), history.Backups[backupHistoryLimit:])
+	}
+	t.Run("retained complete records remain chronological", func(t *testing.T) {
+		config, _ := backupFixture(t)
+		at := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+		_, err := updateBackupHistory(config, func(history *backupHistory) bool {
+			history.Locations = []backupLocation{{Path: "/oldest"}, {Path: "/newer"}, {Path: "/daily"}}
+			for index := range backupHistoryLimit {
+				history.Backups = append(history.Backups, backupRecord{Destination: "/daily", FinishedAt: formatTime(at.Add(-time.Duration(index) * time.Hour)), Partial: true})
+			}
+			history.Backups = append(history.Backups, backupRecord{Destination: "/newer", FinishedAt: formatTime(at.Add(-60 * 24 * time.Hour)), BytesTotal: 200}, backupRecord{Destination: "/oldest", FinishedAt: formatTime(at.Add(-80 * 24 * time.Hour)), BytesTotal: 100})
+			trimBackupHistory(history)
+			return true
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		files := readFreshnessFiles(nil, "", &config, nil)
+		if want := formatTime(at.Add(-60 * 24 * time.Hour)); files.backupAt != want {
+			t.Fatalf("last complete backup = %s, want %s", files.backupAt, want)
+		}
+		if growth, days := loadBackupHistory(config).growth(); growth != 5 || days != 20 {
+			t.Fatalf("growth from retained records: %g bytes/day over %g days", growth, days)
+		}
+	})
+	t.Run("outcomes keep their finish order", func(t *testing.T) {
+		config, dest := backupFixture(t)
+		if err := addBackupLocation(config, dest); err != nil {
+			t.Fatal(err)
+		}
+		for _, states := range [][2]string{{"cancelled", "failed"}, {"failed", "cancelled"}} {
+			later := BackupRun{ID: "later-" + states[0], Destination: dest, State: states[0], UpdatedAt: "2026-11-18T10:10:00.000Z", Errors: []captureError{{Error: "later"}}}
+			earlier := BackupRun{ID: "earlier-" + states[1], Destination: dest, State: states[1], UpdatedAt: "2026-11-18T10:00:00.000Z", Errors: []captureError{{Error: "earlier"}}}
+			if err := recordBackupOutcome(config, later); err != nil {
+				t.Fatal(err)
+			}
+			if err := recordBackupOutcome(config, earlier); err != nil {
+				t.Fatal(err)
+			}
+			history := loadBackupHistory(config)
+			if runs := currentBackupRuns(history, nil); len(runs) != 1 || runs[0].ID != later.ID {
+				t.Fatalf("older write replaced the newer outcome: %+v", runs)
+			}
+			wantFailures := 0
+			if later.State == "failed" {
+				wantFailures = 1
+			}
+			// The older run may report completion only after its delayed
+			// persistence returns. Delivery must preserve its finish time.
+			earlier.CompletedAt = earlier.UpdatedAt
+			job := backupJob{run: earlier, progress: func(run BackupRun) { earlier = run }}
+			job.report()
+			if earlier.UpdatedAt != earlier.CompletedAt {
+				t.Fatalf("delayed completion changed its outcome timestamp: %+v", earlier)
+			}
+			if runs := currentBackupRuns(history, []BackupRun{earlier}); len(failedBackupRuns(runs)) != wantFailures {
+				t.Fatalf("older process state masked the newer persisted outcome: %+v", runs)
+			}
+		}
+		if err := recordBackup(config, backupRecord{Destination: dest, FinishedAt: "2026-11-18T10:20:00.000Z"}); err != nil {
+			t.Fatal(err)
+		}
+		stale := BackupRun{ID: "delayed", Destination: dest, State: "failed", UpdatedAt: "2026-11-18T10:15:00.000Z"}
+		if err := recordBackupOutcome(config, stale); err != nil {
+			t.Fatal(err)
+		}
+		if got := loadBackupHistory(config).UnfinishedRuns; len(got) != 0 {
+			t.Fatalf("a delayed failure returned after a newer success: %+v", got)
+		}
+		// A late result from before removal must also stay discarded if the
+		// same folder has since been registered again.
+		if _, err := updateBackupHistory(config, func(history *backupHistory) bool {
+			history.Locations = []backupLocation{{Path: dest, AddedAt: "2026-11-18T10:30:00.000Z"}}
+			return true
+		}); err != nil {
+			t.Fatal(err)
+		}
+		stale.StartedAt, stale.UpdatedAt = "2026-11-18T10:25:00.000Z", "2026-11-18T10:35:00.000Z"
+		if err := recordBackupOutcome(config, stale); err != nil {
+			t.Fatal(err)
+		}
+		if got := loadBackupHistory(config).UnfinishedRuns; len(got) != 0 {
+			t.Fatalf("an earlier registration restored its failure: %+v", got)
+		}
+	})
+	t.Run("cleanup cannot move an older outcome past a success", func(t *testing.T) {
+		config, dest := backupFixture(t)
+		if err := addBackupLocation(config, dest); err != nil {
+			t.Fatal(err)
+		}
+		job, err := prepareBackup(config, dest, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		originalDestination, first := lockBackupDestination, true
+		override(t, &lockBackupDestination, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+			if first {
+				first = false
+				return errors.New("destination temporarily unavailable")
+			}
+			return originalDestination(file, mode, wait)
+		})
+		originalHistory, resumed := lockBackupHistory, false
+		override(t, &lockBackupHistory, func(file *os.File, mode filelock.Mode, wait filelock.WaitMode) error {
+			if !resumed {
+				reservation, err := os.OpenFile(backupReservationPath(config, dest), os.O_RDWR, 0)
+				if err != nil && !errors.Is(err, os.ErrNotExist) {
+					t.Fatal(err)
+				}
+				if err == nil {
+					err = filelock.Lock(reservation, filelock.Exclusive, filelock.Try)
+					reservation.Close()
+					if err == nil {
+						// Another process finishes while the older run waits
+						// for history cleanup after releasing its reservation.
+						resumed = true
+						if job.run.CompletedAt == "" {
+							t.Error("cleanup started before recording the finish time")
+						}
+						runBackup(t, config, dest, false)
+					} else if !errors.Is(err, filelock.ErrContended) {
+						t.Fatal(err)
+					}
+				}
+			}
+			return originalHistory(file, mode, wait)
+		})
+		run := job.Run(t.Context(), nil)
+		if run.State != "failed" || !resumed {
+			t.Fatalf("older backup or cleanup interleaving: %+v, resumed=%v", run, resumed)
+		}
+		history := loadBackupHistory(config)
+		if len(history.UnfinishedRuns) != 0 || len(failedBackupRuns(currentBackupRuns(history, []BackupRun{run}))) != 0 {
+			t.Fatalf("an older failure resurfaced after cleanup: %+v", history)
+		}
+	})
+}
+
+// A pass backs up to every connected location. A drive that is away is left
+// alone, without counting as a failure, and one location's failure neither
+// stops the others nor is hidden by their success.
+func TestBackgroundBackupCoversEveryConnectedLocation(t *testing.T) {
+	config, first := backupFixture(t)
+	parent := filepath.Dir(first)
+	refused, away := filepath.Join(parent, "Refused"), filepath.Join(parent, "Away")
+	for _, path := range []string{first, refused, away} {
+		runBackup(t, config, path, false)
+		if err := addBackupLocation(config, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Rename(away, away+" (ejected)"); err != nil {
+		t.Fatal(err)
+	}
+	server := probeServer(t, config.Path)
+	backups := func(path string) int {
+		count := 0
+		for _, record := range loadBackupHistory(config).Backups {
+			if record.Destination == path {
+				count++
+			}
+		}
+		return count
+	}
+	pass := func() error {
+		ctx, op := server.begin(withBackgroundExplicit(t.Context(), true), OperationSpec{Kind: "background.update", Variant: "requested", Trigger: triggerUser})
+		defer op.Finish(nil)
+		return server.backgroundBackup(withBackgroundExplicit(ctx, true), op)
+	}
+
+	if err := pass(); err != nil {
+		t.Fatal(err)
+	}
+	if backups(first) != 2 || backups(refused) != 2 || backups(away) != 1 {
+		t.Fatalf("records: %d %d %d", backups(first), backups(refused), backups(away))
+	}
+
+	manifest := filepath.Join(refused, backupManifestName)
+	data, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, []byte(strings.Replace(string(data), loadBackupHistory(config).LibraryID, "another-library", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = pass()
+	if err == nil || !strings.Contains(err.Error(), refused) {
+		t.Fatalf("the failed location is named: %v", err)
+	}
+	if backups(first) != 3 || backups(refused) != 2 {
+		t.Fatalf("after a failure: %d %d", backups(first), backups(refused))
+	}
+	_, runs := server.backups.status()
+	if failed := failedBackupRuns(runs); len(failed) != 1 || failed[0].Destination != refused {
+		t.Fatalf("failed runs: %+v", failed)
+	}
+
+	// A later success elsewhere does not clear it; removing the location does.
+	for index := range 20 {
+		server.backups.push(BackupRun{ID: fmt.Sprint("later-", index), State: "complete", Destination: first})
+	}
+	_, runs = server.backups.status()
+	if len(failedBackupRuns(runs)) != 1 {
+		t.Fatalf("another location's success hid the failure: %+v", runs)
+	}
+	code, body := probeCall(t, server, http.MethodPost, "/api/backup/locations/remove", fmt.Sprintf(`{"path":%q}`, refused))
+	if code != http.StatusOK || body["removed"] != true {
+		t.Fatalf("remove: %d %v", code, body)
+	}
+	if code, _ := probeCall(t, server, http.MethodPost, "/api/backup/locations/remove", fmt.Sprintf(`{"path":%q}`, refused)); code != http.StatusNotFound {
+		t.Fatalf("remove twice: %d", code)
+	}
+	_, runs = server.backups.status()
+	if len(failedBackupRuns(runs)) != 0 {
+		t.Fatalf("a removed location still reports its failure: %+v", runs)
+	}
+
+	_, status := probeCall(t, server, http.MethodGet, "/api/backup", "")
+	locations, _ := status["locations"].([]any)
+	if len(locations) != 2 || locations[0].(map[string]any)["connected"] != true || locations[1].(map[string]any)["connected"] != false {
+		t.Fatalf("locations: %v", locations)
+	}
+	t.Run("recovery and removal reconcile failures", func(t *testing.T) {
+		config, first := backupFixture(t)
+		second := filepath.Join(filepath.Dir(first), "Second")
+		for _, path := range []string{first, second} {
+			runBackup(t, config, path, false)
+			if err := addBackupLocation(config, path); err != nil {
+				t.Fatal(err)
+			}
+		}
+		server := probeServer(t, config.Path)
+		fail := func(path string) {
+			run := server.backups.recordRefused(path, errors.New("destination full"))
+			if err := recordBackupOutcome(config, run); err != nil {
+				t.Fatal(err)
+			}
+			server.Catalog.recordBackgroundRun(t.Context(), "backup", time.Now(), true, errors.New("destination full"))
+		}
+		plan := func() itemPlan {
+			schedule := readBackupSchedule(config)
+			in := backgroundInputs{backupLocations: schedule.locations, backupConnected: schedule.connected, lastBackup: schedule.lastDone,
+				backupFailureKnown: schedule.failureKnown, backupFailureAt: schedule.failureAt, backupFailure: schedule.failure, runs: server.Catalog.backgroundRuns(t.Context())}
+			settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: "00:00", Overrides: map[string]string{"backup": cadenceDaily}}
+			for _, plan := range backgroundPlan(settings, in, time.Now()) {
+				if plan.ID == "backup" {
+					return plan
+				}
+			}
+			t.Fatal("no backup plan")
+			return itemPlan{}
+		}
+		fail(first)
+		if !plan().Failed || len(failedBackupRuns(currentBackupRuns(loadBackupHistory(config), nil))) != 1 {
+			t.Fatal("failure did not survive a restart")
+		}
+		if err := runBackupCLI(config, []string{first}); err != nil {
+			t.Fatal(err)
+		}
+		if got := plan(); got.Failed || got.Error != "" {
+			t.Fatalf("recovered location still failed: %+v", got)
+		}
+		if _, runs := server.backupRunsStatus(false); len(failedBackupRuns(runs)) != 0 {
+			t.Fatal("CLI success left a service failure")
+		}
+		for _, row := range server.freshness(t.Context(), nil, false) {
+			if row.Domain == "backup.local" && row.Reason != nil && row.Reason.Code == "failed" {
+				t.Fatalf("CLI success left failed freshness: %+v", row)
+			}
+		}
+		fail(first)
+		if code, body := probeCall(t, server, http.MethodPost, "/api/backup/locations/remove", fmt.Sprintf(`{"path":%q}`, first)); code != http.StatusOK {
+			t.Fatalf("remove: %d %v", code, body)
+		}
+		if got := plan(); got.Failed || got.Error != "" {
+			t.Fatalf("removed location still failed: %+v", got)
+		}
+	})
+}
+
+// Run now with every drive away says so, rather than reporting a backup.
+func TestBackgroundBackupNeedsAConnectedLocation(t *testing.T) {
+	config, dest := backupFixture(t)
+	if err := addBackupLocation(config, dest); err != nil {
+		t.Fatal(err)
+	}
+	server := probeServer(t, config.Path)
+	ctx, op := server.begin(t.Context(), OperationSpec{Kind: "background.update", Variant: "requested", Trigger: triggerUser})
+	defer op.Finish(nil)
+	if err := server.backgroundBackup(withBackgroundExplicit(ctx, true), op); err == nil || !strings.Contains(err.Error(), "connected") {
+		t.Fatalf("run now: %v", err)
+	}
+	if err := server.backgroundBackup(withBackgroundExplicit(ctx, false), op); err != nil {
+		t.Fatalf("a scheduled pass waits: %v", err)
+	}
+	if _, err := os.Stat(dest); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a pass created the folder of a location with no backup: %v", err)
+	}
+}
+
+// The schedule follows the location that has waited longest among those
+// connected.
+func TestBackupScheduleFollowsConnectedLocations(t *testing.T) {
+	config, first := backupFixture(t)
+	second := filepath.Join(filepath.Dir(first), "Second")
+	away := filepath.Join(filepath.Dir(first), "Away")
+	for _, path := range []string{first, second} {
+		runBackup(t, config, path, false)
+		if err := addBackupLocation(config, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := addBackupLocation(config, away); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordBackup(config, backupRecord{FinishedAt: "2020-01-01T00:00:00Z", Destination: away}); err != nil {
+		t.Fatal(err)
+	}
+	history := loadBackupHistory(config)
+	schedule := readBackupSchedule(config)
+	if len(schedule.locations) != 3 || schedule.connected != 2 || schedule.lastDone != history.lastBackupTo(first).FinishedAt {
+		t.Fatalf("schedule: %+v", schedule)
+	}
+
+	at := time.Date(2026, 10, 29, 13, 0, 0, 0, time.Local)
+	settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: defaultDailyAt, Overrides: map[string]string{"backup": cadenceDaily}, Temporary: map[string]temporaryCadence{}}
+	item, _ := backgroundItemByID("backup")
+	record := func(finished time.Time) *backupRecord { return &backupRecord{FinishedAt: formatTime(finished)} }
+	if !backupLocationDue(settings, item, nil, at) || !backupLocationDue(settings, item, record(at.Add(-48*time.Hour)), at) {
+		t.Fatal("a location without a recent backup is due")
+	}
+	if backupLocationDue(settings, item, record(at.Add(-time.Minute)), at) {
+		t.Fatal("a location just backed up is not due")
+	}
+	t.Run("unfinished first backup", func(t *testing.T) {
+		config, first := backupFixture(t)
+		runBackup(t, config, first, false)
+		if err := addBackupLocation(config, first); err != nil {
+			t.Fatal(err)
+		}
+		second := filepath.Join(filepath.Dir(first), "Second")
+		job, err := prepareBackup(config, second, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := addBackupLocation(config, second); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		run := job.Run(ctx, func(run BackupRun) {
+			if run.Phase == "catalog" {
+				cancel()
+			}
+		})
+		if run.State != "cancelled" || !backupLocationConnected(second) {
+			t.Fatalf("unfinished backup: %+v", run)
+		}
+		schedule := readBackupSchedule(config)
+		if schedule.connected != 2 || schedule.lastDone != "" {
+			t.Fatalf("unfinished location inherited another's success: %+v", schedule)
+		}
+		at := time.Now().Add(backgroundRetry + time.Minute)
+		settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: "00:00", Overrides: map[string]string{"backup": cadenceDaily}}
+		in := backgroundInputs{backupLocations: schedule.locations, backupConnected: schedule.connected, lastBackup: schedule.lastDone,
+			backupFailureKnown: schedule.failureKnown, backupFailureAt: schedule.failureAt, backupFailure: schedule.failure,
+			runs: map[string]backgroundRunRow{"backup": {succeeded: formatTime(time.Now().Add(-time.Hour))}}}
+		for _, plan := range backgroundPlan(settings, in, at) {
+			if plan.ID == "backup" && !plan.Due {
+				t.Fatalf("unfinished destination is not due: %+v", plan)
+			}
+		}
+		for _, plan := range backgroundPlan(settings, in, time.Now()) {
+			if plan.ID == "backup" && (plan.Due || plan.Failed) {
+				t.Fatalf("a stopped backup needs retry backoff without an error: %+v", plan)
+			}
+		}
+	})
 }

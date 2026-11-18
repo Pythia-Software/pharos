@@ -269,10 +269,10 @@ func sourceDomains(config Config, other bool) []string {
 
 // stateLabels are the item and cadence states' words.
 var stateLabels = map[string]string{"running": "Updating now", "queued": "Up next", "failed": "Failed", "missed": "Missed its daily time", "paused": "Paused",
-	"manual": "Only when you ask", "current": "Updated", "never": "Not run yet", "unavailable": "Not set up", "disabled": "Off", "power": "Waits until plugged in"}
+	"manual": "Only when you ask", "current": "Updated", "never": "Not run yet", "unavailable": "Not set up", "disabled": "Off", "power": "Waits until plugged in", "drive": "Waits for a backup drive"}
 
 // stateRank orders states from the one a cadence's row should show first.
-var stateRank = []string{"failed", "running", "missed", "queued", "never", "power", "current", "paused", "manual", "unavailable", "disabled"}
+var stateRank = []string{"failed", "running", "missed", "queued", "never", "power", "drive", "current", "paused", "manual", "unavailable", "disabled"}
 
 // backgroundView is the schedule as surfaces show it.
 func (s *Server) backgroundView(ctx context.Context, views []opView, freshness []freshnessRow, at time.Time) map[string]any {
@@ -317,7 +317,7 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			state = "disabled"
 		case in.requested[item.ID] || queued[item.ID]:
 			state = "queued"
-		case item.ID == "backup" && in.backupDestination == "", item.ID == "bucket-import" && in.bucketImports == 0:
+		case item.ID == "backup" && len(in.backupLocations) == 0, item.ID == "bucket-import" && in.bucketImports == 0:
 			state = "unavailable"
 		case plan.Cadence == cadenceManual:
 			state = "manual"
@@ -327,6 +327,8 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			state = "manual"
 		case problem != "":
 			state = "failed"
+		case item.ID == "backup" && in.backupConnected == 0:
+			state = "drive"
 		case plan.WaitsForPower:
 			state = "power"
 		case plan.Due:
@@ -374,8 +376,10 @@ func (s *Server) backgroundView(ctx context.Context, views []opView, freshness [
 			entry["backlog"] = in.writingBacklog
 			entry["note"] = in.writingBacklog.note(at)
 		}
-		if item.ID == "backup" && in.backupDestination != "" {
-			entry["label"] = "Back up to " + in.backupDestination
+		if item.ID == "backup" && len(in.backupLocations) == 1 {
+			entry["label"] = "Back up to " + in.backupLocations[0]
+		} else if item.ID == "backup" && len(in.backupLocations) > 1 {
+			entry["label"] = fmt.Sprintf("Back up to %d locations", len(in.backupLocations))
 		}
 		if item.ID == "conversations" {
 			// The sources scheduled indexing reads (sync_settings.sources_json,

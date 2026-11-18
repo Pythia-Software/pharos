@@ -148,7 +148,7 @@
 
   const CADENCE_ICONS = {frequent: '↻', hourly: '◷', daily: '☾'};
   const CADENCE_LABELS = {frequent: 'Frequently', hourly: 'Hourly', daily: 'Daily'};
-  const DOTS = {current: 'current', running: 'busy', queued: 'busy', failed: 'bad', missed: 'behind', never: 'behind', paused: 'paused', manual: 'paused', unavailable: 'paused', disabled: 'paused', power: 'paused'};
+  const DOTS = {current: 'current', running: 'busy', queued: 'busy', failed: 'bad', missed: 'behind', never: 'behind', paused: 'paused', manual: 'paused', unavailable: 'paused', disabled: 'paused', power: 'paused', drive: 'paused'};
 
   // ---- times and durations (the only words this file makes)
   const parse = value => { const time = Date.parse(value); return Number.isFinite(time) ? time : null; };
