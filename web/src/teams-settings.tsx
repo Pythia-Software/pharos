@@ -153,7 +153,7 @@ function TeamsWork() {
         <h5>This library’s result</h5>
         <p><strong>{item.scheduledResult.total}</strong> captured tokens</p>
         <p>{item.scheduledResult.sourceState === "partial" ? "Partial source coverage. This total may omit activity." : "Complete source coverage."}</p>
-        <details><summary>Exact response data</summary><pre>{item.scheduledResult.exactJson}</pre></details>
+        <ViewDisclosure viewKey={`teams:scheduled-result:${item.workId}`} summary="Exact response data"><pre>{item.scheduledResult.exactJson}</pre></ViewDisclosure>
       </section> : item.payload && !item.scheduledTerms ? <pre>{JSON.stringify(item.payload, null, 2)}</pre> : null}
       {item.state === "awaiting_review" ? <button type="button" disabled={busy || (!!item.publicationV2 && !item.labelsReady) || (!!item.scheduledTerms && !item.scheduledResult)} onClick={() => void act("/approve-result", { workId: item.workId, payloadHash: item.payloadHash, ...(item.publicationV2 ? {configHash: item.configHash, labelsToken: item.labelsToken} : {}) })}>Approve and send this result</button> : null}{" "}
       {["awaiting_source_consent", "awaiting_model_permission", "awaiting_review", "decline_pending", "started", "source_safety_waiting", "source_authorization_expired"].includes(item.state) ? <button type="button" disabled={busy} onClick={() => void act("/decline", { workId: item.workId })}>{item.state === "decline_pending" ? "Retry decline" : item.scheduledTerms ? "Decline this period" : "Decline request"}</button> : null}
