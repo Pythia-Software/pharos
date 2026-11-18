@@ -319,6 +319,13 @@ func teamsCreateManagedLibrary(ctx context.Context, application, path, name stri
 	if err = teamsVerifyFreshSQL(ctx, w, record.Tuple); err != nil {
 		return Config{}, err
 	}
+	if record.Phase == "verified" {
+		// A prior CAS may have renamed successfully but reported an fsync
+		// failure. Re-publish the exact bytes before allowing WAL writes.
+		if err = teamsCheckpointReplace(store, reservationName, raw, raw); err != nil {
+			return Config{}, err
+		}
+	}
 	if record.Phase == "image_bound" {
 		verified := record
 		verified.Phase = "verified"
