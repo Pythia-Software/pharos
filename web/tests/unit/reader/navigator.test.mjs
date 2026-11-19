@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {voiceClock,availableReaderNavigators,readerGeometry,readerVisibleWindow,readerNavigatorClock,readerNavigatorScale,nearestReaderMessage} from '../../../src/reader-navigator-model';
+import {voiceClock,availableReaderNavigators,contextProfileLayout,contextProfileBounds,contextProfileHit,readerGeometry,readerVisibleWindow,readerNavigatorClock,readerNavigatorScale,nearestReaderMessage} from '../../../src/reader-navigator-model';
 import {reader,event,human,render} from '../helpers/transcript.mjs';
 import {plain} from '../helpers/classic-script.mjs';
 import {sessionRibbonTree,activityCategory} from '../../../src/label-session-ribbon-model';
@@ -156,4 +156,55 @@ test('voice lines play one after another, each for its real length once known',(
   assert.deepEqual(plan.spans.map(span=>[span.line.id,span.start,span.length]),[['u1',0,2000],['a1',2000,800],['u2',2800,6000],['a2',8800,4000]]);
   assert.equal(plan.total,12800);
   assert.equal(voiceClock(14500),'0:15');assert.equal(voiceClock(125000),'2:05');
+});
+
+test('context profiles draw as a few areas and resolve the pointer to the topmost profile',()=>{
+  const entry=(stream,from,width,extra={})=>({from,width,color:stream==='main'?'#43877e':'#8a6bbf',sample:{stream,...extra}});
+  // Thousands of samples on an 800-unit track: one area per stream run, bounded by the track's resolution.
+  const dense=Array.from({length:6000},(_,i)=>({entry:entry('main',i/60,(i+1)/60),start:i,end:i+1}));
+  const many=contextProfileLayout(dense,time=>time/6000,800);
+  assert.equal(many.layers.length,1,'one stream draws as one area');
+  assert.ok(many.layers[0].d.split('L').length<=1700,'the area is sampled at half-pixel resolution, not per sample');
+  assert.equal(many.shapes.length,6000,'every sample stays addressable');
+  const fraction=time=>time/100;
+  const layout=contextProfileLayout([
+    {entry:entry('main',0,50),start:0,end:50},
+    {entry:entry('main',50,90),start:50,end:100},
+    {entry:entry('child',2,6),start:40,end:60},
+    {entry:entry('main',100,100,{compact:true}),start:70,end:70},
+  ],fraction,100);
+  assert.deepEqual(layout.layers.map(area=>area.color),['#43877e','#8a6bbf','#43877e'],'streams and compactions keep their source stacking order');
+  assert.ok(!layout.layers[0].d.includes(' 0L'),'the compaction does not raise the main profile to full height');
+  assert.equal(contextProfileHit(layout.shapes,50,3,100),2,'inside the child profile, the later (upper) profile wins');
+  assert.equal(contextProfileHit(layout.shapes,50,10,100),1,'above the small child profile the main profile takes the point');
+  assert.equal(contextProfileHit(layout.shapes,25,10,100),0);
+  assert.equal(contextProfileHit(layout.shapes,25,40,100),-1,'above every profile nothing is hit, so the turn underneath takes the pointer');
+  assert.equal(contextProfileHit(layout.shapes,71,95,100),3,'a compaction spans the track');
+  // A sample narrower than a pixel keeps a marker-sized target.
+  const narrow=contextProfileLayout([{entry:entry('main',10,20),start:10,end:10.1}],fraction,100);
+  assert.equal(contextProfileHit(narrow.shapes,12,5,100),0);
+  assert.deepEqual(contextProfileBounds(narrow.shapes[0],100),[10,13],'a narrow sample keeps a visible marker-sized target');
+
+  const interleaved=contextProfileLayout([
+    {entry:entry('main',60,60),start:0,end:50},
+    {entry:entry('child',40,40),start:20,end:100},
+    {entry:entry('main',60,60),start:50,end:100},
+    {entry:{...entry('main',100,100,{compact:true}),color:'#fff'},start:75,end:75},
+    {entry:entry('main',30,30),start:75,end:100},
+  ],fraction,100);
+  assert.deepEqual(interleaved.layers.map(layer=>layer.color),['#43877e','#8a6bbf','#43877e','#fff','#43877e'],'returning streams and samples after compaction paint over earlier layers');
+  assert.equal(contextProfileHit(interleaved.shapes,30,20,100),1,'the child paints above the earlier main sample');
+  assert.equal(contextProfileHit(interleaved.shapes,60,20,100),2,'the later main sample paints above the child');
+  assert.equal(contextProfileHit(interleaved.shapes,76,20,100),4,'a later profile can cover the bottom of a compaction');
+  assert.equal(contextProfileHit(interleaved.shapes,76,90,100),3,'the uncovered compaction stays reachable');
+
+  const ending=contextProfileLayout([
+    {entry:entry('main',80,80),start:0,end:100},
+    {entry:entry('main',100,20),start:100,end:100},
+  ],fraction,100);
+  assert.deepEqual(contextProfileBounds(ending.shapes[1],100),[97,100],'the final instant sample stays inside the drawing');
+  assert.equal(contextProfileHit(ending.shapes,99,30,100),1,'the final sample wins within its minimum-width marker');
+  assert.equal(contextProfileHit(ending.shapes,99,70,100),0,'above the falling final profile the earlier sample remains reachable');
+  assert.equal(contextProfileHit(ending.shapes,101,10,100),-1,'hits outside the drawing are ignored');
+  assert.equal(contextProfileHit(ending.shapes,99,-1,100),-1,'the bottom border is outside the drawing');
 });

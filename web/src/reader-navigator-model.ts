@@ -94,3 +94,68 @@ export function nearestReaderMessage(byID:Map<string,TimeRange>,at:number){
   for(const [id,[start,end]] of byID){const next=at<start?start-at:at>end?at-end:0;if(next<distance||next===distance&&start>latest){nearest=id;distance=next;latest=start;}}
   return nearest;
 }
+
+/** A context profile laid out on a track `width` units wide: its edges, its
+ * heights in percent of the track (from before the request to after it), and
+ * its position in the context list, which is also its stacking order. */
+export type ContextShape={index:number;x0:number;x1:number;from:number;to:number;compact:boolean;stream:string;color:string};
+export type ContextArea={color:string;d:string};
+export const CONTEXT_MIN_WIDTH=3,CONTEXT_COMPACTION_WIDTH=2;
+const coordinate=(value:number)=>Math.round(value*100)/100;
+
+/** The same visible minimum-width marker for drawing, outlining and hits. */
+export function contextProfileBounds(shape:ContextShape,width:number):[number,number]{
+  const minimum=shape.compact?CONTEXT_COMPACTION_WIDTH:CONTEXT_MIN_WIDTH;
+  const left=Math.max(0,Math.min(shape.x0,width-minimum));
+  return [left,Math.max(shape.x1,left+minimum)];
+}
+export function contextProfileOutline(shape:ContextShape,width:number){
+  const [left,right]=contextProfileBounds(shape,width);
+  return `M${left} 100L${left} ${100-shape.from}L${right} ${100-shape.to}L${right} 100Z`;
+}
+
+/** Draw a session's context profiles as a few shapes instead of one element
+ * per sample: a long session has thousands of samples, far more than the
+ * track has pixels, and an element each made every scroll frame's hit test
+ * walk all of them. Consecutive touching, same-stream, same-colored profiles
+ * form one area, sampled at half-pixel resolution. Stream switches and
+ * compactions start new layers so paint and hit order stay in source order. */
+export function contextProfileLayout(entries:{entry:Pick<ReaderContext,'from'|'width'|'color'|'sample'>;start:number;end:number}[],fraction:(time:number)=>number,width:number):{shapes:ContextShape[];layers:ContextArea[]}{
+  const place=(time:number)=>Math.max(0,Math.min(width,fraction(time)*width));
+  const shapes=entries.map(({entry,start,end},index):ContextShape=>{
+    const compact=!!entry.sample.compact,x0=place(start);
+    if(compact){const left=Math.max(0,Math.min(x0,width-CONTEXT_COMPACTION_WIDTH));return {index,x0:left,x1:left+CONTEXT_COMPACTION_WIDTH,from:100,to:100,compact,stream:entry.sample.stream,color:entry.color};}
+    return {index,x0,x1:Math.max(x0,place(end)),from:entry.from,to:entry.width,compact,stream:entry.sample.stream,color:entry.color};
+  });
+  const runs:ContextShape[][]=[];
+  for(const shape of shapes){
+    const run=runs[runs.length-1],last=run?.[run.length-1];
+    if(run&&last&&!shape.compact&&!last.compact&&last.stream===shape.stream&&last.color===shape.color&&Math.abs(shape.x0-last.x1)<.5)run.push(shape);
+    else runs.push([shape]);
+  }
+  const layers=runs.map(run=>{
+    if(run.length===1)return {color:run[0].color,d:contextProfileOutline(run[0],width)};
+    // A run narrower than a marker's minimum width still shows as one.
+    const left=Math.max(0,Math.min(run[0].x0,width-CONTEXT_MIN_WIDTH)),right=Math.max(run[run.length-1].x1,left+CONTEXT_MIN_WIDTH);
+    const points:[number,number][]=[];
+    const add=(x:number,height:number)=>{const last=points[points.length-1];if(last&&points.length>1&&Math.abs(x-last[0])<.5)last[1]=Math.max(last[1],height);else points.push([x,height]);};
+    run.forEach((shape,i)=>{add(i===0?left:shape.x0,shape.from);add(i===run.length-1?right:shape.x1,shape.to);});
+    const top=points.map(([x,height])=>`${coordinate(x)} ${coordinate(100-height)}`).join('L');
+    return {color:run[0].color,d:`M${coordinate(left)} 100L${top}L${coordinate(right)} 100Z`};
+  });
+  return {shapes,layers};
+}
+
+/** The profile under a point of the track (x in track units, height in
+ * percent from its bottom): the topmost profile containing it, or -1 above
+ * every profile, where the turn underneath takes the pointer. A narrow
+ * profile keeps the marker's minimum width as a target. */
+export function contextProfileHit(shapes:ContextShape[],x:number,height:number,width:number):number{
+  if(x<0||x>width||height<0||height>100)return -1;
+  for(let i=shapes.length-1;i>=0;i--){
+    const shape=shapes[i],[left,right]=contextProfileBounds(shape,width);
+    const top=shape.from+(shape.to-shape.from)*Math.max(0,Math.min(1,(x-left)/(right-left)));
+    if(x>=left&&x<=right&&height<=top)return shape.index;
+  }
+  return -1;
+}
