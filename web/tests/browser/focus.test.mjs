@@ -1627,33 +1627,85 @@ for (const merged of [false, true]) test(`transcript navigators follow layout ch
     assert.equal(await page.locator('.reader-navigator-timeline').count(),0);
     const state=JSON.stringify([]);
     await page.evaluate(url=>window.pharosNavigate(url), `/work/${workID}/conversation/conv-root?reader_navigator=${encodeURIComponent(state)}`);
-    await page.locator('.reader-navigator-context .token-marker').first().waitFor();
+    await page.locator('.reader-navigator-context-profile').waitFor();
     await shot('session-navigator-measured');
   }
 });
 
 test('overlapping context profiles and turn labels reveal their sources', {skip}, async t=>{
-  const {page,settled,shot}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-context .token-marker'});
-  const entries=await page.evaluate(()=>document.querySelector('.conversation-panel').navigatorData.contexts.map(entry=>({id:entry.message.id,size:entry.sample.size,title:entry.title})));
-  const parent=entries.find(entry=>entry.size===150200),child=entries.find(entry=>entry.id==='m-17');
+  const {page,settled,shot}=await open(t,{url:`/work/${workID}/conversation/conv-root`,ready:'.reader-navigator-context-profile'});
+  const entries=await page.evaluate(()=>{
+    const data=document.querySelector('.conversation-panel').navigatorData,jumpContext=data.jumpContext,jumpMessage=data.jumpMessage;
+    data.jumpContext=entry=>{window.navigatorTestJump={kind:'context',id:entry.message.id};jumpContext(entry);};
+    data.jumpMessage=id=>{window.navigatorTestJump={kind:'turn',id};jumpMessage(id);};
+    return data.contexts.map(entry=>({id:entry.message.id,size:entry.sample.size,title:entry.title}));
+  });
+  const parent=entries.find(entry=>entry.size===150200),child=entries.find(entry=>entry.id==='m-17'),last=entries.at(-1);
   assert.ok(parent&&child,'the fixture has overlapping main and subagent profiles');
-  const parentButton=page.getByRole('button',{name:parent.title,exact:true});
-  const childButton=page.getByRole('button',{name:child.title,exact:true});
-  const parentBounds=await parentButton.boundingBox(),childBounds=await childButton.boundingBox();
+  const revealed=id=>page.waitForFunction(id=>[...document.querySelectorAll('.token-highlight')].some(target=>target.closest('[data-message-id]')?.dataset.messageId===id),id);
+  const jump=async(kind,id,activate)=>{
+    await page.evaluate(()=>{window.navigatorTestJump=null;});
+    await activate();
+    await page.waitForFunction(({kind,id})=>window.navigatorTestJump?.kind===kind&&window.navigatorTestJump.id===id,{kind,id});
+    await settled();
+    // Source reveals scroll smoothly; measure pointer targets after that scroll settles.
+    await page.evaluate(()=>new Promise(resolve=>{
+      const scroller=document.querySelector('.workspace-reader-content');let previous=NaN,stable=0;
+      const frame=()=>{const top=scroller.scrollTop;stable=top===previous?stable+1:0;previous=top;if(stable>=2)resolve();else requestAnimationFrame(frame);};
+      frame();
+    }));
+  };
+  // The keyboard control steps through every sample and describes the selection.
+  const samples=page.getByRole('button',{name:'Browse context samples',exact:true});
+  const description=()=>samples.evaluate(button=>(button.getAttribute('aria-describedby')||'').split(/\s+/).map(id=>document.getElementById(id)?.textContent||'').join(' '));
+  const select=async title=>{
+    await samples.focus();await page.keyboard.press('Home');
+    for(let step=0;step<=entries.length;step++){
+      if(await page.getByRole('tooltip').getByText(title,{exact:true}).count()){
+        assert.ok((await description()).includes(title),'the focused control describes its current sample');
+        await page.getByRole('status').filter({hasText:title}).waitFor();
+        // Use the fill's bounds, excluding the decorative cursor stroke.
+        return page.locator('.reader-navigator-context-cursor').evaluate(path=>{
+          const bounds=path.getBBox(),matrix=path.getScreenCTM(),a=new DOMPoint(bounds.x,bounds.y).matrixTransform(matrix),b=new DOMPoint(bounds.x+bounds.width,bounds.y+bounds.height).matrixTransform(matrix);
+          return {x:a.x,y:a.y,width:b.x-a.x,height:b.y-a.y};
+        });
+      }
+      await page.keyboard.press('ArrowRight');
+    }
+    assert.fail(`no context sample is titled ${title}`);
+  };
+  await select(child.title);
+  await jump('context',child.id,()=>page.keyboard.press('Enter'));
+  await revealed(child.id);
+  const parentBounds=await select(parent.title),childBounds=await select(child.title);
   const clickX=(Math.max(parentBounds.x,childBounds.x)+Math.min(parentBounds.x+parentBounds.width,childBounds.x+childBounds.width))/2;
   assert.ok(clickX>Math.max(parentBounds.x,childBounds.x)&&clickX<Math.min(parentBounds.x+parentBounds.width,childBounds.x+childBounds.width));
-  // This point is inside both buttons' rectangles, above the smaller profile.
-  await page.mouse.click(clickX,parentBounds.y+parentBounds.height*.9);
-  await page.waitForFunction(id=>[...document.querySelectorAll('.token-highlight')].some(target=>target.closest('[data-message-id]')?.dataset.messageId===id),parent.id);
-  await settled();
-  // Keyboard activation still reaches the small profile.
-  await childButton.focus();await page.keyboard.press('Enter');
-  await page.waitForFunction(id=>[...document.querySelectorAll('.token-highlight')].some(target=>target.closest('[data-message-id]')?.dataset.messageId===id),child.id);
-  const turn=page.locator('.reader-navigator-turn').nth(2),label=turn.locator('span');
-  const message=await page.evaluate(()=>document.querySelector('.conversation-panel').navigatorData.turns[2].messages[0]);
-  await label.click();
+  // Above the smaller profile the main sample wins; within its small fill the child wins.
+  const drawing=await page.locator('.reader-navigator-context-profile').boundingBox();
+  await jump('context',parent.id,()=>page.mouse.click(clickX,drawing.y+drawing.height*.9));
+  await revealed(parent.id);
+  const visibleChild=await select(child.title);
+  await jump('context',child.id,()=>page.mouse.click(clickX,visibleChild.y+visibleChild.height/2));
+  // The final instant sample keeps a clickable marker inside the right edge.
+  const lastBounds=await select(last.title),lastPoint={x:lastBounds.x+lastBounds.width/2,y:lastBounds.y+lastBounds.height*.75};
+  await jump('context',last.id,()=>page.mouse.click(lastPoint.x,lastPoint.y));
+  // Pointer inspection must give the card back to the focused keyboard sample.
+  const hoverBounds=await select(last.title);
+  await select(parent.title);
+  await page.mouse.move(hoverBounds.x+hoverBounds.width/2,hoverBounds.y+hoverBounds.height*.75);
+  await page.getByRole('tooltip').getByText(last.title,{exact:true}).waitFor();
+  assert.ok((await description()).includes(parent.title),'pointer inspection leaves the keyboard description on its selected sample');
+  await page.mouse.move(0,0);
+  await page.getByRole('tooltip').getByText(parent.title,{exact:true}).waitFor();
+  await jump('context',parent.id,()=>page.keyboard.press('Enter'));
+  // A turn's number and blue edge both reveal its first message over the profiles.
+  const turn=page.locator('.reader-navigator-turn').nth(3),label=turn.locator('span');
+  const message=await page.evaluate(()=>document.querySelector('.conversation-panel').navigatorData.turns[3].messages[0]);
+  const edge=await turn.evaluate(button=>{const bounds=button.getBoundingClientRect(),width=parseFloat(getComputedStyle(button,'::before').borderLeftWidth);return {x:bounds.left+width/2,y:bounds.bottom-width/4};});
+  await jump('turn',message,()=>page.mouse.click(edge.x,edge.y));
+  await jump('turn',message,()=>label.click());
   await page.waitForFunction(id=>document.querySelector(`[data-message-id="${id}"].authorship-target`),message);
-  await turn.focus();await page.keyboard.press('Enter');
+  await turn.focus();await jump('turn',message,()=>page.keyboard.press('Enter'));
   assert.ok(await turn.evaluate(element=>element===document.activeElement),'revealing a turn keeps keyboard focus on its marker');
   await shot('combined-context-and-turns');
 });
@@ -1921,7 +1973,9 @@ test('session navigator scrolling reuses transcript geometry on a long session',
       })).flat()};
     },
   }});
-  assert.equal(await page.locator('.token-marker').count(),960,'the fixture exercises hundreds of context profiles');
+  assert.equal(await page.evaluate(()=>document.querySelector('.conversation-panel').navigatorData.contexts.length),960,'the fixture exercises hundreds of context profiles');
+  // Each element on the sticky rail is hit-tested on every scroll frame; samples share one drawing.
+  assert.ok(await page.locator('.reader-navigator-context *').count()<2*160+20,'context samples draw without an element each');
   await page.getByRole('button',{name:'Conversation actions',exact:true}).click();
   await page.getByRole('menuitem',{name:'Close all turns',exact:true}).click();
   await settled();
@@ -1987,7 +2041,9 @@ for (const trigger of ["context jump", "scroll"]) test(`a ${trigger} reaches a p
     await page.evaluate(() => { const scroller = document.querySelector(".workspace-reader-content"); scroller.scrollTop = scroller.scrollHeight; });
     await page.getByRole("button", { name: /Open conversation/ }).waitFor();
   }
-  await page.locator(".token-marker").last().click();
+  await page.getByRole("button", { name: "Browse context samples", exact: true }).focus();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
   await page.waitForFunction(() => {
     const target = document.querySelector(".token-highlight");
     const bounds = target?.getBoundingClientRect();

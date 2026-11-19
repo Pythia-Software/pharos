@@ -8313,24 +8313,6 @@
       "reason": "Source navigation scrolls and highlights through the existing reader materialization handlers without taking keyboard focus. Keyboard browsing and the automatic window are transient scroll state; turns and measured context are always shown when available. The timeline's visibility is the Key's timeline_visibility and its fold uses ViewDisclosure in the shared timeline rows."
     },
     {
-      "key": "b9b2caa37ad6a44e:0",
-      "file": "web/src/reader-navigator.tsx",
-      "owner": "ReaderNavigator",
-      "tag": "button",
-      "control": "aria-label={`Turn ${index+1} · ${turn.label}`} onPointerEnter={turn.card?event=>turnInspector.show(event.currentTarget,<TurnCard card={turn.card!}/>,event.clientX):undefined} onPointerLeave={turnInspector.leave} onClick={()=>{turnInspector.close();const id=turn.messages.find(id=>at(id));if(id)data.jumpMessage(id);}}",
-      "contract": "transient",
-      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus; hovering a turn opens the shared ribbon inspector card (transient). The automatic visible window and keyboard browsing cursor are transient scroll state; turns and measured context are always shown, while the Timeline key binds timeline_visibility."
-    },
-    {
-      "key": "e4dc3a33e88064d4:0",
-      "file": "web/src/reader-navigator.tsx",
-      "owner": "ReaderNavigator",
-      "tag": "button",
-      "control": "onClick={()=>data.jumpContext(entry)}",
-      "contract": "transient",
-      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The automatic visible window and keyboard browsing cursor are transient scroll state; turns and measured context are always shown, while the Timeline key binds timeline_visibility."
-    },
-    {
       "key": "ead6e580fbe6230a:0",
       "file": "web/src/reader-navigator.tsx",
       "owner": "ReaderNavigator",
@@ -8339,6 +8321,24 @@
       "binding": "timeline_visibility",
       "contract": "view.timeline_visibility",
       "reason": "Bound directly to the registered view field."
+    },
+    {
+      "key": "0a2c9676fc3b2dda:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderTurnsRow",
+      "tag": "button",
+      "control": "aria-label={`Turn ${index+1} · ${turn.label}`} onClick={()=>{inspector.close();const id=turn.messages.find(id=>byID.has(id));if(id)data.jumpMessage(id);}}",
+      "contract": "transient",
+      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus; hovering a turn (resolved by the row's pointer handler) opens the shared ribbon inspector card (transient). The automatic visible window and keyboard browsing cursor are transient scroll state; turns and measured context are always shown, while the Timeline key binds timeline_visibility."
+    },
+    {
+      "key": "7bf020a0155445e6:0",
+      "file": "web/src/reader-navigator.tsx",
+      "owner": "ReaderTurnsRow",
+      "tag": "button",
+      "control": "aria-label=\"Browse context samples\" onFocus={event=>choose(event.currentTarget,Math.min(keyboardAt.current.index,drawn.length-1))} onBlur={()=>{keyboardAt.current.focused=false;setKeyboardIndex(null);if(!hovered.current){setCursor(-1);inspector.leave();}}} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const last=drawn.length-1,at=keyboardAt.current.index;choose(event.currentTarget,event.key==='Home'?0:event.key==='End'?last:Math.max(0,Math.min(last,at+(event.key==='ArrowLeft'?-1:1))));}} onClick={()=>reveal(Math.min(keyboardAt.current.index,drawn.length-1))}",
+      "contract": "transient",
+      "reason": "Source navigation scrolls and highlights the existing transcript through its reveal/materialization handlers, without moving keyboard focus. The keyboard cursor, accessible sample announcement, outline and hover card are transient; measured context is always shown when available, while the Timeline key binds timeline_visibility."
     },
     {
       "key": "0e16829cc0b46e54:0",

@@ -10,7 +10,7 @@ import {timelineSectionVisible,timelineValueVisible,timelineWaitsVisible,visible
 import {TimelineRow,timelineEventLayer,type TimelineLane,type TimelineSurface} from './timeline-rows';
 import {useViewState} from './view-state';
 import {voiceClock,type ReaderVoice} from './reader-navigator-model';
-import {availableReaderNavigators,readerNavigatorClock,readerNavigatorScale,nearestReaderMessage,type ReaderNavigatorData} from './reader-navigator-model';
+import {availableReaderNavigators,readerNavigatorClock,readerNavigatorScale,nearestReaderMessage,contextProfileLayout,contextProfileHit,contextProfileOutline,type ContextShape,type ReaderContext,type ReaderNavigatorData} from './reader-navigator-model';
 import {trackReaderViewport} from './reader-navigator-layout';
 import {humanEventDimensions,humanEventGroups,humanEventLayout} from './human-events-model';
 import './reader-navigator.css';
@@ -55,6 +55,69 @@ function ReaderVoiceRow({voice,at,position}:{voice:ReaderVoice;at:(id:string)=>[
     </div>
   </div>;
 }
+type DrawnContext={entry:ReaderContext;start:number;end:number};
+/** Every context sample of the session in one drawing (contextProfileLayout). */
+function ContextProfileDrawing({layout,width,cursor}:{layout:ReturnType<typeof contextProfileLayout>;width:number;cursor:ContextShape|null}){
+  return <svg className="reader-navigator-context-profile" viewBox={`0 0 ${width} 100`} preserveAspectRatio="none" aria-hidden="true">
+    {layout.layers.map((area,index)=><path key={index} d={area.d} fill={area.color}/>)}
+    {cursor?<path className="reader-navigator-context-cursor" d={contextProfileOutline(cursor,width)} vectorEffect="non-scaling-stroke"/>:null}
+  </svg>;
+}
+const ContextProfile=React.memo(ContextProfileDrawing);
+/** The Turns row and, behind it, the context in use over the session. Context
+ * samples are one drawing with one pointer and keyboard model rather than an
+ * element each: a long session has thousands. Above every profile, the turn
+ * underneath takes the pointer; turn edges and numbers stay on top. */
+function ReaderTurnsRow({data,byID,scale,contexts,trackPx,contextNote}:{data:ReaderNavigatorData;byID:Map<string,[number,number]>;scale:ReturnType<typeof readerNavigatorScale>;contexts:(ReaderContext&{end:number})[]|null;trackPx:number;contextNote:string}){
+  const inspector=useRibbonInspector(),hovered=useRef<string|null>(null),keyboardAt=useRef({index:0,focused:false}),keyboardControl=useRef<HTMLButtonElement>(null),selectionID=useId();
+  const [cursor,setCursor]=useState(-1),[keyboardIndex,setKeyboardIndex]=useState<number|null>(null);
+  const position=(start:number,end:number)=>({left:`min(${scale.fraction(start)*100}%,calc(100% - 3px))`,width:`${Math.max(0,scale.fraction(end)-scale.fraction(start))*100}%`});
+  const drawn=useMemo<DrawnContext[]>(()=>(contexts??[]).flatMap(entry=>{const time=byID.get(entry.message.id);return time?[{entry,start:time[0],end:entry.end}]:[];}),[contexts,byID]);
+  const layout=useMemo(()=>drawn.length?contextProfileLayout(drawn,time=>scale.fraction(time),trackPx):null,[drawn,scale,trackPx]);
+  const card=(index:number)=><div className="event-link-cards"><div className="event-link-card reader-turn-card"><div className="event-link-card-head"><strong>{drawn[index].entry.title}</strong></div></div></div>;
+  const hitAt=(track:Element,x:number,y:number)=>{if(!layout)return -1;const rect=track.querySelector('.reader-navigator-context-profile')!.getBoundingClientRect();if(!rect.width||!rect.height)return -1;return contextProfileHit(layout.shapes,(x-rect.left)/rect.width*trackPx,(rect.bottom-y)/rect.height*100,trackPx);};
+  // A pseudo-element's pointer target is its button. Keep its painted edge,
+  // as well as the number, above the context profiles underneath the turn.
+  const turnForeground=(target:EventTarget|null,x:number)=>{
+    if(!(target instanceof Element))return null;
+    const turn=target.closest<HTMLElement>('.reader-navigator-turn');if(!turn)return null;
+    if(target.closest('.reader-navigator-turn>span'))return turn;
+    const left=turn.getBoundingClientRect().left,edge=parseFloat(getComputedStyle(turn,'::before').borderLeftWidth);
+    return x>=left&&x<left+edge?turn:null;
+  };
+  const keyboard=(target:EventTarget|null)=>target instanceof Element&&target.classList.contains('reader-navigator-context-keyboard');
+  const choose=(element:HTMLElement,index:number)=>{hovered.current=null;keyboardAt.current={index,focused:true};setKeyboardIndex(index);setCursor(index);const rect=element.getBoundingClientRect(),shape=layout!.shapes[index];inspector.show(element,card(index),rect.left+(shape.x0+shape.x1)/2/trackPx*rect.width);};
+  const leave=()=>{hovered.current=null;if(keyboardAt.current.focused&&keyboardControl.current)choose(keyboardControl.current,keyboardAt.current.index);else{setCursor(-1);inspector.leave();}};
+  const reveal=(index:number)=>{inspector.close();data.jumpContext(drawn[index].entry);};
+  return <div className={`reader-navigator-row${layout?'':' is-turns'}`}>
+    <span className="reader-navigator-label">{layout?'Turns · context':'Turns'}</span>
+    <div className={`reader-navigator-track reader-navigator-turns${layout?' reader-navigator-context':''}`} role="group" aria-label={layout?'Conversation turns and context growth':'Conversation turns'} aria-describedby={layout?contextNote:undefined}
+      onPointerMove={event=>{
+        if(keyboard(event.target))return;
+        const index=turnForeground(event.target,event.clientX)?-1:hitAt(event.currentTarget,event.clientX,event.clientY);
+        const turn=index<0&&event.target instanceof Element?event.target.closest<HTMLElement>('.reader-navigator-turn'):null,key=index>=0?`context:${index}`:turn?`turn:${turn.dataset.turn}`:null;
+        if(key===hovered.current)return;
+        hovered.current=key;setCursor(index);
+        const turnCard=turn?data.turns[Number(turn.dataset.turn)]?.card:undefined;
+        if(index>=0)inspector.show(event.currentTarget,card(index),event.clientX);
+        else if(turn&&turnCard)inspector.show(turn,<TurnCard card={turnCard}/>,event.clientX);
+        else leave();
+      }}
+      onPointerLeave={leave}
+      onClickCapture={event=>{if(keyboard(event.target)||turnForeground(event.target,event.clientX))return;const index=hitAt(event.currentTarget,event.clientX,event.clientY);if(index<0)return;event.preventDefault();event.stopPropagation();reveal(index);}}>
+      {layout?<ContextProfile layout={layout} width={trackPx} cursor={cursor>=0?layout.shapes[cursor]??null:null}/>:null}
+      {layout?<button ref={keyboardControl} type="button" className="reader-navigator-context-keyboard" aria-label="Browse context samples" aria-describedby={selectionID} title="Left / right: move through context samples · Home / End: first / last · Enter: reveal the sample's message"
+        onFocus={event=>choose(event.currentTarget,Math.min(keyboardAt.current.index,drawn.length-1))}
+        onBlur={()=>{keyboardAt.current.focused=false;setKeyboardIndex(null);if(!hovered.current){setCursor(-1);inspector.leave();}}}
+        onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const last=drawn.length-1,at=keyboardAt.current.index;choose(event.currentTarget,event.key==='Home'?0:event.key==='End'?last:Math.max(0,Math.min(last,at+(event.key==='ArrowLeft'?-1:1))));}}
+        onClick={()=>reveal(Math.min(keyboardAt.current.index,drawn.length-1))}/>:null}
+      {layout?<span id={selectionID} className="reader-navigator-context-selection" role="status" aria-live="polite" aria-atomic="true">{keyboardIndex===null?'':`${keyboardIndex+1} of ${drawn.length} · ${drawn[keyboardIndex].entry.title}`}</span>:null}
+      {data.turns.map((turn,index)=>{const spans=turn.messages.flatMap(id=>{const span=byID.get(id);return span?[span]:[];});if(!spans.length)return null;const start=Math.min(...spans.map(span=>span[0])),end=Math.max(...spans.map(span=>span[1]));return <button type="button" className="reader-navigator-turn" key={turn.messages[0]??index} data-turn={index} style={position(start,end)} title={turn.card?undefined:`Turn ${index+1} · ${turn.label}`} aria-label={`Turn ${index+1} · ${turn.label}`} onClick={()=>{inspector.close();const id=turn.messages.find(id=>byID.has(id));if(id)data.jumpMessage(id);}}><span>{index+1}</span></button>;})}
+    </div>
+    {inspector.portal}
+  </div>;
+}
+const MemoReaderTurnsRow=React.memo(ReaderTurnsRow);
 function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavigatorData;keyHost:HTMLElement}){
   const keyEdited=useCallback(()=>{panel.dispatchEvent(new Event('pharos:reader-key-edit'));},[panel]);
   const [visibility,selectKey]=useTimelineVisibility(true,keyEdited);
@@ -66,7 +129,7 @@ function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavi
   const [workspaceGaps,setWorkspaceGaps]=useState<IdleGap[]|undefined>(()=>(panel as GapPanel).pharosReaderIdleGaps);
   const [waitGaps,setWaitGaps]=useState<IdleGap[]|undefined>(()=>(panel as GapPanel).pharosReaderWaitGaps);
   useEffect(()=>{const update=()=>{setWorkspaceGaps((panel as GapPanel).pharosReaderIdleGaps);setWaitGaps((panel as GapPanel).pharosReaderWaitGaps);};panel.addEventListener('pharos:reader-idle',update);update();return()=>panel.removeEventListener('pharos:reader-idle',update);},[panel]);
-  const host=useRef<HTMLElement>(null),turnInspector=useRibbonInspector();
+  const host=useRef<HTMLElement>(null);
   const clock=useMemo(()=>readerNavigatorClock(data.messages,data.marks),[data]);
   const baseScale=useMemo(()=>readerNavigatorScale(clock,data.callerIDs,skipIdle,workspaceGaps,skipWaits,waitGaps),[clock,data.callerIDs,skipIdle,workspaceGaps,skipWaits,waitGaps]);
   const [trackPx,setTrackPx]=useState(640);
@@ -100,13 +163,7 @@ function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavi
     {hasBars?<>
       <div className="reader-navigator-bars">
         {timelineVisible?<TimelineRow node={visibleTree!} lane={lane}/>:null}
-        {hasContext||hasTurns?<div className={`reader-navigator-row${hasContext?'':' is-turns'}`}>
-          <span className="reader-navigator-label">{hasContext?'Turns · context':'Turns'}</span>
-          <div className={`reader-navigator-track reader-navigator-turns${hasContext?' reader-navigator-context':''}`} role="group" aria-label={hasContext?'Conversation turns and context growth':'Conversation turns'} aria-describedby={hasContext?contextNote:undefined}>
-            {hasContext?contexts.map(entry=>{const time=at(entry.message.id);if(!time)return null;return <button key={JSON.stringify([entry.message.id,entry.sample.stream])} type="button" className={`token-marker${entry.sample.compact?' compaction-marker':''}`} style={{...position(time[0],entry.end),'--context-profile':entry.sample.compact?'none':`polygon(0 ${100-entry.from}%,100% ${100-entry.width}%,100% 100%,0 100%)`,'--token-color':entry.color} as React.CSSProperties} title={entry.title} onClick={()=>data.jumpContext(entry)}/>;}):null}
-            {data.turns.map((turn,index)=>{const spans=turn.messages.flatMap(id=>{const span=at(id);return span?[span]:[];});if(!spans.length)return null;const start=Math.min(...spans.map(span=>span[0])),end=Math.max(...spans.map(span=>span[1]));return <button type="button" className="reader-navigator-turn" key={turn.messages[0]??index} style={position(start,end)} title={turn.card?undefined:`Turn ${index+1} · ${turn.label}`} aria-label={`Turn ${index+1} · ${turn.label}`} onPointerEnter={turn.card?event=>turnInspector.show(event.currentTarget,<TurnCard card={turn.card!}/>,event.clientX):undefined} onPointerLeave={turnInspector.leave} onClick={()=>{turnInspector.close();const id=turn.messages.find(id=>at(id));if(id)data.jumpMessage(id);}}><span>{index+1}</span></button>;})}
-          </div>
-        </div>:null}
+        {hasContext||hasTurns?<MemoReaderTurnsRow data={data} byID={clock.byID} scale={scale} contexts={hasContext?contexts:null} trackPx={trackPx} contextNote={contextNote}/>:null}
         {data.voice?<ReaderVoiceRow voice={data.voice} at={at} position={position}/>:null}
         <div className="reader-navigator-window-track" aria-hidden="true"><span className="reader-navigator-window" hidden/><i className="reader-navigator-boundary" hidden/><i className="reader-navigator-boundary" hidden/></div>
       </div>
@@ -114,7 +171,7 @@ function ReaderNavigator({panel,data,keyHost}:{panel:HTMLElement;data:ReaderNavi
       {hasContext?<small id={contextNote} className="reader-navigator-context-note">Height = context window in use (largest observed context when unknown) · context-colored line = compaction · blue line and number = turn</small>:null}
       {!clock.timed?<small className="reader-navigator-note">Message order · timestamps unavailable</small>:null}
     </>:<span className="reader-navigator-window" hidden/>}
-  </aside>{turnInspector.portal}{createPortal(<div role="group" aria-label="Timeline key"><TimelineLegend surface="reader" data-view-field="timeline_visibility" content={keyContent} visibility={visibility} onSelect={selectKey}/></div>,keyHost)}</>;
+  </aside>{createPortal(<div role="group" aria-label="Timeline key"><TimelineLegend surface="reader" data-view-field="timeline_visibility" content={keyContent} visibility={visibility} onSelect={selectKey}/></div>,keyHost)}</>;
 }
 
 declare global{interface Window{pharosReaderNavigator?:{mount:(panel:HTMLElement,data:ReaderNavigatorData)=>()=>void}}}
