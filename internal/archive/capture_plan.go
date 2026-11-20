@@ -362,6 +362,9 @@ func (p *capturePlan) walk(root string, info fs.FileInfo, prefix string, include
 func conductorConversationDatabase(ctx context.Context, file string) (bool, error) {
 	db, err := openSourceSQLite(ctx, file)
 	if err != nil {
+		if sqliteForeignDatabase(ctx, file, err, conductorTables) {
+			return false, nil
+		}
 		return false, err
 	}
 	defer db.Close()
@@ -369,7 +372,13 @@ func conductorConversationDatabase(ctx context.Context, file string) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	return firstPresent(tables, "sessions", "workspaces", "threads") != "" && firstPresent(tables, "messages", "session_messages") != "", nil
+	return conductorTables(tables), nil
+}
+
+// conductorTables says whether a database's tables hold Conductor sessions
+// and their messages, which the adapter reads.
+func conductorTables(tables map[string]bool) bool {
+	return firstPresent(tables, "sessions", "workspaces", "threads") != "" && firstPresent(tables, "messages", "session_messages") != ""
 }
 
 // tl1 captures the registry, and for each installation the TL1 adapter would

@@ -162,6 +162,9 @@ func (a *conductorAdapter) discover(selected map[string]bool, unchanged func([]s
 			if err == nil {
 				break
 			}
+			if a.view == nil && sqliteForeignDatabase(a.context(), path, err, conductorTables) {
+				break
+			}
 			if attempt >= 5 || (!strings.Contains(err.Error(), "database is locked") && !strings.Contains(err.Error(), "database is busy")) {
 				return fmt.Errorf("could not read Conductor database consistently: %s: %w", path, err)
 			}

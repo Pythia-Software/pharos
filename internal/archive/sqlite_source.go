@@ -531,6 +531,50 @@ func sqliteFallbackReads(root string) []map[string]any {
 	return reads
 }
 
+// sqliteTablesUnlocked lists path's tables without a lock or a check for
+// change (immutable=1), for a database that cannot be read consistently.
+// Its answer may be torn, so it only ever decides that a database is not
+// one a source reads (sqliteForeignDatabase); no rows are read this way.
+// A hot journal (a write half done in the main file) or WAL frames (schema
+// the main file may lack) refuse it.
+func sqliteTablesUnlocked(ctx context.Context, path string) (map[string]bool, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, err
+	}
+	pending, err := sqlitePendingState(resolved)
+	if err != nil {
+		return nil, err
+	}
+	if pending.hot || pending.frames {
+		return nil, fmt.Errorf("%s: %w", path, errSQLiteWriteInProgress)
+	}
+	db, err := openPinnedSQLite(ctx, sqliteURI(resolved)+"?mode=ro&immutable=1&_pragma=query_only(1)")
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	return tableNames(db)
+}
+
+// sqliteForeignDatabase says whether a database whose consistent read
+// failed as busy (err) affirmatively lacks what a source reads (holds says
+// whether its tables would be read). Such a database, another app's held
+// for as long as it runs (Chromium's, beside an Electron app's own), is
+// skipped rather than waited for, and Settings stops reporting its read. A
+// database it cannot tell about is still waited for.
+func sqliteForeignDatabase(ctx context.Context, path string, err error, holds func(map[string]bool) bool) bool {
+	if err == nil || ctx.Err() != nil || !strings.Contains(err.Error(), "database is busy") && !strings.Contains(err.Error(), "database is locked") {
+		return false
+	}
+	tables, tablesErr := sqliteTablesUnlocked(ctx, path)
+	if tablesErr != nil || holds(tables) {
+		return false
+	}
+	sqliteReads.Delete(path)
+	return true
+}
+
 // openReadOnlySQLite opens a database Pharos owns or has already copied (its
 // catalog, a backup, a snapshot generation capture indexing materialized)
 // read-only, never down the locked-database ladder.
