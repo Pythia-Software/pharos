@@ -168,7 +168,10 @@ test("human-words and human-repository-words-trend: typed words a day, and a 7-d
     const single = series => series.length === 1 ? { [series[0].key]: "total" } : labels(series);
     card.forEach((bucket, index) => assert.deepEqual(named(built.buckets[index].values, single(built.series)), named(bucket.values, single(preview.series)), `${id} ${bucket.key}`));
     assert.ok(card.some(bucket => Object.values(bucket.values).some(value => value > 0)));
-    if (id === "human-words") assert.deepEqual(preview.series.map(item => item.value).sort(), ["Provisional", "Refined"], "the card splits refined from provisional estimates");
+    if (id === "human-words") {
+      assert.ok(where.some(term => term.field === "estimate" && term.value === "refined"), "the card and its dashboard count refined words only");
+      assert.ok(preview.series.length <= 1, "one total, not a split by estimate");
+    }
   }
 });
 
@@ -177,10 +180,10 @@ test("a message recorded on another Mac's day: the day trend files it as the car
   assert.notEqual(message.day, local, "the fixture's recorded day differs from its local day");
   const where = withTimeRange([], human.time, undefined, undefined, "7d"), state = { metric: "typed", split: "none" };
   const query = trendQuery(human, state, where, { now, zone }), built = trendSeries(human, state, query, core.evaluateMetrics(cardRows.writing_messages, query.query, schemas.writing_messages, { now }).metrics, { now });
-  const card = core.evaluateMetrics(cardRows.writing_messages, cardCoverQuery(instantiateRecipe(recipeById("human-words"), 7, new Date(now)).query, recipeById("human-words")).query, schemas.writing_messages, { now }).metrics[0];
-  // The card splits each day into refined and provisional estimates.
-  const recorded = {};
-  for (const bucket of card.buckets) recorded[bucket.keys[0]] = (recorded[bucket.keys[0]] ?? 0) + bucket.value;
+  // The card counts refined words only; this message's day, not its estimate, is under test.
+  const refined = cardRows.writing_messages.map(row => ({ ...row, estimate: "refined" }));
+  const card = core.evaluateMetrics(refined, cardCoverQuery(instantiateRecipe(recipeById("human-words"), 7, new Date(now)).query, recipeById("human-words")).query, schemas.writing_messages, { now }).metrics[0];
+  const recorded = Object.fromEntries(card.buckets.map(bucket => [bucket.keys[0], bucket.value]));
   assert.equal(built.buckets.find(bucket => bucket.key === message.day).values.total, recorded[message.day], "the recorded day holds the message on both");
   const cycle = analysisQuery(human, { view: "cycle", cycle: "weekday", metric: "typed", split: "none" }, where, { now, zone });
   // The daily totals the weekday boxes summarise: its supporting query.

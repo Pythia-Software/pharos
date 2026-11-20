@@ -115,7 +115,7 @@ test("All time saved preview copy follows its source query window", t => {
     assert.equal(job.options.window, undefined);
     assert.equal(job.options.recipe.window, undefined);
     assert.equal(job.options.recipe.title, "All-time writing");
-    assert.equal(job.options.recipe.description, "Human-written words sent across all time, by the day they were sent; estimated counts are shaded lighter until Pharos refines them each day.");
+    assert.equal(job.options.recipe.description, "Human-written words sent across all time, by the day they were sent. Only refined words count, so recent days fill in as Pharos refines them each day.");
     assert.equal(queryHasTimeFilter(job.query, recipe.field), false);
     const restored = savedCardPreviewJob(updateQueryWindowURL(job.options.url, days), schemas[recipe.dataset]);
     assert.equal(restored.options.recipe.title, item.title);
@@ -799,12 +799,11 @@ test("saved cards migrate to the full dashboard mapping while preserving their s
   migrateSavedQueries(); assert.deepEqual(readBookmarks(), [saved], "migration is idempotent");
   // A card saved before its recipe gained a breakdown key keeps its saved
   // grouping; the cover must not group the saved result by the new key.
-  const words = queryRecipes.find(recipe => recipe.id === "human-words"), current = instantiateRecipe(words, 7, clock).query;
-  assert.ok(current.grouping.keys.some(key => core.groupKeyFields([key])[0] === "estimate"));
-  const older = { ...current, grouping: { ...current.grouping, keys: current.grouping.keys.filter(key => core.groupKeyFields([key])[0] !== "estimate") } };
-  const [metric] = cardCoverQuery(older, words, defaultCardCover(words)).query.aggregations;
-  assert.deepEqual(metric.groupBy, core.groupKeyFields(older.grouping.keys));
-  assert.deepEqual(cardCoverQuery(current, words, defaultCardCover(words)).query.aggregations[0].groupBy, core.groupKeyFields(current.grouping.keys));
+  const words = queryRecipes.find(recipe => recipe.id === "human-words"), saved_ = instantiateRecipe(words, 7, clock).query;
+  const grown = { ...words, exploration: { ...words.exploration, coverMetric: { ...words.exploration.coverMetric, groupBy: [...words.exploration.coverMetric.groupBy, "estimate"] } } };
+  assert.ok(!saved_.grouping.keys.some(key => core.groupKeyFields([key])[0] === "estimate"));
+  const [metric] = cardCoverQuery(saved_, grown, defaultCardCover(grown)).query.aggregations;
+  assert.deepEqual(metric.groupBy, core.groupKeyFields(saved_.grouping.keys));
 });
 
 
