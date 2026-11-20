@@ -428,6 +428,35 @@ func TestSourceSQLiteStepsDownTheLadder(t *testing.T) {
 			release()
 		}
 	})
+	t.Run("a held database is skipped only when it lacks what the source reads", func(t *testing.T) {
+		notes := func(tables map[string]bool) bool { return tables["notes"] }
+		sessions := func(tables map[string]bool) bool { return tables["sessions"] }
+		path := filepath.Join(t.TempDir(), "held.db")
+		sqliteNotes(t, path, "TRUNCATE")
+		_, release := sqliteHolder(t, path, `PRAGMA locking_mode=EXCLUSIVE`, `INSERT INTO notes VALUES('second')`)
+		_, err := openSourceSQLite(context.Background(), path)
+		if !errors.Is(err, errSQLiteWriteInProgress) {
+			t.Fatalf("a held database opened: %v", err)
+		}
+		if sqliteForeignDatabase(context.Background(), path, err, notes) || sqliteReadVia(path) != sqliteReadWaiting {
+			t.Fatal("a held database holding what the source reads was skipped")
+		}
+		if !sqliteForeignDatabase(context.Background(), path, err, sessions) || sqliteReadVia(path) != sqliteReadLive {
+			t.Fatalf("a held database without what the source reads was waited for, via %q", sqliteReadVia(path))
+		}
+		if sqliteForeignDatabase(context.Background(), path, errors.New("file is not a database"), sessions) {
+			t.Fatal("a database that failed other than as busy was skipped")
+		}
+		release()
+		// WAL frames may hold schema the main file lacks: no unlocked answer.
+		wal := filepath.Join(t.TempDir(), "wal.db")
+		sqliteNotes(t, wal, "WAL")
+		sqliteHolder(t, wal, `PRAGMA wal_autocheckpoint=0`, `CREATE TABLE sessions(id TEXT)`)
+		if sqliteForeignDatabase(context.Background(), wal, errSQLiteWriteInProgress, sessions) {
+			t.Fatal("a database whose WAL holds frames was skipped")
+		}
+		assertNoCopies(t, copies)
+	})
 	t.Run("a change a coarse clock hides is seen", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "coarse.db")
 		sqliteNotes(t, path, "DELETE")
@@ -667,10 +696,30 @@ func TestLockedSourceIsIndexedAndCapturedFromACopy(t *testing.T) {
 	}
 	writer.Close()
 	sqliteHolder(t, conductor, `PRAGMA locking_mode=EXCLUSIVE`, `INSERT INTO sessions VALUES('held','Held','2026-09-01T00:00:00Z','2026-09-01T00:00:00Z')`)
+	// Conductor's Electron shell keeps Chromium's profile beside its own
+	// database, and Chromium holds some of its rollback-journal databases
+	// for as long as it runs. One the source never reads leaves it
+	// readable, and Settings quiet, though it cannot be read consistently.
+	if err := os.MkdirAll(filepath.Join(dir, "electron"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	observer := filepath.Join(dir, "electron", "declarative_performance_observer.db")
+	sqliteNotes(t, observer, "TRUNCATE")
+	sqliteHolder(t, observer, `PRAGMA locking_mode=EXCLUSIVE`, `INSERT INTO notes VALUES('second')`)
 	whole := SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true}
+	beside, _ := testCatalog(t)
+	ingestSource(t, beside, whole)
+	if got := conversationMessages(t, beside, "conductor:s1"); got != 2 {
+		t.Fatalf("beside a held Chromium database, the Conductor session holds %d messages", got)
+	}
+	for _, read := range sqliteFallbackReads(dir) {
+		if read["path"] == observer {
+			t.Fatalf("Settings shows a database Conductor's source never reads: %v", read)
+		}
+	}
 	_, wholeConfig := testCatalog(t)
 	wholeConfig.Sources = []SourceConfig{whole}
-	if result := runCapture(t, wholeConfig); !result.OK {
+	if result := runCapture(t, wholeConfig); !result.OK || len(captureResult(t, result, "conductor").Warnings) != 0 {
 		t.Fatalf("capture of a locked Conductor database = %+v", result)
 	}
 	assertNoCopies(t, copies)
