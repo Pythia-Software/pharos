@@ -4457,7 +4457,7 @@
       "category": "human",
       "idea": "human-01",
       "title": "{lastDays} of writing",
-      "description": "Human-written words sent during the last {days} days, by the day they were sent; estimated counts are shaded lighter until Pharos refines them each day.",
+      "description": "Human-written words sent during the last {days} days, by the day they were sent. Only refined words count, so recent days fill in as Pharos refines them each day.",
       "dataset": "writing_messages",
       "field": "sent_at",
       "unit": "words",
@@ -4466,24 +4466,27 @@
           "field": "typed_words",
           "op": ">",
           "value": "0"
+        },
+        {
+          "field": "estimate",
+          "op": "=",
+          "value": "refined"
         }
       ],
       "measures": [
         {
-          "id": "sum:typed_words:day,estimate",
+          "id": "sum:typed_words:day",
           "op": "sum",
           "field": "typed_words",
           "groupBy": [
-            "day",
-            "estimate"
+            "day"
           ],
           "label": "Your words per day"
         }
       ],
       "exploration": {
         "keys": [
-          "day",
-          "estimate"
+          "day"
         ],
         "summaries": [
           {
@@ -4503,12 +4506,11 @@
         "action": "Explore daily word counts",
         "unit": "words",
         "coverMetric": {
-          "id": "sum:typed_words:day,estimate",
+          "id": "sum:typed_words:day",
           "op": "sum",
           "field": "card_typed_words",
           "groupBy": [
-            "day",
-            "estimate"
+            "day"
           ],
           "label": "Your words per day"
         }
@@ -4520,7 +4522,7 @@
           "v": 3,
           "view": "trend",
           "metric": "typed",
-          "split": "estimate",
+          "split": "none",
           "period": "day",
           "scale": "linear",
           "nonzero": false

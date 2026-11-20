@@ -211,7 +211,7 @@ test("relative daily covers chart every local date their window touches, across 
   for (const now of [Date.parse("2026-10-16T18:00:00Z"), Date.parse("2026-12-15T18:00:00Z")]) {
     t.mock.timers.setTime(now);
     clearPreviewCache();
-    population = [{ id: "recent", sent_at: new Date(now - 3 * 86400000).toISOString(), day: localDate(now - 3 * 86400000), typed_words: 10, typed_message: true }];
+    population = [{ id: "recent", sent_at: new Date(now - 3 * 86400000).toISOString(), day: localDate(now - 3 * 86400000), typed_words: 10, typed_message: true, estimate: "refined" }];
     for (const days of [7, 30, 90]) {
       const item = instantiateRecipe(recipe, days);
       const preview = await loadQueryPreview(item.dataset, item.query, schemas.writing_messages, { recipe: item, window: item.window });
