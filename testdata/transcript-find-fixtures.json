@@ -249,5 +249,23 @@
    "queries": [
     {"term": "usage-checkpoint", "show": ["prompts", "reads", "events"], "want": {"shown": 0, "hidden": 0, "hidden_kinds": []}},
     {"term": "activity-marker", "show": ["prompts", "reads", "events"], "want": {"shown": 2, "hidden": 0, "hidden_kinds": []}}
+   ]},
+  {"name": "A reply that is bare JSON is the agent's own words",
+   "messages": [
+    {"native_id": "u1", "role": "user", "kind": "message", "text": "Rate this build"},
+    {"native_id": "a1", "role": "assistant", "kind": "message", "text": {"score": 3.5, "reason": "A tan sectional with a chaise"}},
+    {"native_id": "a2", "role": "assistant", "kind": "message", "text": {"type": "future_reply", "status": "paused", "secret": "envelope-field"}}
+   ],
+   "events": [
+    {"kind": "message", "path": ["prompts"]},
+    {"kind": "message", "path": ["replies"]},
+    {"kind": "message", "path": ["response"]}
+   ],
+   "queries": [
+    {"term": "tan sectional", "show": ["response"], "want": {"shown": 0, "hidden": 1, "hidden_kinds": ["replies"]}},
+    {"term": "tan sectional", "show": ["replies"], "want": {"shown": 1, "hidden": 0, "hidden_kinds": []}},
+    {"term": "Recorded event", "want": {"shown": 0, "hidden": 0, "hidden_kinds": []}},
+    {"term": "future_reply", "show": ["response"], "want": {"shown": 1, "hidden": 0, "hidden_kinds": []}},
+    {"term": "envelope-field", "want": {"shown": 0, "hidden": 0, "hidden_kinds": []}}
    ]}
 ]

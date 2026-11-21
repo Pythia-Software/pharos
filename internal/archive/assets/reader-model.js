@@ -177,7 +177,11 @@ function messageNoteLines(message){
   if(notes.truncated)lines.push('Thinking is shortened in the export');
   return lines;
 }
-function displayText(message){const value=messageJSON(message);return commonEventText(value)||(value?eventDescription(value):String(message?.text??''))}
+// A message whose body is JSON with no envelope (a bare object or array, such
+// as a structured-output reply) is the agent's own words: show it as written
+// rather than as an event description. transcript_find.go mirrors this.
+function isEnvelope(value){return Boolean(value&&typeof value==='object'&&!Array.isArray(value)&&(value.type||value.kind))}
+function displayText(message){const value=messageJSON(message);return commonEventText(value)||(value&&(message.kind!=='message'||isEnvelope(value))?eventDescription(value):String(message?.text??''))}
 function eventDescription(value){if(Array.isArray(value))return `${value.length} recorded ${value.length===1?'item':'items'}`;if(!value||typeof value!=='object')return String(value??'');return shortText([value.type||value.kind||'Recorded event',value.subtype,value.description||value.summary||value.status].filter(Boolean).join(' · '),180)}
 
 // Claude exports keep citations beside the prose, not in its Markdown.
