@@ -301,6 +301,13 @@ func storedTL1Version(tx *sql.Tx, installationID string) (int64, bool, error) {
 
 func storeTL1Snapshot(tx *sql.Tx, snapshot tl1Snapshot, host string) error {
 	id := snapshot.Installation.ID
+	// The installation's transcripts folder, where its agents run, joins the
+	// project of its tasks' repository (workflowRoots), so the workspaces
+	// there move when that changes.
+	before, err := workflowRoots(context.Background(), tx)
+	if err != nil {
+		return err
+	}
 	// Registering a legacy project moves its database to a new installation
 	// ID. The rows stored under the old ID, read from the same database on
 	// the same Mac, would count its history twice once the project's
@@ -358,7 +365,11 @@ func storeTL1Snapshot(tx *sql.Tx, snapshot tl1Snapshot, host string) error {
 			return err
 		}
 	}
-	return nil
+	after, err := workflowRoots(context.Background(), tx)
+	if err != nil {
+		return err
+	}
+	return resolveFolderProjects(context.Background(), tx, changedRoots(before, after))
 }
 
 // insertTL1Rows inserts rows sharing one column set, preparing the statement

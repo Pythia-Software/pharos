@@ -118,6 +118,65 @@ func TestProjectsFolderBecomesRepository(t *testing.T) {
 	}
 }
 
+// TL1 runs its agents in its installation's transcripts folder, outside any
+// checkout. Those sessions join the project of the installation's tasks, else
+// of the checkout at its code repository, whether TL1 is indexed before or
+// after them, and leave it when the installation names another folder.
+func TestProjectsWorkflowFolderJoinsItsRepository(t *testing.T) {
+	library := mixedLibrary(t)
+	transcripts := filepath.Join(filepath.Dir(library.folders["notes"]), ".tl1", "installations", "i1", "transcripts")
+	early := filepath.Join(transcripts, "task-1", ".attempt-1-ipc")
+	writeClaudeSession(t, library.claude, "s-tl1-early", claudeSession("s-tl1-early", early, "", "Review the candidate", 30))
+	library.ingestClaude(t)
+	if project := library.projects(t)["s-tl1-early"]; project["project_kind"] != "folder" {
+		t.Fatalf("before TL1 is indexed: %#v", project)
+	}
+	store := func(repository, folder string, tasks ...map[string]any) {
+		t.Helper()
+		snapshot := tl1Snapshot{Account: "local", Tasks: tasks, Installation: tl1Installation{ID: "i1", Database: filepath.Join(transcripts, "..", "tl1.db"), Repository: repository, Transcripts: folder, Project: "app"}}
+		if err := library.catalog.storeTL1Snapshots(t.Context(), []tl1Snapshot{snapshot}, "", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store(library.folders["app"], transcripts)
+	app := library.projects(t)["s-app"]
+	if project := library.projects(t)["s-tl1-early"]; project["project_id"] != app["project_id"] || project["repository_name"] != nil {
+		t.Fatalf("indexing TL1 moves its earlier sessions: %#v", project)
+	}
+	writeClaudeSession(t, library.claude, "s-tl1-late", claudeSession("s-tl1-late", filepath.Join(transcripts, "task-2", ".attempt-1-ipc"), "", "Judge it", 31))
+	library.ingestClaude(t)
+	if project := library.projects(t)["s-tl1-late"]; project["project_id"] != app["project_id"] {
+		t.Fatalf("a later session: %#v", project)
+	}
+	listed, err := library.catalog.listProjects(map[string]any{"path": early})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if items, _ := listed["items"].([]map[string]any); len(items) != 1 || items[0]["project"] != "app" {
+		t.Fatalf("list_projects by path: %#v", listed)
+	}
+	// An installation whose code repository is no known checkout names no
+	// project, and moving it elsewhere leaves its old folder.
+	store(filepath.Join(library.folders["notes"], "missing"), transcripts)
+	if project := library.projects(t)["s-tl1-early"]; project["project_kind"] != "folder" {
+		t.Fatalf("unknown code repository: %#v", project)
+	}
+	// The tasks' repository decides, since several clones may claim the
+	// code repository's folder.
+	var gone string
+	if err := library.catalog.DB.QueryRow(`SELECT id FROM workspaces WHERE source_id='s-gone'`).Scan(&gone); err != nil {
+		t.Fatal(err)
+	}
+	store(library.folders["app"], transcripts, map[string]any{"installation_id": "i1", "task_id": "task-1", "workspace_id": gone})
+	if project, want := library.projects(t)["s-tl1-early"], library.projects(t)["s-gone"]; project["project_id"] != want["project_id"] {
+		t.Fatalf("the tasks' repository: %#v, want %#v", project, want)
+	}
+	store(library.folders["app"], filepath.Join(transcripts, "elsewhere"))
+	if project := library.projects(t)["s-tl1-late"]; project["project_kind"] != "folder" {
+		t.Fatalf("moved transcripts folder: %#v", project)
+	}
+}
+
 // An older catalog fills the project columns in once, when it is opened.
 func TestProjectsBackfillOnOpen(t *testing.T) {
 	library := noGitLibrary(t)
