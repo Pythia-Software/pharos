@@ -33,7 +33,7 @@ type usageConversationAttribution struct {
 // session's execution, parent and depth. Identity, parentage, continuations,
 // launch outcomes and copied launches are decided once by the resolver; the
 // only scope decision here is which retained copy of a mirrored transcript
-// represents it (ledger lists the retained workspaces). Unresolved ancestry
+// represents it (ledger lists the retained conversations). Unresolved ancestry
 // stays unresolved rather than inventing a root.
 func (c *Catalog) usageConversationRoots(ctx context.Context, ledger []map[string]any) (*usageConversationAttribution, error) {
 	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -109,9 +109,10 @@ func usageConversationRootsOf(ctx context.Context, q queryer, r *executionResolu
 }
 
 func usageAttributionFrom(r *executionResolution, conversations, sessions, ledger []map[string]any) *usageConversationAttribution {
-	kept := map[string]bool{}
+	kept, keptWorkspaces := map[string]bool{}, map[string]bool{}
 	for _, row := range ledger {
-		kept[firstString(row["workspace_id"])] = true
+		kept[firstString(row["conversation_id"])] = true
+		keptWorkspaces[firstString(row["workspace_id"])] = true
 	}
 	byID := map[string]map[string]any{}
 	for _, row := range conversations {
@@ -120,8 +121,9 @@ func usageAttributionFrom(r *executionResolution, conversations, sessions, ledge
 	result := &usageConversationAttribution{roots: map[string]map[string]any{}, canonical: map[string]string{}, runs: map[string]string{},
 		delegatedRuns: map[string]string{}, delegatedDepth: map[string]int64{}, delegatedParents: map[string]string{}, sessionRoles: map[string]string{},
 		unresolved: map[string]string{}, rootQuality: map[string]string{}, depthQuality: map[string]string{}, uncertain: map[string]bool{}, resolution: r}
-	// Mirrors the resolver joined into one execution: the copy in a retained
-	// workspace represents them in usage scope, then the smallest ID.
+	// Mirrors the resolver joined into one execution: prefer the conversation
+	// retained in the ledger, then its workspace, then the smallest ID. Both
+	// workspaces can contribute when one also holds native-only children.
 	group := map[string]string{}
 	var find func(string) string
 	find = func(id string) string {
@@ -132,7 +134,11 @@ func usageAttributionFrom(r *executionResolution, conversations, sessions, ledge
 		return id
 	}
 	better := func(a, b string) bool {
-		ka, kb := kept[firstString(byID[a]["workspace_id"])], kept[firstString(byID[b]["workspace_id"])]
+		ka, kb := kept[a], kept[b]
+		if ka != kb {
+			return ka
+		}
+		ka, kb = keptWorkspaces[firstString(byID[a]["workspace_id"])], keptWorkspaces[firstString(byID[b]["workspace_id"])]
 		if ka != kb {
 			return ka
 		}

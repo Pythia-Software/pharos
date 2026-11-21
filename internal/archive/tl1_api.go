@@ -136,7 +136,12 @@ func tl1TaskRowJSON(data *tl1Data, task *tl1Task) map[string]any {
 		row["conversation_native_id"] = nilIfEmpty(final.Conversation)
 		row["transcript_path"] = nilIfEmpty(tl1TranscriptPath(data, task, final))
 		row["log_tail"] = nilIfEmpty(tl1Clip(final.LogTail, 1200))
-		row["tokens"] = final.Tokens["total_tokens"]
+		// No recorded usage is unknown, not zero.
+		var tokens any
+		if total := final.Tokens["total_tokens"]; total > 0 {
+			tokens = total
+		}
+		row["tokens"] = tokens
 	}
 	return row
 }
@@ -158,7 +163,7 @@ func (c *Catalog) TL1Candidate(selection tl1Selection, candidateID string) (map[
 	}
 	tasks := []map[string]any{}
 	ids := map[string]bool{}
-	total := 0.0
+	total, priced, unpriced := 0.0, false, 0
 	for _, task := range data.Tasks {
 		if task.CandidateID != candidateID {
 			continue
@@ -167,6 +172,9 @@ func (c *Catalog) TL1Candidate(selection tl1Selection, candidateID string) (map[
 		row := tl1TaskRowJSON(data, task)
 		if cost, ok := row["cost_usd"].(float64); ok {
 			total += cost
+			priced = true
+		} else if task.ExecutionClass == "llm" && len(task.Attempts) > 0 {
+			unpriced++
 		}
 		tasks = append(tasks, row)
 	}
@@ -180,7 +188,7 @@ func (c *Catalog) TL1Candidate(selection tl1Selection, candidateID string) (map[
 		sort.SliceStable(kept, func(i, j int) bool { return firstString(kept[i]["created_at"]) < firstString(kept[j]["created_at"]) })
 		return kept
 	}
-	return map[string]any{"project": data.Project, "installations": data.Installations, "candidate": candidate, "cost_usd": total, "tasks": tasks,
+	return map[string]any{"project": data.Project, "installations": data.Installations, "candidate": candidate, "cost_usd": tl1Optional(total, priced), "unpriced_agent_tasks": unpriced, "tasks": tasks,
 		"events": pick(data.Events), "review_findings": pick(data.Findings), "human_touches": pick(data.Touches)}, nil
 }
 

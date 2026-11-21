@@ -150,6 +150,11 @@ func automaticProvider(kind string) bool {
 	return ok && spec.Automatic
 }
 
+func expiringProvider(kind string) bool {
+	spec, ok := registeredKind(kind)
+	return ok && spec.Expiring
+}
+
 func (s *Server) autoSources(settings syncSettings) []SourceConfig {
 	sources := []SourceConfig{}
 	for _, source := range s.Config().Sources {

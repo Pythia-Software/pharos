@@ -1,6 +1,250 @@
 {
-  "index_version": "tl1-analysis-v7-codex-item-ids",
+  "index_version": "tl1-analysis-v9-transcript-provider",
   "records": [
+    {
+      "SourceID": "install-1:task-agy",
+      "SourceKind": "tl1",
+      "Title": "Design the crib",
+      "Account": "local",
+      "Purpose": "",
+      "Outcome": "ready",
+      "ActivityAt": "2026-11-20T22:14:29.000Z",
+      "Location": "$ROOT/002/repo",
+      "Repository": {
+        "display_name": "fixture",
+        "local_locations": [
+          "$ROOT/002/repo"
+        ]
+      },
+      "Metadata": {
+        "base_ref": "base",
+        "branch": "candidate/1",
+        "custody_version": null,
+        "flavor": "design",
+        "head_ref": "head",
+        "lifecycle": "terminal",
+        "status": "done",
+        "terminal": true,
+        "version": "v1"
+      },
+      "Conversations": [
+        {
+          "SessionBounds": {
+            "started_at": "2026-11-20T22:04:01.000Z",
+            "ended_at": "2026-11-20T22:14:29.000Z",
+            "source": "attempt-envelope"
+          },
+          "NativeID": "install-1:att-agy:1-agy.jsonl",
+          "Provider": "antigravity",
+          "Model": "gemini-4-neon",
+          "Effort": "medium",
+          "Account": "local",
+          "ParentNativeID": "",
+          "Origin": "$ROOT/002/transcripts/task-agy/1-agy.jsonl",
+          "Coverage": "partial",
+          "StartedAt": "2026-11-20T22:04:01.702Z",
+          "EndedAt": "2026-11-20T22:14:29.086Z",
+          "Harness": "antigravity-cli",
+          "Aliases": [
+            "9ef2ffd2-0000-4000-8000-000000000001"
+          ],
+          "Messages": [
+            {
+              "NativeID": "step-0",
+              "Role": "user",
+              "Kind": "message",
+              "Text": "Design the crib.",
+              "Model": "gemini-4-neon",
+              "Effort": "medium",
+              "CreatedAt": "2026-11-20T22:04:01.702Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-agy/1-agy.jsonl:2",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "step-1:usage",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"model_usage\":{\"cache_read_tokens\":1000,\"input_tokens\":100,\"output_tokens\":40,\"thinking_tokens\":10,\"total_tokens\":140},\"type\":\"token_usage\",\"usage\":{\"cache_read_input_tokens\":1000,\"input_tokens\":100,\"output_tokens\":40,\"reasoning_output_tokens\":10},\"usage_message_id\":\"9ef2ffd2-0000-4000-8000-000000000001:step-1\"}",
+              "Model": "gemini-4-neon",
+              "Effort": "medium",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-agy/1-agy.jsonl:3",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "step-2:call",
+              "Role": "assistant",
+              "Kind": "tool_call",
+              "Text": "{\"input\":{\"CommandLine\":\"make test\"},\"tool\":\"run_command\"}",
+              "Model": "gemini-4-neon",
+              "Effort": "medium",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "step-2",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-agy/1-agy.jsonl:4",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "step-2:result",
+              "Role": "tool",
+              "Kind": "tool_result",
+              "Text": "{\"content\":\"3 lines, 120 bytes\",\"is_error\":false,\"tool\":\"run_command\"}",
+              "Model": "gemini-4-neon",
+              "Effort": "medium",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "step-2",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-agy/1-agy.jsonl:5",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "step-3:call",
+              "Role": "assistant",
+              "Kind": "tool_call",
+              "Text": "{\"input\":{\"Path\":\"/repo/missing.go\"},\"tool\":\"read_file\"}",
+              "Model": "gemini-4-neon",
+              "Effort": "medium",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "step-3",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-agy/1-agy.jsonl:6",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "step-3:result",
+              "Role": "tool",
+              "Kind": "tool_result",
+              "Text": "{\"content\":\"file does not exist\",\"details\":{\"error\":\"file does not exist\"},\"is_error\":true,\"tool\":\"read_file\"}",
+              "Model": "gemini-4-neon",
+              "Effort": "medium",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "step-3",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-agy/1-agy.jsonl:6",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "step-4",
+              "Role": "assistant",
+              "Kind": "message",
+              "Text": "All done.",
+              "Model": "gemini-4-neon",
+              "Effort": "medium",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-agy/1-agy.jsonl:7",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "step-4:usage",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"model_usage\":{\"cache_read_tokens\":2000,\"input_tokens\":50,\"output_tokens\":20,\"thinking_tokens\":5,\"total_tokens\":70},\"type\":\"token_usage\",\"usage\":{\"cache_read_input_tokens\":2000,\"input_tokens\":50,\"output_tokens\":20,\"reasoning_output_tokens\":5},\"usage_message_id\":\"9ef2ffd2-0000-4000-8000-000000000001:step-4\"}",
+              "Model": "gemini-4-neon",
+              "Effort": "medium",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-agy/1-agy.jsonl:8",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "step-5",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"conversation_id\":\"9ef2ffd2-0000-4000-8000-000000000001\",\"state\":\"DONE\",\"step_index\":5,\"step_type\":\"system_message\"}",
+              "Model": "gemini-4-neon",
+              "Effort": "medium",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-agy/1-agy.jsonl:9",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "result:usage",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"model_usage\":{\"cache_read_tokens\":3000,\"input_tokens\":200,\"output_tokens\":60,\"thinking_tokens\":15,\"total_tokens\":260},\"type\":\"token_usage\",\"usage\":{\"cache_read_input_tokens\":0,\"input_tokens\":50,\"output_tokens\":0,\"reasoning_output_tokens\":0},\"usage_message_id\":\"9ef2ffd2-0000-4000-8000-000000000001:result\"}",
+              "Model": "gemini-4-neon",
+              "Effort": "medium",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-agy/1-agy.jsonl:10",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            }
+          ]
+        }
+      ],
+      "WorkItems": [
+        {
+          "explicit": true,
+          "source_id": "task-agy",
+          "status": "done",
+          "title": "Design the crib"
+        }
+      ],
+      "Attempts": [
+        {
+          "attempt_no": 1,
+          "configuration": {
+            "agent_configuration": "agy-gemini-4-neon-medium-medium",
+            "effort": "medium",
+            "executor": "agy",
+            "harness_id": "agy",
+            "model": "gemini-4-neon-medium"
+          },
+          "ended_at": "2026-11-20T22:14:29.000Z",
+          "failure": null,
+          "instructions": "",
+          "result": null,
+          "source_id": "att-agy",
+          "source_ref": "wt-2",
+          "started_at": "2026-11-20T22:04:01.000Z",
+          "validation": "succeeded"
+        }
+      ],
+      "Handoffs": [],
+      "Metrics": [],
+      "Changes": null,
+      "PRs": []
+    },
     {
       "SourceID": "install-1:task-claude",
       "SourceKind": "tl1",

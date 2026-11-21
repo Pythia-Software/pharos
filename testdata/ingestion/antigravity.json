@@ -1,5 +1,5 @@
 {
-  "index_version": "antigravity-v3-effort",
+  "index_version": "antigravity-v4-thinking",
   "records": [
     {
       "SourceID": "aaaaaaaa-0000-4000-8000-000000000001",
@@ -94,6 +94,23 @@
               "RawText": "",
               "SourceOrder": 0,
               "Selected": true
+            },
+            {
+              "NativeID": "step-1:thinking",
+              "Role": "assistant",
+              "Kind": "reasoning",
+              "Text": "private reasoning",
+              "Model": "gemini-3.8-flash",
+              "Effort": "high",
+              "CreatedAt": "2026-09-28T14:03:00.000Z",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/antigravity-cli/brain/aaaaaaaa-0000-4000-8000-000000000001/.system_generated/logs/transcript_full.jsonl:2",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true,
+              "ReasoningFormat": "summary"
             },
             {
               "NativeID": "step-1",

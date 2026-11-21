@@ -417,7 +417,7 @@ func (p *capturePlan) tl1(source SourceConfig) error {
 				transcripts[installation.Transcripts] = rel
 				if info, err := os.Stat(installation.Transcripts); err == nil && info.IsDir() {
 					p.files = append(p.files, p.walk(installation.Transcripts, info, rel, func(file string) bool {
-						return tl1CapturedFile(filepath.Base(file))
+						return tl1ReadsTranscriptFile(filepath.Base(file))
 					})...)
 				}
 				p.pathMap = append(p.pathMap, capturePathMapping{Original: installation.Transcripts, Captured: path.Join(captureFilesDir, rel)})

@@ -898,6 +898,8 @@ func conformanceTL1(t *testing.T) SourceConfig {
 		"INSERT INTO task_attempts VALUES ('att-claude','task-claude',1,'wt-1','claude','claude-opus-4-5','high','claude-opus','claude','succeeded',NULL,'2026-09-20 10:30:05','2026-09-20 10:40:00')",
 		"INSERT INTO transcript_summaries VALUES ('att-claude','1-claude.jsonl',0.12,'claude-opus-4-5'),('att-claude','1-codex.jsonl',NULL,'gpt-5-codex')")
 	db.Close()
+	// An agy run, whose prompt is in the inputs file beside its stream.
+	tl1AGYFixture(t, root)
 	main, _ := conformanceClaudeLines()
 	_, agent := conformanceCodexLines()
 	writeSourceFile(t, filepath.Join(root, "transcripts", "task-claude", "1-claude.jsonl"), strings.Join(main, "\n")+"\n")

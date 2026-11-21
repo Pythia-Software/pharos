@@ -41,7 +41,7 @@ func TestQueryPlansUseIndexes(t *testing.T) {
 		{name: "native alias lookup", query: nativeAliasMatchQuery, args: []any{"local", "session", "wrapper"}, want: []string{"conversations_native_alias_idx"}, avoid: []string{"SCAN conversations"}},
 		{name: "conversation children", query: childConversationQuery, args: []any{"x"}, want: []string{"COVERING INDEX conversations_parent_idx"}},
 		{name: "usage summary authorship", query: usageSummaryAuthorshipSQL, want: []string{"COVERING INDEX message_authorship_summary_idx"}},
-		{name: "usage summary ledger", query: usageSummaryLedgerSQL, want: []string{"COVERING INDEX agent_sessions_summary_idx", "COVERING INDEX workspaces_library_idx"}},
+		{name: "usage summary ledger", query: usageSummaryLedgerSQL, want: []string{"COVERING INDEX agent_sessions_usage_idx", "COVERING INDEX workspaces_library_idx"}},
 	}
 	for _, column := range libraryColumns {
 		if column.name == "model_efforts" {
