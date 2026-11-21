@@ -170,6 +170,8 @@ var operationKinds = []operationKind{
 		OnEject: "Stops; it carries on later.", Latency: "record", Journal: journalNever, Priority: priorityBackground},
 	{Kind: "maintenance.session-shape", Class: workClassPopulation, Label: "Measure session shape", Verb: "Measuring session shape", Holds: "D:w W:w", Affects: "—",
 		OnEject: "Stops; it carries on later.", Latency: "record", Journal: journalNever, Priority: priorityBackground},
+	{Kind: "maintenance.delegation-summaries", Class: workClassPopulation, Label: "Save agent session summaries", Verb: "Saving agent session summaries", Holds: "D:w W:w", Affects: "—",
+		OnEject: "Stops; it carries on later.", Latency: "record", Journal: journalNever, Priority: priorityBackground},
 	{Kind: "maintenance.cache-warm", Class: workClassMaintenance, Label: "Warm page caches", Verb: "Warming page caches", Holds: "D:r", Affects: "—",
 		OnEject: "Stops.", Latency: "record", Journal: journalNever, Priority: priorityBackground, Hidden: true},
 	{Kind: "maintenance.search.substring", Class: workClassMaintenance, Label: "Build substring search", Verb: "Building substring search", Holds: "D:w W:w", Affects: "search.substring",

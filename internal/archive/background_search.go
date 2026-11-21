@@ -96,6 +96,7 @@ func (c *Catalog) backgroundSearchView(ctx context.Context) error {
 		{"maintenance.previews", countBatch(func(ctx context.Context) (int, error) { return c.refreshPreviews(ctx, 25) })},
 		{"maintenance.parallelism", countBatch(func(ctx context.Context) (int, error) { return c.refreshParallelism(ctx, parallelismBatch, false) })},
 		{"maintenance.session-shape", countBatch(func(ctx context.Context) (int, error) { return c.refreshSessionShape(ctx, sessionShapeBatch, false) })},
+		{kindDelegationSummaries, countBatch(func(ctx context.Context) (int, error) { return c.refreshDelegationSummaries(ctx, 64) })},
 	})
 }
 

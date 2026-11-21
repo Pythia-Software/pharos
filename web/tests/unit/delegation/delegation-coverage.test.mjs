@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { parentNote, coverageSummary, sumMetric, qualityMark, occurrenceNote, omittedSegmentsNote, sessionCountText, timelineEventsPending, timelineEventsPendingNote } = await import("../../../src/delegation-coverage");
+const { parentNote, coverageSummary, sumMetric, qualityMark, occurrenceNote, omittedSegmentsNote, savedSummaryNote, savedSummaryTitle, sessionCountText, timelineEventsPending, timelineEventsPendingNote } = await import("../../../src/delegation-coverage");
 const { readerSelection, unresolvedAliases } = await import("../../../src/delegation-aliases");
 
 const row = (extra) => ({ id: "s", start: 0, end: 1, ...extra });
@@ -23,6 +23,19 @@ test("coverage counts what the snapshot could not establish and explains missing
   assert.match(summary.counts, /^2 sessions have unresolved parents · 1 parent link is not verified · 1 session has activity in another workspace/);
   assert.equal(summary.notes.length, 2);
   assert.match(summary.notes[1], /future-capability/, "an unfamiliar capability is still reported");
+  // Rows shown from summaries saved elsewhere are counted apart from unread ones.
+  assert.match(coverageSummary({ saved: 3 }).counts, /^3 sessions are shown from summaries saved in their own workspaces$/);
+});
+
+test("a row shown from a saved summary says where it was read and whether it is being updated", () => {
+  assert.equal(savedSummaryNote(undefined), "");
+  assert.equal(savedSummaryTitle(undefined), "");
+  const saved = { workspaces: ["w"], updated_at: "2026-11-19T10:00:00Z" };
+  assert.equal(savedSummaryNote(saved), "Summary from its own workspace");
+  assert.match(savedSummaryNote({ ...saved, pending: true }), /updating$/);
+  const title = savedSummaryTitle(saved, () => "10:00");
+  assert.match(title, /^Read in the workspace that holds its transcript, saved 10:00\. This workspace's totals leave it out\.$/);
+  assert.match(savedSummaryTitle({ workspaces: ["a", "b"], updated_at: "not a time", pending: true }), /^Read in the 2 workspaces that hold its transcripts\. .*being updated\.$/);
 });
 
 test("a sum over sessions stays partial or unknown rather than counting unknown usage as zero", () => {

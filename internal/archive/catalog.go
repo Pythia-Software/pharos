@@ -63,6 +63,7 @@ type Catalog struct {
 	gitMainTips               map[string]integrationTipEntry
 	parallelismMu             sync.Mutex // serializes storing parallelism activity
 	sessionShapeMu            sync.Mutex // serializes storing session shape facts
+	delegationSummariesMu     sync.Mutex // serializes storing delegation summaries
 	// authorship tracks the human-authorship rebuild.
 	authorship authorshipState
 	// findings tracks the findings pass (see findings.go).
@@ -469,6 +470,10 @@ func (c *Catalog) Initialize() error {
 				return err
 			}
 		}
+	}
+	// Summary triggers read the tool identity and wait columns migrated above.
+	if err := c.ensureDelegationSummaries(); err != nil {
+		return fmt.Errorf("initialize delegation summaries: %w", err)
 	}
 	// Conductor stored its extractor as its conversations' coverage before
 	// they had an extractor of their own.

@@ -52,6 +52,8 @@ var queryCacheTables = []string{
 	// individual fact/membership writes are internal to that atomic refresh.
 	"message_label_facts_dirty",
 	"session_shape_facts", "session_shape_dirty",
+	// Rows a workspace's delegation snapshot shows from where they were read.
+	"delegation_summaries", "delegation_summary_dirty",
 	// What each conversation holds beside its words, which searches filter by.
 	"conversation_content",
 	// The Library counts compactions here. A message's boundary is written
@@ -72,11 +74,12 @@ var queryCacheDomains = map[string]string{
 	// triggers (executionDependentsStampTriggers) advance the generation.
 	"agent_events_conversations": "events",
 	"session_shape_facts":        "sessions", "session_shape_dirty": "sessions",
+	"delegation_summaries": "delegation", "delegation_summary_dirty": "delegation",
 }
 
 // cacheGenerations are the cached-view generation and, of its advances, how
 // many were writes to a domain's tables alone.
-type cacheGenerations struct{ all, labels, events, sessions int64 }
+type cacheGenerations struct{ all, labels, events, sessions, delegation int64 }
 
 // A view's generation counts the advances that can change it. The whole
 // source generation includes label and event writes. Session statistics
@@ -93,16 +96,18 @@ const (
 	generationMCPCalls = "mcp_calls"
 )
 
+// Saved delegation summaries are read by delegation snapshots alone
+// (generationEvents).
 func (g cacheGenerations) of(scope string) int64 {
 	switch scope {
 	case generationCore:
-		return g.all - g.labels - g.events - g.sessions
+		return g.all - g.labels - g.events - g.sessions - g.delegation
 	case generationSessionShape:
-		return g.all - g.labels - g.events
+		return g.all - g.labels - g.events - g.delegation
 	case generationEvents:
 		return g.all - g.labels - g.sessions
 	}
-	return g.all - g.sessions
+	return g.all - g.sessions - g.delegation
 }
 
 // cacheGenerationsSQL reads cacheGenerations in one statement, so the domain
@@ -111,7 +116,8 @@ func (g cacheGenerations) of(scope string) int64 {
 const cacheGenerationsSQL = `SELECT value,
  COALESCE((SELECT value FROM query_cache_domains WHERE name='labels'),0),
  COALESCE((SELECT value FROM query_cache_domains WHERE name='events'),0),
- COALESCE((SELECT value FROM query_cache_domains WHERE name='sessions'),0)
+ COALESCE((SELECT value FROM query_cache_domains WHERE name='sessions'),0),
+ COALESCE((SELECT value FROM query_cache_domains WHERE name='delegation'),0)
  FROM query_cache_generation WHERE id=1`
 
 type rowQueryer interface {
@@ -120,7 +126,7 @@ type rowQueryer interface {
 
 func readCacheGenerations(ctx context.Context, q rowQueryer) (cacheGenerations, error) {
 	var g cacheGenerations
-	err := q.QueryRowContext(ctx, cacheGenerationsSQL).Scan(&g.all, &g.labels, &g.events, &g.sessions)
+	err := q.QueryRowContext(ctx, cacheGenerationsSQL).Scan(&g.all, &g.labels, &g.events, &g.sessions, &g.delegation)
 	if err != nil && strings.Contains(err.Error(), "no such table: query_cache_domains") {
 		g = cacheGenerations{}
 		err = q.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&g.all)
@@ -170,7 +176,7 @@ func (c *Catalog) ensureQueryCacheGeneration() error {
  INSERT INTO query_cache_generation(id,value) SELECT 1,1
  WHERE NOT EXISTS(SELECT 1 FROM query_cache_generation WHERE id=1);
  CREATE TABLE IF NOT EXISTS query_cache_domains (name TEXT PRIMARY KEY, value INTEGER NOT NULL) WITHOUT ROWID;
- INSERT OR IGNORE INTO query_cache_domains(name,value) VALUES('labels',0),('events',0),('sessions',0)`); err != nil {
+ INSERT OR IGNORE INTO query_cache_domains(name,value) VALUES('labels',0),('events',0),('sessions',0),('delegation',0)`); err != nil {
 		return err
 	}
 	old, err := queryMaps(tx, `SELECT name FROM sqlite_schema WHERE type='trigger' AND name GLOB 'query_cache_*'`)

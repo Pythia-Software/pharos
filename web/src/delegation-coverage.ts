@@ -29,7 +29,34 @@ export type ExecutionCoverage = {
   conflicts?: number;
   /** Sessions with activity in another workspace that this view did not read. */
   unqueried?: number;
+  /** Sessions shown from the summary saved in the workspace that holds them. */
+  saved?: number;
 };
+
+/** Where a row's metrics were read, when not in this workspace. */
+export type SavedSummary = {
+  /** The workspaces whose saved summaries the row shows. */
+  workspaces: string[];
+  /** When the oldest of them was saved (RFC 3339). */
+  updated_at: string;
+  /** Its transcript changed since: the summary is being updated. */
+  pending?: boolean;
+};
+
+/** A row's short metadata note for a saved summary. */
+export function savedSummaryNote(saved: SavedSummary | undefined): string {
+  if (!saved) return "";
+  return saved.pending ? "Summary from its own workspace · updating" : "Summary from its own workspace";
+}
+
+/** The explanation a saved summary's metrics carry. */
+export function savedSummaryTitle(saved: SavedSummary | undefined, localTime: (ms: number) => string = ms => new Date(ms).toLocaleString()): string {
+  if (!saved) return "";
+  const at = Date.parse(saved.updated_at);
+  const when = Number.isFinite(at) ? `, saved ${localTime(at)}` : "";
+  const where = saved.workspaces.length > 1 ? `the ${saved.workspaces.length.toLocaleString()} workspaces that hold its transcripts` : "the workspace that holds its transcript";
+  return `Read in ${where}${when}. This workspace's totals leave it out.${saved.pending ? " Its transcript changed since; the summary is being updated." : ""}`;
+}
 
 const capabilityNotes: Record<string, string> = {
   "typed-execution-evidence": "Parts of this library were indexed before Pharos recorded which session started which, so some parent links and copied history cannot be verified.",
@@ -45,6 +72,7 @@ export function coverageSummary(coverage: ExecutionCoverage | undefined): { coun
     c.unverified_parents ? plural(c.unverified_parents, "parent link is not verified", "parent links are not verified") : "",
     c.conflicts ? plural(c.conflicts, "session's identity is unresolved", "sessions' identities are unresolved") : "",
     c.unqueried ? plural(c.unqueried, "session has activity in another workspace that is not counted here", "sessions have activity in another workspace that is not counted here") : "",
+    c.saved ? plural(c.saved, "session is shown from the summary saved in its own workspace", "sessions are shown from summaries saved in their own workspaces") : "",
   ].filter(Boolean).join(" · ");
   const notes = (c.missing ?? []).map(id => capabilityNotes[id] ?? `Some execution evidence is unavailable (${id}).`);
   return { counts, notes };

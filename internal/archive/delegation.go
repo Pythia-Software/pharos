@@ -15,6 +15,7 @@ import (
 	"maps"
 	"math"
 	"net/http"
+	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -162,6 +163,15 @@ type delegationNode struct {
 	readFiles    map[string]bool
 	readCalls    int
 	readKnown    int
+	// read is what this workspace read of an execution with streams
+	// elsewhere, before it was marked partial here: its saved summary.
+	read map[string]delegationMetric
+	// Saved: the row shows summaries saved by the workspaces that hold its
+	// transcripts. own is what was read here, which workspace totals count;
+	// savedTools and savedWaits are the summaries' tool and wait spans.
+	Saved                  *delegationSavedRef `json:"saved_summary,omitempty"`
+	own                    *delegationNode
+	savedTools, savedWaits []delegationSpan
 }
 type delegationAncestry struct {
 	State string `json:"state"` // root, resolved, ambiguous, missing, cycle or conflict
@@ -235,6 +245,9 @@ type delegationCoverage struct {
 	UnverifiedParents int      `json:"unverified_parents"`
 	Conflicts         int      `json:"conflicts"`
 	Unqueried         int      `json:"unqueried"`
+	// Saved counts rows with activity in another workspace shown from the
+	// summary saved there (delegation_summaries.go), not read here.
+	Saved int `json:"saved"`
 }
 
 func delegationTime(value any) *float64 {
@@ -346,6 +359,13 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 }
 
 func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace string, relatives []string) (*delegationSnapshot, error) {
+	return c.readDelegationSnapshotRead(ctx, workspace, relatives, true)
+}
+
+// readDelegationSnapshotRead reads the workspace's snapshot. fill: rows read
+// elsewhere show their saved summaries; without it, the snapshot is only
+// what this workspace holds, which is what its own summaries save.
+func (c *Catalog) readDelegationSnapshotRead(ctx context.Context, workspace string, relatives []string, fill bool) (*delegationSnapshot, error) {
 	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -488,6 +508,9 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 	// Executions with streams in other workspaces: this snapshot reads only
 	// the local ones, so their metrics are partial or unknown, never complete.
 	unqueried := map[*delegationNode]bool{}
+	// Of those, the rows of which nothing was read here, and those of which
+	// something was.
+	unread, readHere := map[*delegationNode]bool{}, []*delegationNode{}
 	tokenFields := map[string]string{"tokens": "total_tokens", "input": "input_tokens", "uncached": "uncached_input_tokens", "cacheRead": "cache_read_input_tokens", "cacheWrite": "cache_creation_input_tokens", "output": "output_tokens", "reasoning": "reasoning_output_tokens"}
 	for _, nid := range order {
 		rows := members[nid]
@@ -1361,17 +1384,14 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		n.Self["episodes"] = delegationNumber(float64(len(n.episodes)), "inferred", len(n.episodes), len(n.episodes))
 		if unqueried[n] {
 			if n.Self["tokens"].Value == nil && len(n.tools) == 0 && *n.Self["messages"].Value == 0 && *n.Self["requests"].Value == 0 {
-				// Nothing of it was read here: unknown, not zero.
+				// Nothing of it was read here: unknown, not zero. A saved
+				// summary from where it was read may stand in (fillSaved).
 				for _, spec := range delegationMetrics {
 					n.Self[spec.ID] = delegationUnknown()
 				}
+				unread[n] = true
 			} else {
-				for key, m := range n.Self {
-					if m.Value != nil && m.Quality != "unknown" {
-						m.Quality = "partial"
-						n.Self[key] = m
-					}
-				}
+				readHere = append(readHere, n)
 			}
 		}
 		n.ChildCount = len(n.children)
@@ -1391,6 +1411,18 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		}
 		n.OccurrencePartial = slices.Sorted(maps.Keys(reasons[n]))[0]
 	}
+	// What was read here of an execution with streams elsewhere is part of
+	// it: partial. What this workspace read is kept as it was for its saved
+	// summary (delegation_summaries.go), which other workspaces show.
+	for _, n := range readHere {
+		n.read = maps.Clone(n.Self)
+		for key, m := range n.Self {
+			if m.Value != nil && m.Quality != "unknown" && key != "children" && key != "leaves" {
+				m.Quality = "partial"
+				n.Self[key] = m
+			}
+		}
+	}
 	for _, n := range s.Nodes {
 		for _, cid := range delegationNodeTranscripts(n) {
 			if eventsWithheld[cid] || eventsPending[cid] {
@@ -1403,6 +1435,20 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 				n.EventsPending = true
 				break
 			}
+		}
+	}
+	if fill {
+		// Rows this workspace could not read (executions archived elsewhere,
+		// and the family's context) show what the workspaces holding their
+		// transcripts read, from the summaries maintenance saved there.
+		blank := []*delegationNode{}
+		for _, n := range s.Nodes {
+			if unread[n] || n.ContextOnly {
+				blank = append(blank, n)
+			}
+		}
+		if err := s.fillSaved(ctx, tx, workspace, blank); err != nil {
+			return nil, err
 		}
 	}
 	dependencies := slices.Clone(cids)
@@ -1428,7 +1474,10 @@ func (c *Catalog) readDelegationSnapshotWith(ctx context.Context, workspace stri
 		case n.ParentCertainty == evidenceLegacy.String():
 			s.Coverage.UnverifiedParents++
 		}
-		if unqueried[n] {
+		switch {
+		case n.Saved != nil && !n.ContextOnly:
+			s.Coverage.Saved++
+		case unqueried[n]:
 			s.Coverage.Unqueried++
 		}
 	}
@@ -1485,6 +1534,9 @@ func (s *delegationSnapshot) finish() {
 	walk(s.Roots, 0)
 	s.Nodes = ordered
 	s.Totals = delegationWorkspaceTotals(s.Nodes)
+	if slices.ContainsFunc(s.Nodes, func(n *delegationNode) bool { return n.Saved != nil && !n.ContextOnly }) {
+		s.GroupTotals = delegationGroupTotals(s.Nodes)
+	}
 	s.Maxima = map[string]map[string]float64{"self": {}, "all": {}}
 	s.Density = make([]int, 120)
 	for _, n := range s.Nodes {
@@ -1510,6 +1562,9 @@ func (s *delegationSnapshot) finish() {
 	hashInput := []any{s.Revision.Resolver, s.dependencies, s.Nodes, s.Aliases}
 	for _, n := range s.Nodes {
 		hashInput = append(hashInput, n.tools, n.requests)
+		if n.Saved != nil {
+			hashInput = append(hashInput, n.Saved.revisions)
+		}
 	}
 	payload, _ := json.Marshal(hashInput)
 	hash := sha256.Sum256(payload)
@@ -1607,13 +1662,29 @@ func delegationDescendants(n *delegationNode) []*delegationNode {
 	return out
 }
 
+// delegationWorkspaceTotals is the rows' own totals: what the workspace read.
 // Incoming ancestors explain ownership but are not executions accounted in
-// this workspace. Outside descendants retain their existing partial coverage.
+// this workspace. Outside descendants retain their existing partial coverage,
+// and a row shown from summaries saved elsewhere counts only what was read
+// here, so no workspace's total counts another's work.
 func delegationWorkspaceTotals(nodes []*delegationNode) map[string]delegationMetric {
+	return delegationTotals(nodes, false)
+}
+
+// delegationGroupTotals also counts the summaries rows show from other
+// workspaces: everything shown.
+func delegationGroupTotals(nodes []*delegationNode) map[string]delegationMetric {
+	return delegationTotals(nodes, true)
+}
+
+func delegationTotals(nodes []*delegationNode, saved bool) map[string]delegationMetric {
 	included := []*delegationNode{}
 	ids := map[string]bool{}
 	for _, n := range nodes {
 		if !n.ContextOnly {
+			if n.own != nil && !saved {
+				n = n.own
+			}
 			included = append(included, n)
 			ids[n.ID] = true
 		}
@@ -1702,6 +1773,7 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 						spans = append(spans, delegationSpan{*t.Start, *t.End})
 					}
 				}
+				spans = append(spans, n.savedTools...)
 			}
 			value = delegationUnion(spans)
 		case "backgroundTime":
@@ -1709,6 +1781,7 @@ func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 			for _, n := range nodes {
 				waits, _, _ := delegationWaitSpans(n.tools)
 				spans = append(spans, waits...)
+				spans = append(spans, n.savedWaits...)
 			}
 			value = delegationUnion(spans)
 		case "children":
@@ -2132,20 +2205,38 @@ func (s *Server) writeDelegationTimeline(w http.ResponseWriter, r *http.Request,
 	}
 	width := min(1600, max(100, queryInt(r, "width", 900)))
 	bucket := (end - start) / float64(width/4)
+	// Rows shown from summaries saved elsewhere draw the activity saved
+	// with them. Without it a lane is only empty, so a failed read is not
+	// the whole Timeline's error.
+	saved, err := s.Catalog.savedActivity(r.Context(), snapshot, ids)
+	if errors.Is(err, errDelegationSnapshotChanged) {
+		writeJSON(w, map[string]any{"error": "The library changed. Reload this view.", "code": "snapshot_changed"}, 409)
+		return
+	}
+	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		fmt.Fprintf(os.Stderr, "Delegation timeline: saved activity: %v\n", err)
+	}
 	for _, id := range ids {
 		n := snapshot.ByID[id]
 		if n == nil {
 			continue
 		}
+		tools, requests := n.tools, n.requests
+		if a, ok := saved[id]; ok {
+			tools, requests = a.Tools, a.Requests
+		}
 		groups := map[string]*delegationMark{}
 		marks := []delegationMark{}
 		knots := []float64{}
-		for _, at := range n.requests {
+		for _, at := range requests {
 			if at >= start-90000 && at <= end+90000 {
 				knots = append(knots, at)
 			}
 		}
-		for _, t := range n.tools {
+		for _, t := range tools {
 			if t.Start == nil {
 				continue
 			}
