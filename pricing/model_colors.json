@@ -62,7 +62,8 @@
     "google": [
       "Flash",
       "Gemini",
-      "Nano Banana"
+      "Nano Banana",
+      "Genie"
     ],
     "openai": [
       "Luna",
@@ -234,7 +235,7 @@
     "gemini-nano-banana-2.1": {
       "provider": "google",
       "class": "Nano Banana",
-      "color": "#a471fd"
+      "color": "#f05f0d"
     },
     "gpt-5.3-codex": {
       "provider": "openai",
@@ -370,6 +371,11 @@
       "provider": "google",
       "class": "Gemini",
       "color": "#7686fd"
+    },
+    "genie-4": {
+      "provider": "google",
+      "class": "Genie",
+      "color": "#8d9f0e"
     }
   },
   "sources": {

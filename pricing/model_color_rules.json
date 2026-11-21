@@ -32,7 +32,8 @@
       "classes": {
         "Flash": {},
         "Gemini": {},
-        "Nano Banana": {}
+        "Nano Banana": {},
+        "Genie": {"match": "^genie(?:-|$)"}
       }
     },
     "openai": {
