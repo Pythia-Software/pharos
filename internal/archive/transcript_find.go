@@ -199,10 +199,17 @@ func (event transcriptEvent) displayText() string {
 	if text := commonEventText(value); text != "" {
 		return text
 	}
-	if ok {
+	if ok && (event.kind != "message" || isEnvelope(value)) {
 		return eventDescription(value)
 	}
 	return event.text
+}
+
+// isEnvelope mirrors the reader's isEnvelope: a message whose body is JSON
+// with no type or kind is the agent's own words, shown as written.
+func isEnvelope(value any) bool {
+	object := jsonObject(value)
+	return object != nil && (truthy(object["type"]) || truthy(object["kind"]))
 }
 
 // findableText mirrors the reader's findableText: a message's prose, or the

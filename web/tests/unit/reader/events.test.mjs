@@ -476,3 +476,14 @@ test('ChatGPT saved conversation settings preserve unknowns and keep the origina
   assert.deepEqual(plain(context.facts),[['Recorded model label','bidi'],['Saved voice','saved-voice'],['Memory scope','global_enabled'],['Archived','No'],['Starred','Yes'],['Sharing record','Included in export']]);
   assert.equal(reader.chatGPTConversationContext({provider:'claude',messages:[]}),null);
 });
+
+test("a reply that is bare JSON shows as written, while event envelopes keep their description", () => {
+  const reply = text => event("reply", "message", text, 5);
+  const structured = JSON.stringify({ score: 3.5, reason: "A tan sectional with a chaise" });
+  assert.equal(reader.displayText(reply(structured)), structured);
+  assert.equal(reader.displayText(reply("[1, 2]")), "[1, 2]");
+  assert.equal(reader.messageSummary(reply(structured)), structured);
+  assert.equal(reader.displayText(reply({ text: "wrapped prose" })), "wrapped prose");
+  assert.equal(reader.displayText(reply({ type: "future_reply", status: "paused", secret: "envelope-field" })), "future_reply · paused");
+  assert.equal(reader.displayText(event("meta", "metadata", { score: 1 }, 5)), "Recorded event");
+});
