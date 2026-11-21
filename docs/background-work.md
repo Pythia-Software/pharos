@@ -373,6 +373,7 @@ operation.
 | `maintenance.conversation-names` | Name conversations · Naming conversations | daemon pass | svc | D:w W:w | view | — | Stops between batches; unfinished names carry on later. | record | never | bg |
 | `maintenance.parallelism` | Measure parallel work · Measuring parallel work | daemon pass | svc | D:w W:w | — | — | Stops; it carries on later. | record | never | bg |
 | `maintenance.session-shape` | Measure session shape · Measuring session shape | daemon pass | svc | D:w W:w | — | — | Stops; it carries on later. | record | never | bg |
+| `maintenance.delegation-summaries` | Save agent session summaries · Saving agent session summaries | daemon pass | svc | D:w W:w | — | — | Stops; it carries on later. | record | never | bg |
 | `maintenance.cache-warm` | Warm page caches · Warming page caches | daemon pass | svc | D:r | — | — | Stops. | record | never | bg |
 | `maintenance.search.substring` | Build substring search · Building substring search | version, chained | svc | D:w W:w | search.substring | — | Stops between batches; it carries on when Pharos next opens the library. | batch | >30 s | bg |
 | `maintenance.search.tool-output` | Remove tool output from word search · Removing tool output from word search | version | svc | D:w W:w | search.words | — | Stops between batches; it carries on when Pharos next opens the library. | batch | >30 s | bg |

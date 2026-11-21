@@ -105,7 +105,7 @@ func (c *Catalog) delegationTimelineMessages(ctx context.Context, snapshot *dele
 	conversations := []string{}
 	for _, id := range ids {
 		if n := snapshot.ByID[id]; n != nil && !n.ContextOnly {
-			conversations = append(conversations, snapshot.projection.transcripts(snapshot.members[id])...)
+			conversations = append(conversations, snapshot.projection.transcripts(snapshot.laneMembers(n))...)
 			conversations = append(conversations, n.ConversationID)
 		}
 	}
@@ -145,10 +145,7 @@ func (c *Catalog) delegationTimelineMessages(ctx context.Context, snapshot *dele
 		}
 		// The lane is the execution's own streams. Messages without session
 		// membership belong to the execution whose own stream is their transcript.
-		members := snapshot.members[id]
-		if len(members) == 0 {
-			members = []string{id}
-		}
+		members := snapshot.laneMembers(n)
 		memberJSON, _ := json.Marshal(members)
 		transcripts, _ := json.Marshal(snapshot.projection.transcripts(members))
 		// Copied history is the reader's context, not this execution's own
@@ -221,6 +218,12 @@ m.created_at,m.source_order IS NULL,m.source_order,m.id LIMIT ? OFFSET ?`, start
 			}
 		}
 		rows := kept
+		// A launch whose transcript another workspace holds, with no summary
+		// saved there yet, reads none of it here: there is no copied history
+		// in the lane to warn about.
+		if n.ExternalChild != nil && n.Saved == nil && len(rows) == 0 && inherited == 0 && repeated == 0 {
+			unresolved, reasons = false, map[string]bool{}
+		}
 		// Truncated when more own messages remain than the cap, or when the
 		// scan budget ended before the window did (counts then cover only
 		// the rows read).

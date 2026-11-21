@@ -209,11 +209,15 @@ func mergeDelegationSnapshots(parts []*delegationSnapshot, workspaces []string, 
 		// context rows are other work's.
 		if !n.ContextOnly && s.projection.res != nil {
 			if x := s.projection.res.Executions[n.execution]; x != nil && s.projection.unqueried(x, readFor[n.ID]) {
-				s.Coverage.Unqueried++
+				if n.Saved != nil {
+					s.Coverage.Saved++
+				} else {
+					s.Coverage.Unqueried++
+				}
 			}
 		}
 	}
 	s.Totals = parts[0].Totals
-	s.GroupTotals = delegationWorkspaceTotals(s.Nodes)
+	s.GroupTotals = delegationGroupTotals(s.Nodes)
 	return s, nil
 }

@@ -189,8 +189,37 @@ Launch placeholders link
 to those references; children without an acknowledgement still appear beneath
 their recorded parent. External references retain the child's conversation and
 workspace identity, show an outgoing arrow, and open its actual transcript.
-Workspace totals stay scoped to that workspace; unqueried outside-child usage
-and event metrics remain unknown, making inclusive totals partial. Mirrored
+Workspace totals stay scoped to that workspace. A workspace reads only its own
+rows, so a child archived elsewhere would have nothing to show; instead its row
+shows the **saved summary** its own workspace's snapshot read
+(`internal/archive/delegation_summaries.go`): the same metrics, with copied
+history owned the same way, its time bounds, edited and read files, tool and
+wait spans, and, for its Timeline lane, its tool calls and request times. The
+lane also reads the child's messages where they are held. Family context rows
+(grandchildren launched from another workspace) show theirs too. The row's
+metadata says "Summary from its own workspace", with "updating" while a change
+to its transcript waits to be read again. Workspace totals leave saved values
+out; **API cost with related work** (`group_totals`) includes them. A child
+with no summary yet keeps unknown usage and event metrics, making inclusive
+totals partial.
+
+Maintenance (`maintenance.delegation-summaries`, Save agent session
+summaries) keeps the summaries. A sweep at each execution source generation
+lists the transcripts of executions with streams in more than one workspace
+(`delegation_summary_hosts`). Triggers mark a host transcript in
+`delegation_summary_dirty` when its messages, tool calls, requests (through
+session shape's marks), sessions, usage or agent events change. Tool timing
+and repository-path corrections and event freshness publication also mark
+summaries; replacing prices marks hosts in the repriced workspaces. Other
+conversations pay one indexed lookup. Moving or removing a host retires its
+old workspace's summaries and queues the remaining hosts there. A step reads up to four host
+workspaces' snapshots, without saved rows, and replaces their summaries; a
+change made meanwhile leaves the transcript dirty. Summary writes advance
+their own cache domain, which only delegation views read. Summaries preserve
+the branch's accounted tokens, cost and unallocated usage alongside its Self
+metrics. Their content revisions bind Timeline activity to the snapshot;
+replacing or removing a summary during a lane read returns `snapshot_changed`
+(HTTP 409). Mirrored
 workspaces are not merged by this workspace-local view. Extra causal edges do not create a second ownership total.
 Effort uses the execution's recorded value. A main stream can fall back to its
 conversation's effort; embedded children never inherit their parent's value.
@@ -233,7 +262,9 @@ parent is shown as not verified, never as confirmed ancestry. It also has
 another workspace, each with its workspace) and, for a launching row,
 `attempts`. `coverage` counts unresolved and unverified parents, identity
 conflicts, sessions whose other-workspace activity is not counted
-(`unqueried`; their metrics are partial), and missing evidence capabilities.
+(`unqueried`; their metrics are partial), sessions shown from a saved summary
+(`saved`; the row's `saved_summary` names the workspaces, when it was saved
+and whether it is being updated), and missing evidence capabilities.
 `resolve=` returns `aliases`, which maps a requested ID to its canonical row
 (itself for a current row), or to null when no row answers it. Session IDs can
 contain colons, so a saved disclosure key moves with the longest prefix that

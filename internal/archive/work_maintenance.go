@@ -226,40 +226,42 @@ func catalogExists(ctx context.Context, c *Catalog, query string, args ...any) (
 // label query facts, parallelism, agent events) are declared beside them in
 // work_task_adapters.go and work_domain_agent_events.go.
 const (
-	kindOrigins        = "maintenance.origins"
-	kindLibraryView    = "maintenance.library-view"
-	kindPreviews       = "maintenance.previews"
-	kindMetrics        = "maintenance.workspace-metrics"
-	kindNames          = "maintenance.conversation-names"
-	kindSubstring      = "maintenance.search.substring"
-	kindToolOutput     = "maintenance.search.tool-output"
-	kindTextSearch     = "maintenance.search.text"
-	kindToolSearch     = "maintenance.search.tools"
-	kindQueryText      = "maintenance.search.query"
-	kindIdentities     = "analysis.identities"
-	kindGit            = "analysis.git"
-	kindTools          = "analysis.tools"
-	kindFindings       = "analysis.findings"
-	kindRefine         = "analysis.authorship.refine"
-	kindParallelism    = "maintenance.parallelism"
-	kindLabelFacts     = "maintenance.labels.query"
-	kindAuthorship     = "analysis.authorship"
-	kindLabels         = "analysis.labels"
-	kindAgentEvents    = "analysis.agent_events"
-	kindSessionShape   = "maintenance.session-shape"
-	kindFingerprints   = "maintenance.fingerprints"
-	maintenanceRecent  = 48 * time.Hour
-	maintenanceTick    = 2 * time.Second
-	maintenanceWarmGap = 2 * time.Second
+	kindOrigins      = "maintenance.origins"
+	kindLibraryView  = "maintenance.library-view"
+	kindPreviews     = "maintenance.previews"
+	kindMetrics      = "maintenance.workspace-metrics"
+	kindNames        = "maintenance.conversation-names"
+	kindSubstring    = "maintenance.search.substring"
+	kindToolOutput   = "maintenance.search.tool-output"
+	kindTextSearch   = "maintenance.search.text"
+	kindToolSearch   = "maintenance.search.tools"
+	kindQueryText    = "maintenance.search.query"
+	kindIdentities   = "analysis.identities"
+	kindGit          = "analysis.git"
+	kindTools        = "analysis.tools"
+	kindFindings     = "analysis.findings"
+	kindRefine       = "analysis.authorship.refine"
+	kindParallelism  = "maintenance.parallelism"
+	kindLabelFacts   = "maintenance.labels.query"
+	kindAuthorship   = "analysis.authorship"
+	kindLabels       = "analysis.labels"
+	kindAgentEvents  = "analysis.agent_events"
+	kindSessionShape = "maintenance.session-shape"
+	// Saved delegation summaries (delegation_summaries.go).
+	kindDelegationSummaries = "maintenance.delegation-summaries"
+	kindFingerprints        = "maintenance.fingerprints"
+	maintenanceRecent       = 48 * time.Hour
+	maintenanceTick         = 2 * time.Second
+	maintenanceWarmGap      = 2 * time.Second
 )
 
 // searchKinds are what the Search item (and the continuous Frequently
 // schedule) keeps current: the stored projection, then the index backfills.
-var searchKinds = []string{kindOrigins, kindLibraryView, kindMetrics, kindNames, kindPreviews, kindParallelism, kindSessionShape, kindSubstring, kindToolOutput, kindTextSearch, kindToolSearch, kindQueryText}
+var searchKinds = []string{kindOrigins, kindLibraryView, kindMetrics, kindNames, kindPreviews, kindParallelism, kindSessionShape, kindDelegationSummaries, kindSubstring, kindToolOutput, kindTextSearch, kindToolSearch, kindQueryText}
 
 // projectionKinds are held by the Library refresh's Stop, as the classic
 // maintainLibrary pass that ran them was.
-var projectionKinds = []string{kindOrigins, kindLibraryView, kindMetrics, kindNames, kindPreviews, kindParallelism, kindSessionShape}
+var projectionKinds = []string{kindOrigins, kindLibraryView, kindMetrics, kindNames, kindPreviews, kindParallelism, kindSessionShape, kindDelegationSummaries}
 
 // stageKinds maps the analysis chain's stage names to their task kinds.
 var stageKinds = map[string]string{"identities": kindIdentities, "git": kindGit, "tools": kindTools, "authorship": kindAuthorship,
@@ -777,6 +779,10 @@ func (s *Server) submitPendingMaintenance(ctx context.Context, routing *maintena
 			pending = w.dirtyPending(ctx, c, routing, kind, "parallelism_dirty")
 		case kind == kindSessionShape:
 			pending = w.dirtyPending(ctx, c, routing, kind, "session_shape_dirty")
+		case kind == kindDelegationSummaries:
+			// The sweep finds new hosts: it is due when the execution
+			// sources moved past it, whether or not anything is dirty yet.
+			pending = w.dirtyPending(ctx, c, routing, kind, "delegation_summary_dirty") || c.delegationSummariesSweepDue(ctx)
 		case routing != nil && routing.tasks[kind] != nil:
 			selection, err := routing.tasks[kind].Next(ctx, nil)
 			pending = err == nil && (selection.ready() || selection.Blocker.Reason == workBlockedWriter)

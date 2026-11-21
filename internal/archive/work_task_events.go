@@ -43,6 +43,6 @@ func (s *Server) expandedWorkDefinitions(authority *workAuthority) ([]workDefini
 			defs[i].Task = projectionHeldTask{catalog: s.Catalog, workTask: defs[i].Task}
 		}
 	}
-	defs = append(defs, s.eventsWorkDefinition(authority), s.sessionShapeWorkDefinition())
+	defs = append(defs, s.eventsWorkDefinition(authority), s.sessionShapeWorkDefinition(), s.delegationSummariesWorkDefinition())
 	return append(defs, more...), nil
 }

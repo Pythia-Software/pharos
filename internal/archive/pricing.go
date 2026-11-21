@@ -235,12 +235,22 @@ func markRepricedWorkspaces(ctx context.Context, tx *sql.Tx, before, after price
 	}
 	defer rows.Close()
 	days, repriced, marked := map[string]string{}, map[string]bool{}, map[string]bool{}
+	summaries := map[string]bool{}
+	priceChanged := func(model, day string) bool {
+		key := model + "\x00" + day
+		changed, known := repriced[key]
+		if !known {
+			changed = before.quote(model, day) != after.quote(model, day)
+			repriced[key] = changed
+		}
+		return changed
+	}
 	for rows.Next() {
 		var workspace, own, session, hour string
 		if err := rows.Scan(&workspace, &own, &session, &hour); err != nil {
 			return err
 		}
-		if marked[workspace] {
+		if marked[workspace] && summaries[workspace] {
 			continue
 		}
 		day, known := days[hour]
@@ -252,18 +262,33 @@ func markRepricedWorkspaces(ctx context.Context, tx *sql.Tx, before, after price
 		}
 		// The model and day usageMetrics prices a ledger row by.
 		model := firstString(own, session)
-		key := model + "\x00" + day
-		changed, known := repriced[key]
-		if !known {
-			changed = before.quote(model, day) != after.quote(model, day)
-			repriced[key] = changed
-		}
-		if changed {
+		if priceChanged(model, day) {
 			marked[workspace] = true
 		}
+		// Delegation prices the ledger's recorded UTC date, whereas the
+		// workspace metrics projection groups usage by local calendar day.
+		utcDay := hour
+		if len(utcDay) > 10 {
+			utcDay = utcDay[:10]
+		}
+		if priceChanged(model, utcDay) {
+			summaries[workspace] = true
+		}
 	}
-	if err := rows.Err(); err != nil || len(marked) == 0 {
+	if err := rows.Err(); err != nil {
 		return err
+	}
+	if len(summaries) > 0 {
+		summaryIDs := make([]string, 0, len(summaries))
+		for id := range summaries {
+			summaryIDs = append(summaryIDs, id)
+		}
+		if err := markDelegationSummaryWorkspaces(ctx, tx, summaryIDs); err != nil {
+			return err
+		}
+	}
+	if len(marked) == 0 {
+		return nil
 	}
 	ids := make([]string, 0, len(marked))
 	for id := range marked {

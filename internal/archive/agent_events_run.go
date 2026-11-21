@@ -115,6 +115,9 @@ func (c *Catalog) ensureAgentEventsLedger(ctx context.Context) error {
 				return fmt.Errorf("%s: %w", statement[:60], err)
 			}
 		}
+		if err := delegationSummaryEventTriggers(ctx, tx); err != nil {
+			return err
+		}
 		// The ledger's tables are image sources (fingerprint_cache.go).
 		if err := fingerprintSourceTriggers(ctx, tx); err != nil {
 			return err

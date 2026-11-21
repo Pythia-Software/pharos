@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDelegationIncomingAncestorsRemainContext(t *testing.T) {
@@ -264,6 +266,7 @@ func TestDelegationCodexChildrenAcrossWorkspaces(t *testing.T) {
 		run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,agent_path,model,effort) VALUES(?,'child-work','codex',?,?,'parent',1,?,'child-model','low')`, cv.id, cv.account, cv.id, cv.path)
 		run(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,usage_status,total_tokens) VALUES(?,'child-work',?,'main','subagent','codex','reported-reconciled',999)`, cv.id+"-session", cv.id)
 	}
+	run(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,created_at,content_hash) VALUES('child-reply','child','child-reply','assistant','message','Audit done.','2026-01-02T00:00:00Z','child-reply')`)
 	run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,agent_path) VALUES('grandchild','other-work','codex','local','grandchild','child',2,'/root/v8_cost_audit/details')`)
 	// A task path under another parent must not make the acknowledgement ambiguous.
 	run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,agent_depth,agent_path) VALUES('unrelated','other-work','codex','local','unrelated',1,'/root/v8_cost_audit')`)
@@ -331,6 +334,300 @@ func TestDelegationCodexChildrenAcrossWorkspaces(t *testing.T) {
 	if status != 200 || len(body["focus"].([]any)) != len(s.ByID["parent-session"].children)+1 {
 		t.Fatal("external children must be present in navigation focus", status, body)
 	}
+	if s.Coverage.Saved != 0 || s.Coverage.Unqueried == 0 {
+		t.Fatal("without a saved summary the child stays unqueried", s.Coverage)
+	}
+
+	// Maintenance saves what the child's own workspace reads of it. The
+	// parent's page then shows that, outside the parent's own totals.
+	reread := func() *delegationNode {
+		t.Helper()
+		if s, err = c.delegationSnapshot(t.Context(), "parent-work"); err != nil {
+			t.Fatal(err)
+		}
+		return s.ByID[canonical("success-session")]
+	}
+	if _, err := c.refreshDelegationSummaries(t.Context(), 100); err != nil {
+		t.Fatal(err)
+	}
+	success = reread()
+	if success.Saved == nil || success.Saved.Pending || !slices.Equal(success.Saved.Workspaces, []string{"child-work"}) {
+		t.Fatalf("the child must show its own workspace's saved summary: %+v", success.Saved)
+	}
+	if m := success.Self["tokens"]; m.Value == nil || *m.Value != 999 {
+		t.Fatalf("saved tokens: %+v", m)
+	}
+	if m := success.Self["messages"]; m.Value == nil || *m.Value != 1 || success.Start == nil {
+		t.Fatalf("saved activity: %+v start %v", m, success.Start)
+	}
+	if success.ParentID != "parent-session" || success.ExternalChild == nil {
+		t.Fatal("a saved summary must not change the row's place or navigation", success)
+	}
+	if *s.Totals["tokens"].Value != 100 {
+		t.Fatalf("saved summaries must stay outside workspace totals: %+v", s.Totals["tokens"])
+	}
+	if g := s.GroupTotals["tokens"]; g.Value == nil || *g.Value != 1099 {
+		t.Fatalf("group totals count what is shown: %+v", g)
+	}
+	if s.Coverage.Saved != 1 {
+		t.Fatal("saved rows are counted apart from unqueried ones", s.Coverage)
+	}
+	// Its lane reads the child's transcript where it is held.
+	lanes, _, err := c.delegationTimelineMessages(t.Context(), s, []string{success.ID}, *s.Start-1, *s.End+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if messages, _ := lanes[success.ID]["messages"].([]map[string]any); len(messages) != 1 || messages[0]["id"] != "child-reply" {
+		t.Fatalf("the lane must show the child's own messages: %+v", lanes[success.ID])
+	}
+
+	// A change to the child leaves its saved summary shown, marked as being
+	// updated, until maintenance reads the child's workspace again.
+	run(`UPDATE agent_sessions SET total_tokens=1500 WHERE id='child-session'`)
+	if success = reread(); success.Saved == nil || !success.Saved.Pending || *success.Self["tokens"].Value != 999 {
+		t.Fatalf("a changed child keeps its summary while it is updated: %+v %+v", success.Saved, success.Self["tokens"])
+	}
+	if _, err := c.refreshDelegationSummaries(t.Context(), 100); err != nil {
+		t.Fatal(err)
+	}
+	if success = reread(); success.Saved.Pending || *success.Self["tokens"].Value != 1500 {
+		t.Fatalf("the summary must follow the child: %+v %+v", success.Saved, success.Self["tokens"])
+	}
+
+	// Exercise summary maintenance through the same cross-workspace launch
+	// with timed tools, usage remainders and later source corrections.
+	fixture := func(t *testing.T) *Catalog {
+		t.Helper()
+		c, _ := testCatalog(t)
+		seedDelegation(t, c)
+		execTx(t, c.DB,
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('remote','codex','local','remote','Remote','2026-01-01')`,
+			`UPDATE conversations SET workspace_id='remote' WHERE id='child'`,
+			`UPDATE agent_sessions SET workspace_id='remote' WHERE conversation_id='child'`,
+			`UPDATE tool_calls SET workspace_id='remote' WHERE conversation_id='child'`)
+		return c
+	}
+	refresh := func(t *testing.T, c *Catalog) {
+		t.Helper()
+		if _, err := c.refreshDelegationSummaries(t.Context(), 100); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(t *testing.T, c *Catalog, workspace string) *delegationSnapshot {
+		t.Helper()
+		s, err := c.readDelegationSnapshot(t.Context(), workspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	t.Run("saved activity replaces the launch envelope", func(t *testing.T) {
+		c := fixture(t)
+		execSQL(t, c.DB, `UPDATE agent_sessions SET started_at='2025-01-01T00:00:00Z',ended_at='2027-01-01T00:00:00Z' WHERE id='launch-alias'`)
+		refresh(t, c)
+		local, remote := read(t, c, "delegation-work"), read(t, c, "remote")
+		got, want := local.ByID["child-session"], remote.ByID["child-session"]
+		if got.Saved == nil || got.Start == nil || got.End == nil || *got.Start != *want.Start || *got.End != *want.End || !near(got.All["clock"].Value, *got.SubtreeEnd-*got.SubtreeStart) {
+			t.Fatalf("saved bounds %v–%v must match transcript %v–%v", got.Start, got.End, want.Start, want.End)
+		}
+		if *local.Start < *delegationTime("2026-01-01T00:00:00Z") || *local.End > *delegationTime("2026-01-01T00:02:00Z") {
+			t.Fatal("launch envelope still stretches the timeline viewport", local.Start, local.End)
+		}
+	})
+	t.Run("older summaries are rebuilt and initialization is idempotent", func(t *testing.T) {
+		c := fixture(t)
+		refresh(t, c)
+		// Remove this build's column-aware cache triggers before simulating
+		// the previous schema, which never had the revision column.
+		triggers, err := queryMaps(c.DB, "SELECT name FROM sqlite_schema WHERE type='trigger' AND tbl_name='delegation_summaries'")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, trigger := range triggers {
+			execSQL(t, c.DB, "DROP TRIGGER "+sqlIdentifier(firstString(trigger["name"])))
+		}
+		execSQL(t, c.DB, `ALTER TABLE delegation_summaries DROP COLUMN revision;
+			UPDATE meta SET value='1' WHERE key='delegation_summaries_version'`)
+		if err := c.ensureDelegationSummaries(); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.ensureQueryCacheGeneration(); err != nil {
+			t.Fatal(err)
+		}
+		refresh(t, c)
+		before := read(t, c, "delegation-work")
+		if n := before.ByID["child-session"]; n.Saved == nil || !near(n.Self["tokens"].Value, 200) {
+			t.Fatal("upgrade did not rebuild the summary", n.Saved)
+		}
+		if err := c.ensureDelegationSummaries(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.savedActivity(t.Context(), before, []string{"child-session"}); err != nil {
+			t.Fatal("initialization replaced an unchanged summary", err)
+		}
+	})
+	t.Run("saved branch retains token and cost remainders", func(t *testing.T) {
+		c := fixture(t)
+		if err := c.replacePricing(testPricing(), "summary-pricing"); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.seedSessionUsage(); err != nil {
+			t.Fatal(err)
+		}
+		execSQL(t, c.DB, `UPDATE agent_session_usage SET attribution='run-remainder',model='gpt-5.5',usage_hour='2026-07-02T00:00:00Z' WHERE agent_session_id='child-session'`)
+		refresh(t, c)
+		local, remote := read(t, c, "delegation-work"), read(t, c, "remote")
+		n := local.ByID["child-session"]
+		if n.Saved == nil || n.TokenAttribution == nil || n.TokenAttribution.Unallocated != 200 {
+			t.Fatal("saved branch lost its unallocated usage", n.TokenAttribution)
+		}
+		if !near(local.GroupTotals["tokens"].Value, *local.Totals["tokens"].Value+*remote.Totals["tokens"].Value) || !near(local.GroupTotals["cost"].Value, *remote.Totals["cost"].Value) {
+			t.Fatalf("saved group lost accounted usage: tokens=%+v cost=%+v", local.GroupTotals["tokens"], local.GroupTotals["cost"])
+		}
+		// Combining segments must also preserve scoped and legacy accounting.
+		sum := delegationCombineSummaries([]delegationSummary{remote.ByID[n.ID].summary(), {Self: map[string]delegationMetric{"tokens": delegationNumber(10, "reported", 1, 1), "cost": delegationNumber(1, "estimated", 1, 1)}}})
+		combined := &delegationNode{ID: n.ID, Self: sum.Self, TokenAttribution: sum.TokenAttribution, accountedTokens: sum.AccountedTokens}
+		if !near(delegationTokenTotal([]*delegationNode{combined}).Value, 210) || !near(delegationAggregate([]*delegationNode{combined})["cost"].Value, *remote.Totals["cost"].Value+1) {
+			t.Fatal("combined summaries lost accounting", sum)
+		}
+		observed := delegationSummary{Self: map[string]delegationMetric{"tokens": delegationNumber(200, "reported-minimum", 1, 1)}, TokenAttribution: &sessionTokenAttribution{Observed: 200}}
+		minimum := delegationCombineSummaries([]delegationSummary{observed, observed})
+		if minimum.TokenAttribution.Observed != 200 || !near(minimum.Self["tokens"].Value, 200) {
+			t.Fatal("overlapping last-request observations were added", minimum)
+		}
+		execSQL(t, c.DB, `INSERT INTO agent_session_token_evidence(agent_session_id,message_id,scope,total_tokens) VALUES('child-session','nested-result','last-request',400)`)
+		refresh(t, c)
+		if a := read(t, c, "delegation-work").ByID[n.ID].TokenAttribution; a == nil || a.Observed != 400 {
+			t.Fatal("corrected token evidence left the saved minimum stale", a)
+		}
+		execSQL(t, c.DB, `UPDATE agent_session_usage SET attribution='request' WHERE agent_session_id='child-session'`)
+		refresh(t, c)
+		if !near(read(t, c, "delegation-work").ByID[n.ID].Self["remainder"].Value, 50) {
+			t.Fatal("legacy ledger must retain its previous remainder interpretation")
+		}
+		execSQL(t, c.DB, `INSERT INTO usage_attribution_state(workspace_id,version) VALUES('remote','6') ON CONFLICT(workspace_id) DO UPDATE SET version=excluded.version`)
+		refresh(t, c)
+		if !near(read(t, c, "delegation-work").ByID[n.ID].Self["remainder"].Value, 0) {
+			t.Fatal("saved summary did not follow the ledger interpretation")
+		}
+	})
+	t.Run("moved and deleted hosts retire their old summaries", func(t *testing.T) {
+		c := fixture(t)
+		execTx(t, c.DB,
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('remote2','codex','local','remote2','Remote 2','2026-01-01')`,
+			`UPDATE conversations SET workspace_id='remote2' WHERE id='nested'`,
+			`UPDATE agent_sessions SET workspace_id='remote2' WHERE conversation_id='nested'`,
+			`UPDATE tool_calls SET workspace_id='remote2' WHERE conversation_id='nested'`)
+		refresh(t, c)
+		execTx(t, c.DB,
+			`UPDATE conversations SET workspace_id='remote2' WHERE id='child'`,
+			`UPDATE agent_sessions SET workspace_id='remote2' WHERE conversation_id='child'`,
+			`UPDATE tool_calls SET workspace_id='remote2' WHERE conversation_id='child'`)
+		// The source moved after the sweep, into a workspace already hosting
+		// another summary. A step must not publish the moved transcript twice.
+		if _, err := c.refreshDelegationSummariesFor(t.Context(), []string{"child"}); err != nil {
+			t.Fatal(err)
+		}
+		if countRows(t, c, "SELECT count(*) FROM delegation_summaries WHERE node_id='child-session'") > 1 {
+			t.Fatal("move between sweep and refresh duplicated saved usage")
+		}
+		refresh(t, c)
+		n := read(t, c, "delegation-work").ByID["child-session"]
+		if n.Saved == nil || !slices.Equal(n.Saved.Workspaces, []string{"remote2"}) || !near(n.Self["tokens"].Value, 200) {
+			t.Fatal("moved transcript counted its old workspace", n.Saved, n.Self["tokens"])
+		}
+		execSQL(t, c.DB, `DELETE FROM conversations WHERE id='child'`)
+		refresh(t, c)
+		if countRows(t, c, "SELECT count(*) FROM delegation_summaries WHERE workspace_id IN ('remote','remote2')") != 0 {
+			t.Fatal("deleted host left saved usage behind")
+		}
+	})
+	t.Run("pricing replacements refresh saved costs", func(t *testing.T) {
+		c := fixture(t)
+		override(t, &time.Local, time.FixedZone("summary-pricing", -7*60*60))
+		if err := c.replacePricing(testPricing(), "summary-before"); err != nil {
+			t.Fatal(err)
+		}
+		execSQL(t, c.DB, `INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,attribution,input_tokens,uncached_input_tokens,total_tokens) VALUES('child-session','2026-07-02T00:00:00Z','gpt-5.5','session-start',1000000,1000000,1000000)`)
+		refresh(t, c)
+		doc := testPricing()
+		doc.Changes = append(doc.Changes, priceChange{Provider: "openai", Model: "gpt-5.5", EffectiveFrom: "2026-07-02", Input: rate(4), CacheRead: rate(.2), Output: rate(16), Status: "confirmed", SourceURL: "https://example.com/new-rate"})
+		if err := c.replacePricing(doc, "summary-after"); err != nil {
+			t.Fatal(err)
+		}
+		refresh(t, c)
+		if got := read(t, c, "delegation-work").ByID["child-session"]; !near(got.Self["cost"].Value, 4) || got.Saved.Pending {
+			t.Fatal("saved pricing did not follow the price book", got.Self["cost"], got.Saved)
+		}
+	})
+	t.Run("empty event completion clears saved pending state", func(t *testing.T) {
+		c := fixture(t)
+		// The optional ledger is created after the summary schema.
+		if err := c.ensureAgentEventsLedger(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		execSQL(t, c.DB, `INSERT INTO agent_events_dirty(conversation_id,token) VALUES('child','pending') ON CONFLICT(conversation_id) DO UPDATE SET token=excluded.token`)
+		refresh(t, c)
+		if !read(t, c, "delegation-work").ByID["child-session"].EventsPending {
+			t.Fatal("pending events must remain qualified in a summary")
+		}
+		// A completed scan with no candidates changes no agent_events rows.
+		execSQL(t, c.DB, `DELETE FROM agent_events_dirty WHERE conversation_id='child'`)
+		refresh(t, c)
+		if read(t, c, "delegation-work").ByID["child-session"].EventsPending {
+			t.Fatal("completed empty scan left saved events pending")
+		}
+	})
+	t.Run("repository repair deduplicates saved files", func(t *testing.T) {
+		c := fixture(t)
+		execSQL(t, c.DB, `UPDATE tool_calls SET file_path='foo.go',path_absolute='/checkout/foo.go' WHERE id='t-child';
+			UPDATE tool_calls SET file_path='foo.go',repo_path='foo.go',path_repository_id='repo' WHERE id='t-root'`)
+		refresh(t, c)
+		if !near(read(t, c, "delegation-work").GroupTotals["filesRead"].Value, 2) {
+			t.Fatal("unresolved checkouts must keep separate file identities")
+		}
+		execSQL(t, c.DB, `UPDATE tool_calls SET repo_path='foo.go',path_repository_id='repo',path_repository='repo' WHERE id='t-child'`)
+		refresh(t, c)
+		if !near(read(t, c, "delegation-work").GroupTotals["filesRead"].Value, 1) {
+			t.Fatal("repository repair left the saved file identity stale")
+		}
+	})
+	t.Run("timeline rejects replaced or removed summary versions", func(t *testing.T) {
+		c := fixture(t)
+		c.now = func() time.Time { return time.Unix(1_800_000_000, 0) }
+		refresh(t, c)
+		before := read(t, c, "delegation-work")
+		// An identical publication keeps activity available to the old snapshot.
+		execSQL(t, c.DB, `UPDATE agent_sessions SET model=model WHERE id='child-session'`)
+		refresh(t, c)
+		if _, err := c.savedActivity(t.Context(), before, []string{"child-session"}); err != nil {
+			t.Fatal("unchanged activity must remain readable", err)
+		}
+		// A name changes the lane without changing any summary metric, even
+		// when both saves have exactly the same timestamp.
+		execSQL(t, c.DB, `UPDATE tool_calls SET tool_name='Search' WHERE id='t-child'`)
+		refresh(t, c)
+		if _, err := c.savedActivity(t.Context(), before, []string{"child-session"}); !errors.Is(err, errDelegationSnapshotChanged) {
+			t.Fatal("old snapshot silently read a replacement summary", err)
+		}
+		server := testServer(t, Config{}, c)
+		response := httptest.NewRecorder()
+		server.writeDelegationTimeline(response, httptest.NewRequest("GET", "/?sessions=child-session", nil), before)
+		if response.Code != 409 || !strings.Contains(response.Body.String(), "snapshot_changed") {
+			t.Fatal("timeline must ask the client to reload", response.Code, response.Body.String())
+		}
+		after := read(t, c, "delegation-work")
+		if after.ID == before.ID {
+			t.Fatal("replaced activity must change the snapshot token")
+		}
+		if _, err := c.savedActivity(t.Context(), after, []string{"child-session"}); err != nil {
+			t.Fatal(err)
+		}
+		execSQL(t, c.DB, `DELETE FROM delegation_summaries WHERE workspace_id='remote'`)
+		if _, err := c.savedActivity(t.Context(), after, []string{"child-session"}); !errors.Is(err, errDelegationSnapshotChanged) {
+			t.Fatal("removed summary must invalidate its activity", err)
+		}
+	})
 }
 
 func TestDelegationCopiedLaunchesAcrossWorkspaces(t *testing.T) {
