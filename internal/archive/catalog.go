@@ -311,7 +311,11 @@ func (c *Catalog) Initialize() error {
 		return err
 	}
 	progress.begin(initStepAnalysis)
-	// The analysis triggers read the project columns.
+	if err := c.ensureTL1Schema(); err != nil {
+		return fmt.Errorf("initialize TL1 tables: %w", err)
+	}
+	// The analysis triggers read the project columns, which TL1's
+	// installations help derive (workflowRoots).
 	if err := c.migrateProjects(); err != nil {
 		return fmt.Errorf("initialize projects: %w", err)
 	}
@@ -335,9 +339,6 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.ensureSessionShape(); err != nil {
 		return fmt.Errorf("initialize session shape: %w", err)
-	}
-	if err := c.ensureTL1Schema(); err != nil {
-		return fmt.Errorf("initialize TL1 tables: %w", err)
 	}
 	if err := c.ensureAgentEventsSchema(); err != nil {
 		return fmt.Errorf("initialize agent events: %w", err)

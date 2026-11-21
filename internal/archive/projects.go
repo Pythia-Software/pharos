@@ -74,6 +74,65 @@ func projectRoots(ctx context.Context, q queryer) ([]projectRoot, error) {
 	return roots, nil
 }
 
+// workflowRoots are the checkout roots of projectRoots plus the folders where
+// a workflow tool runs agents for a repository it records. TL1 starts its
+// agents in each installation's transcripts folder, and indexes its tasks as
+// workspaces of the installation's code repository, so that folder joins the
+// repository of those task workspaces; before any are indexed, the one
+// checkout at the code repository (several clones may record it there, so
+// it can be none). They name a project, not a checkout, so file filters keep
+// to projectRoots.
+func workflowRoots(ctx context.Context, q queryer) ([]projectRoot, error) {
+	roots, err := projectRoots(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := queryMapsContext(ctx, q, `SELECT i.repository,i.transcripts_dir,
+		(SELECT w.repository_id FROM tl1_tasks t JOIN workspaces w ON w.id=t.workspace_id
+			WHERE t.installation_id=i.installation_id AND w.repository_id IS NOT NULL
+			GROUP BY w.repository_id ORDER BY COUNT(*) DESC,w.repository_id LIMIT 1) task_repository
+		FROM tl1_installations i WHERE i.transcripts_dir IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	checkouts := slices.Clone(roots)
+	for _, row := range rows {
+		folder := folderKey(firstString(row["transcripts_dir"]))
+		repository := firstString(row["task_repository"])
+		if checkout := folderKey(firstString(row["repository"])); repository == "" && checkout != "" {
+			repository = folderRepository(checkout, checkouts)
+		}
+		if folder != "" && repository != "" {
+			roots = append(roots, projectRoot{folder, repository})
+		}
+	}
+	return roots, nil
+}
+
+// workflowFolders are the workflow folders (workflowRoots) whose recorded
+// repository is at or under one of the given checkout folder keys, which a
+// change to those checkouts may move into or out of a repository.
+func workflowFolders(ctx context.Context, q queryer, keys []string) ([]string, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	rows, err := queryMapsContext(ctx, q, `SELECT repository,transcripts_dir FROM tl1_installations WHERE repository IS NOT NULL AND transcripts_dir IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	folders := []string{}
+	for _, row := range rows {
+		checkout := folderKey(firstString(row["repository"]))
+		for _, key := range keys {
+			if checkout != "" && (checkout == key || key != "~" && key != "/" && strings.HasPrefix(checkout, strings.TrimSuffix(key, "/")+"/")) {
+				folders = append(folders, firstString(row["transcripts_dir"]))
+				break
+			}
+		}
+	}
+	return folders, nil
+}
+
 // folderRepository is the one repository with a checkout at the folder or
 // above it, the nearest one winning. A checkout at the home directory or at /
 // claims only itself, or a home directory under Git would swallow every
@@ -112,7 +171,7 @@ func projectChanges(ctx context.Context, q queryer, predicate string, args ...an
 		folder, repository := projectFolder(location), ""
 		if firstString(row["repository_id"]) == "" && folder != "" {
 			if roots == nil {
-				if roots, err = projectRoots(ctx, q); err != nil {
+				if roots, err = workflowRoots(ctx, q); err != nil {
 					return nil, err
 				}
 			}
@@ -156,6 +215,17 @@ func resolveFolderProjects(ctx context.Context, tx *sql.Tx, paths []string) erro
 	keys := []string{}
 	for _, path := range paths {
 		if key := folderKey(path); key != "" {
+			keys = append(keys, key)
+		}
+	}
+	// A workflow folder joins the repository of the checkout it records, so
+	// it moves with those checkouts too.
+	folders, err := workflowFolders(ctx, tx, keys)
+	if err != nil {
+		return err
+	}
+	for _, folder := range folders {
+		if key := folderKey(folder); key != "" {
 			keys = append(keys, key)
 		}
 	}
@@ -339,7 +409,7 @@ func (c *Catalog) listProjects(args map[string]any) (map[string]any, error) {
 		if key == "" {
 			return nil, fmt.Errorf("path must be absolute")
 		}
-		roots, err := projectRoots(context.Background(), c.DB)
+		roots, err := workflowRoots(context.Background(), c.DB)
 		if err != nil {
 			return nil, err
 		}

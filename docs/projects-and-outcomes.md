@@ -29,6 +29,14 @@ Every workspace belongs to exactly one **project**, chosen in this order:
    sessions join the repository project as soon as Pharos sees a session in
    the new checkout. It also covers a session recorded on another Mac in a
    checkout this library knows.
+   A workflow tool's run folder counts as a checkout of the repository it
+   works on. TL1 starts its agents in its installation's transcripts folder
+   (`~/.tl1/installations/<id>/transcripts/…`), outside any checkout. Those
+   sessions join the repository project of the installation's TL1 task
+   workspaces, which are indexed at its recorded code repository
+   (`workflowRoots`). Before any task is indexed, they join the one known
+   checkout at that code repository; with none, or several clones claiming
+   it, the folder stays a folder project.
 3. **The working folder.** The location is normalized as a folder key:
    - A home directory, `/Users/<name>/…` or `/home/<name>/…`, is shown as
      `~`. The rule reads nothing of the host, so every Mac sharing a
