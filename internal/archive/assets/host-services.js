@@ -102,10 +102,12 @@
       if (purpose !== undefined && !['library', 'source', 'export', 'backup', 'restore'].includes(purpose)) throw failure('invalid-request', 'Unknown folder picker purpose.');
       return request('folders', {action: 'chooseFolder', ...(purpose === undefined ? {} : {purpose})}, value => value === null || typeof value === 'string' && value.length > 0);
     }},
-    updates: {
-      status: () => request('updates', {action: 'status'}, value => object(value) && typeof value.version === 'string' && typeof value.phase === 'string'),
-      install: () => request('updates', {action: 'install'}, value => object(value) && typeof value.version === 'string' && typeof value.phase === 'string'),
-    },
+    updates: (() => {
+      const state = action => () => request('updates', {action}, value => object(value) && typeof value.version === 'string' && typeof value.phase === 'string');
+      // installWhenIdle downloads now and installs once this Mac is idle;
+      // stopWaiting keeps the downloaded update offered without waiting.
+      return {status: state('status'), install: state('install'), installWhenIdle: state('installWhenIdle'), stopWaiting: state('stopWaiting')};
+    })(),
     menu: {
       applyPreferences(settings) {
         if (!object(settings)) throw failure('invalid-request', 'Menu preferences must be an object.');

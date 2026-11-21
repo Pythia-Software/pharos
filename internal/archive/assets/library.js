@@ -11,6 +11,9 @@
 .combo-button>.pharos-drive{gap:7px;min-width:0;max-width:190px;font-weight:400;line-height:1}
 .combo-button>.pharos-app-update{flex:none;color:var(--combo-accent);background:color-mix(in srgb,var(--combo-accent) 14%,var(--combo-bg))}
 .pharos-app-update[aria-disabled=true]{cursor:default}
+.pharos-update-menu:popover-open{flex-direction:column;align-items:stretch;max-width:min(300px,calc(100vw - 16px))}
+.pharos-update-menu button{flex-direction:column;align-items:flex-start;text-align:left;background:var(--panel);color:var(--ink)}
+.pharos-update-menu small{color:var(--muted);font-size:var(--fs-sm,12px);white-space:normal}
 .pharos-app-update[data-phase=available]::after{content:'';position:absolute;top:5px;right:5px;width:5px;height:5px;border-radius:50%;background:currentColor;box-shadow:0 0 0 2px var(--combo-bg)}
 .pharos-update-ring{position:absolute;inset:3px;width:calc(100% - 6px);height:calc(100% - 6px);fill:none;stroke:currentColor;stroke-width:1.8;pointer-events:none}
 .pharos-update-ring[hidden]{display:none}
@@ -309,21 +312,32 @@
   // Sparkle supplies only verified, installable releases through the native
   // bridge. Source builds and ordinary browser sessions have no update action.
   const nativeUpdatesAvailable = () => window.pharosHost.capabilities.updates.available;
+  // The header offers two ways to install: restart now, or download now and
+  // let the app restart once nobody has used this Mac for a while and Pharos
+  // is not working (macos/UpdateLifecycle.swift's IdleUpdatePolicy).
+  const updateNow = {id: 'install', label: 'Restart and update now', detail: 'Pharos closes, installs the update and opens again.'};
+  const updateWhenIdle = {id: 'installWhenIdle', label: 'Update when idle',
+    detail: 'Downloads now. Pharos restarts once this Mac has been idle for 10 minutes and Pharos has no work running.'};
+  const stopWaiting = {id: 'stopWaiting', label: 'Stop waiting', detail: 'Keeps the update here for later.'};
   function appUpdatePresentation(state) {
-    if (!state?.version || !['available', 'downloading', 'preparing', 'installing'].includes(state.phase)) return null;
-    const busy = state.phase !== 'available';
+    if (!state?.version || !['available', 'downloading', 'preparing', 'waiting', 'installing'].includes(state.phase)) return null;
+    const busy = !['available', 'waiting'].includes(state.phase);
     const progress = state.phase === 'downloading' && Number.isFinite(state.progress) ? Math.max(0, Math.min(100, Math.floor(state.progress))) : null;
+    const when = state.whenIdle ? 'Pharos will restart once this Mac is idle.' : 'Pharos will restart when ready.';
     return {busy, phase: state.phase, progress,
-      icon: state.phase === 'preparing' ? 'package' : state.phase === 'installing' ? 'restart' : 'download',
-      title: state.phase === 'available' ? `Update Pharos to ${state.version}. Pharos installs it and restarts.`
-        : state.phase === 'downloading' ? `Downloading Pharos ${state.version}${progress == null ? '' : ` (${progress}%)`}. Pharos will restart when ready.`
-          : state.phase === 'preparing' ? `Verifying and preparing Pharos ${state.version}. Pharos will restart when ready.`
-            : `Installing Pharos ${state.version} and restarting…`};
+      icon: state.phase === 'preparing' ? 'package' : state.phase === 'installing' ? 'restart' : state.phase === 'waiting' ? 'clock' : 'download',
+      actions: state.phase === 'available' ? [updateNow, updateWhenIdle] : state.phase === 'waiting' ? [updateNow, stopWaiting] : [],
+      title: state.phase === 'available' ? `Update Pharos to ${state.version}. Restart now, or when this Mac is idle.`
+        : state.phase === 'waiting' ? `Pharos ${state.version} is ready. Pharos will restart to install it once this Mac is idle.`
+          : state.phase === 'downloading' ? `Downloading Pharos ${state.version}${progress == null ? '' : ` (${progress}%)`}. ${when}`
+            : state.phase === 'preparing' ? `Verifying and preparing Pharos ${state.version}. ${when}`
+              : `Installing Pharos ${state.version} and restarting…`};
   }
   const updateGlyphs = {
     download: 'M12 3v11m-4-4 4 4 4-4M5 16v4h14v-4',
     package: 'm3 7 9-4 9 4v10l-9 4-9-4ZM3 7l9 4 9-4M12 11v10M7.5 5l9 4',
     restart: 'M20 9a8 8 0 1 0 0 6M20 3v6h-6',
+    clock: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18ZM12 7v5l3 2',
   };
   const updateSVG = (tag, attributes) => {
     const element = document.createElementNS('http://www.w3.org/2000/svg', tag);
@@ -332,7 +346,10 @@
   };
   function renderAppUpdate() {
     const view = nativeUpdatesAvailable() && appUpdatePresentation(appUpdate);
-    if (!view) { appUpdateButton?.remove(); appUpdateButton = null; return; }
+    if (!view) {
+      if (appUpdateMenu?.matches(':popover-open')) appUpdateMenu.hidePopover();
+      appUpdateButton?.remove(); appUpdateButton = null; return;
+    }
     if (!ensureHeaderAction()) return;
     if (!appUpdateButton) {
       appUpdateButton = node('button', 'combo-icon pharos-app-update');
@@ -345,16 +362,29 @@
         class: `pharos-update-${kind}`, cx: '16', cy: '16', r: '13', pathLength: '100', transform: 'rotate(-90 16 16)',
       }));
       appUpdateButton.append(glyph, ring);
-      appUpdateButton.onclick = async () => {
-        if (appUpdateRequest || appUpdatePresentation(appUpdate)?.busy) return;
-        appUpdateRequest = true;
-        renderAppUpdate();
-        try {
-          // Native status events own state after this starts: an older reply
-          // must not overwrite download progress that arrived in the meantime.
-          await window.pharosHost.updates.install();
-        } catch (error) { toast(error.message || 'Could not start the Pharos update.'); }
-        finally { appUpdateRequest = false; await refreshAppUpdate(); }
+      appUpdateButton.setAttribute('aria-haspopup', 'menu');
+      // popovertarget toggles the menu after this fills and places it, and
+      // keeps it open inside the header's More tools popover.
+      appUpdateButton.onclick = () => {
+        const actions = appUpdatePresentation(appUpdate)?.actions || [];
+        if (appUpdateRequest || !actions.length) return;
+        const menu = ensureAppUpdateMenu();
+        menu.replaceChildren(...actions.map(action => {
+          const item = node('button', '');
+          item.type = 'button';
+          item.setAttribute('role', 'menuitem');
+          item.dataset.action = action.id;
+          item.append(node('span', '', action.label), node('small', '', action.detail));
+          item.onclick = () => runAppUpdate(action.id);
+          return item;
+        }));
+        menu.firstElementChild.setAttribute('autofocus', '');
+        // A click in the header's More tools closes that popup first; the
+        // menu then opens beneath More.
+        let box = appUpdateButton.getBoundingClientRect();
+        if (!box.width) box = document.getElementById('headerMore')?.getBoundingClientRect() || box;
+        menu.style.left = `${Math.max(8, Math.min(innerWidth - 308, box.right - 300))}px`;
+        menu.style.top = `${Math.max(8, box.bottom + 6)}px`;
       };
       headerSync.before(appUpdateButton);
     }
@@ -370,6 +400,41 @@
     appUpdateButton.setAttribute('aria-busy', String(busy));
     // Keep progress focusable and hoverable, while guarding the action above.
     appUpdateButton.setAttribute('aria-disabled', String(busy));
+    if (busy) {
+      appUpdateButton.removeAttribute('popovertarget');
+      if (appUpdateMenu?.matches(':popover-open')) appUpdateMenu.hidePopover();
+    } else appUpdateButton.setAttribute('popovertarget', ensureAppUpdateMenu().id);
+  }
+  // A transient menu: Escape and clicks outside close it (popover=auto).
+  let appUpdateMenu = null;
+  function ensureAppUpdateMenu() {
+    if (appUpdateMenu?.isConnected) return appUpdateMenu;
+    appUpdateMenu = node('div', 'header-tool-menu pharos-update-menu');
+    appUpdateMenu.id = 'pharosAppUpdateMenu';
+    appUpdateMenu.setAttribute('popover', 'auto');
+    appUpdateMenu.setAttribute('role', 'menu');
+    appUpdateMenu.setAttribute('aria-label', 'Pharos update');
+    appUpdateMenu.addEventListener('keydown', event => {
+      if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+      const items = [...appUpdateMenu.querySelectorAll('button')];
+      const index = items.indexOf(document.activeElement);
+      items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus();
+      event.preventDefault();
+    });
+    document.body.append(appUpdateMenu);
+    return appUpdateMenu;
+  }
+  async function runAppUpdate(action) {
+    if (appUpdateMenu?.matches(':popover-open')) appUpdateMenu.hidePopover();
+    if (appUpdateRequest) return;
+    appUpdateRequest = true;
+    renderAppUpdate();
+    try {
+      // Native status events own state after this starts: an older reply
+      // must not overwrite download progress that arrived in the meantime.
+      await window.pharosHost.updates[action]();
+    } catch (error) { toast(error.message || 'Could not start the Pharos update.'); }
+    finally { appUpdateRequest = false; await refreshAppUpdate(); }
   }
   let appUpdateRevision = 0;
   async function refreshAppUpdate() {

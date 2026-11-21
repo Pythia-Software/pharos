@@ -974,6 +974,19 @@ final class ArchiveService: ObservableObject {
         }
     }
 
+    /// For an update waiting for an idle Mac: what an update would interrupt
+    /// now, asked without stopping anything (the broker answers for every
+    /// library). With no service running there is nothing to interrupt; a
+    /// service still starting, or one already closing, cannot say.
+    func updateReadiness(completion: @escaping (UpdateReadiness?) -> Void) {
+        guard !shuttingDown, !ejecting else { completion(nil); return }
+        guard process?.isRunning == true else { completion(UpdateReadiness(releasable: true, idle: true)); return }
+        guard url != nil, let endpoint = lock.withLock({ self.endpoint }) else { completion(nil); return }
+        ServiceClient.updateReadiness(endpoint.url, token: endpoint.token) { readiness in
+            DispatchQueue.main.async { completion(readiness) }
+        }
+    }
+
     // WebKit's store remains temporary. Await the small library-backed session
     // writes before closing the service that saves them, including for updates.
     private func flushWebSession(completion: @escaping (Error?) -> Void) {
@@ -1848,15 +1861,20 @@ struct ArchiveWebView: NSViewRepresentable {
                     guard let updates else {
                         replyHandler(nil, "Updates are available only from the Pharos app."); return
                     }
-                    switch (message.body as? [String: Any])?["action"] as? String {
-                    case "status": replyHandler(updates.headerState.dictionary, nil)
-                    case "install":
-                        guard updates.installFromHeader() else {
-                            replyHandler(nil, "This update is no longer ready. Choose Pharos → Check for Updates…"); return
-                        }
-                        replyHandler(updates.headerState.dictionary, nil)
-                    default: replyHandler(nil, "Unknown update action.")
+                    let action = (message.body as? [String: Any])?["action"] as? String
+                    let perform: (() -> Bool)?
+                    switch action {
+                    case "status": perform = { true }
+                    case "install": perform = updates.installFromHeader
+                    case "installWhenIdle": perform = updates.installWhenIdleFromHeader
+                    case "stopWaiting": perform = updates.stopWaitingForIdle
+                    default: perform = nil
                     }
+                    guard let perform else { replyHandler(nil, "Unknown update action."); return }
+                    guard perform() else {
+                        replyHandler(nil, "This update is no longer ready. Choose Pharos → Check for Updates…"); return
+                    }
+                    replyHandler(updates.headerState.dictionary, nil)
                 case .library:
                     library(message.body, replyHandler: replyHandler)
                 case .dictation:

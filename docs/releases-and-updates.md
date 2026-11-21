@@ -202,10 +202,28 @@ required after installing the first Sparkle-enabled release. v0.7.1 and older
 still need one final manual replacement to obtain the updater.
 
 When Sparkle offers an installable release, the library header shows
-an update icon between drive status and Refresh. One click downloads,
-verifies, installs and relaunches Pharos, after the same safe process handoff
-as the native updater. A dot marks an available update, a ring shows download
-progress, a package marks preparation, and a restart arrow marks installation.
+an update icon between drive status and Refresh. Clicking it offers two
+choices:
+
+- **Restart and update now** downloads, verifies, installs and relaunches
+  Pharos, after the same safe process handoff as the native updater.
+- **Update when idle** downloads and verifies now, then holds Sparkle's
+  ready-to-install reply, without a native alert, until this Mac is idle.
+  Once a minute the app reads how long since the last keyboard, mouse or
+  trackpad input (no Input Monitoring permission is needed). After 10 minutes
+  away it asks the broker (or a portable service) with
+  `GET /api/release?for=update`, which stops nothing. It installs once nothing
+  would be interrupted (`idle`). After 45 minutes away, work that stops at a
+  safe point in time (`releasable`) no longer postpones it, so work that never
+  pauses cannot hold the update forever. The install then takes the explicit
+  path below. If that refuses, the update keeps waiting and shows no alert.
+  While it waits, the icon shows a clock. Its menu offers **Restart and update
+  now** and **Stop waiting**; stopping keeps the update offered. Quit, eject
+  or an ended Sparkle session cancels the wait, as they do an offered update.
+
+A dot marks an available update, a ring shows download progress, a package
+marks preparation, a clock marks a wait for an idle Mac, and a restart arrow
+marks installation.
 Hover text includes the version, current stage and download percentage.
 The icon stays the same width across states; the header measures the full
 combo again as the icon appears or disappears and moves it

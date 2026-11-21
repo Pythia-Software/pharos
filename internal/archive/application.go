@@ -497,58 +497,70 @@ func (m *applicationManager) stopChildLocked(id string) {
 // broker published (a service start holds m.mu for minutes): the broker's
 // own running operations, and each running service's own check.
 func (m *applicationManager) updateRefusal(ctx context.Context) string {
+	reason, _ := m.updateReadiness(ctx)
+	return reason
+}
+
+// updateReadiness is updateRefusal, and whether the update would interrupt
+// nothing: no broker operation and no library's work (see updateIdle).
+func (m *applicationManager) updateReadiness(ctx context.Context) (string, bool) {
 	ops := slices.DeleteFunc(m.operations.reg.views(), func(view opView) bool { return opTerminal(view.State) })
-	if reason := updateRefusal(computeEjectVerdict(verdictInput{ops: ops})); reason != "" {
-		return reason
+	verdict := computeEjectVerdict(verdictInput{ops: ops})
+	if reason := updateRefusal(verdict); reason != "" {
+		return reason, false
 	}
 	m.operations.mu.Lock()
 	libraries := slices.Clone(m.operations.libraries)
 	m.operations.mu.Unlock()
 	client := &http.Client{Timeout: brokerFreshTimeout, Transport: m.client.Transport}
 	reasons := make([]string, len(libraries))
+	idle := make([]bool, len(libraries))
 	var wait sync.WaitGroup
 	for index, library := range libraries {
 		if library.Child == nil {
+			idle[index] = true
 			continue
 		}
-		wait.Go(func() { reasons[index] = libraryUpdateRefusal(ctx, client, library) })
+		wait.Go(func() { reasons[index], idle[index] = libraryUpdateReadiness(ctx, client, library) })
 	}
 	wait.Wait()
 	for _, reason := range reasons {
 		if reason != "" {
-			return reason
+			return reason, false
 		}
 	}
-	return ""
+	return "", updateIdle(verdict) && !slices.Contains(idle, false)
 }
 
-// libraryUpdateRefusal asks one library's service whether an update may stop
-// it (GET /api/release?for=update). A service that cannot say refuses.
-func libraryUpdateRefusal(ctx context.Context, client *http.Client, library brokerLibrary) string {
+// libraryUpdateReadiness asks one library's service whether an update may
+// stop it, and whether that would interrupt nothing (GET
+// /api/release?for=update). A service that cannot say refuses.
+func libraryUpdateReadiness(ctx context.Context, client *http.Client, library brokerLibrary) (string, bool) {
 	unanswered := func(err error) string {
 		return fmt.Sprintf("The library %s did not say whether its work can stop (%v).", library.Name, err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, library.Child.URL+"/api/release?for=update", nil)
 	if err != nil {
-		return unanswered(err)
+		return unanswered(err), false
 	}
 	request.Header.Set("Authorization", "Bearer "+library.Child.Token)
 	response, err := client.Do(request)
 	if err != nil {
-		return unanswered(err)
+		return unanswered(err), false
 	}
 	defer response.Body.Close()
 	var answer struct {
 		Releasable *bool  `json:"releasable"`
+		Idle       bool   `json:"idle"`
 		Error      string `json:"error"`
 	}
 	if response.StatusCode != http.StatusOK || json.NewDecoder(response.Body).Decode(&answer) != nil || answer.Releasable == nil {
-		return unanswered(fmt.Errorf("it answered %s", response.Status))
+		return unanswered(fmt.Errorf("it answered %s", response.Status)), false
 	}
 	if !*answer.Releasable {
-		return answer.Error
+		return answer.Error, false
 	}
-	return ""
+	return "", answer.Idle
 }
 
 func (m *applicationManager) authorized(r *http.Request) bool {
@@ -593,6 +605,14 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// library's service, below.
 	if r.URL.Path == "/api/ready" && r.Header.Get("X-Pharos-Library") == "" {
 		writeJSON(w, map[string]any{"ready": true}, http.StatusOK)
+		return
+	}
+	// Whether an update may stop every library now, and whether it would
+	// interrupt nothing (the app's install-when-idle waits for that). It
+	// stops nothing and never takes m.mu.
+	if r.URL.Path == "/api/release" && r.Method == http.MethodGet && r.URL.Query().Get("for") == "update" {
+		reason, idle := m.updateReadiness(r.Context())
+		writeJSON(w, map[string]any{"releasable": reason == "", "idle": idle, "error": nilIfEmpty(reason)}, http.StatusOK)
 		return
 	}
 	// Never takes m.mu, which create and child starts hold for minutes.

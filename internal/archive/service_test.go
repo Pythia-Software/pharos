@@ -69,7 +69,6 @@ func TestReleaseStopsWorkClosesCatalogAndRefusesRequests(t *testing.T) {
 func TestUpdateReleaseWaitsForWorkThatCannotStopInTime(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
-	_, preparing := server.begin(context.Background(), OperationSpec{Kind: "catalog.initialize", Trigger: triggerStartup})
 	check := func() map[string]any {
 		t.Helper()
 		response := serveTest(server, http.MethodGet, "/api/release?for=update")
@@ -79,7 +78,16 @@ func TestUpdateReleaseWaitsForWorkThatCannotStopInTime(t *testing.T) {
 		}
 		return answer
 	}
-	if answer := check(); answer["releasable"] != false || !strings.Contains(fmt.Sprint(answer["error"]), "prepare the library") {
+	if answer := check(); answer["releasable"] != true || answer["idle"] != true {
+		t.Fatalf("check before any work: %v", answer)
+	}
+	_, indexing := server.begin(context.Background(), OperationSpec{Kind: "index.changes.manual", Trigger: triggerUser})
+	if answer := check(); answer["releasable"] != true || answer["idle"] != false {
+		t.Fatalf("check while work that stops at a safe point runs: %v", answer)
+	}
+	indexing.Finish(nil)
+	_, preparing := server.begin(context.Background(), OperationSpec{Kind: "catalog.initialize", Trigger: triggerStartup})
+	if answer := check(); answer["releasable"] != false || answer["idle"] != false || !strings.Contains(fmt.Sprint(answer["error"]), "prepare the library") {
 		t.Fatalf("check while preparing the catalog: %v", answer)
 	}
 	response := serveTest(server, http.MethodPost, "/api/release?for=update")

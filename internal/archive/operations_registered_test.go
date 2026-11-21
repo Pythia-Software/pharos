@@ -32,7 +32,7 @@ var unregisteredWorkAllowed = map[string]allowedWork{
 	"application.go:runApplicationCLI":               {3, "the broker's HTTP shutdown and parent watchdog, and its maintain daemon"},
 	"application.go:startChildLocked":                {1, "subprocess pipe: waits for the child service to exit"},
 	"application.go:runApplicationMCPCLI":            {1, "watchdog for the app's volume in an MCP stdio process"},
-	"application.go:updateRefusal":                   {1, "asks each library's service in parallel whether an update may stop it: a read bounded by brokerFreshTimeout that writes nothing"},
+	"application.go:updateReadiness":                 {1, "asks each library's service in parallel whether an update may stop it: a read bounded by brokerFreshTimeout that writes nothing"},
 	"capture.go:newHash":                             {1, "a hashing pipeline stage inside a capture, which is the operation"},
 	"backup.go:boundWAL":                             {1, "a WAL poller inside a backup, which is the operation"},
 	"backup_locations.go:backupLocationConnected":    {1, "one stat of a backup manifest, abandoned after backupLocationProbeLimit so a hung network share cannot stall status; writes nothing"},

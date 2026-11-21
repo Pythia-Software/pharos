@@ -1,3 +1,4 @@
+import CoreGraphics
 import CryptoKit
 import Darwin
 import Foundation
@@ -16,6 +17,29 @@ enum UpdatePreferences {
             defaults.set(legacy, forKey: "SUEnableAutomaticChecks")
         }
         defaults.set(true, forKey: "pharosSparklePreferencesMigrated")
+    }
+}
+
+/// When an update the person chose to install "when idle" goes ahead: once
+/// nobody has used this Mac for a while and Pharos's work would not be
+/// interrupted at all, or, after a longer absence, once that work would stop
+/// at a safe point in time (as an explicit install requires), so that work
+/// which never pauses cannot postpone the update forever.
+enum IdleUpdatePolicy {
+    static let away: TimeInterval = 10 * 60
+    static let longAway: TimeInterval = 45 * 60
+    static let interval: TimeInterval = 60
+
+    static func mayInstall(awaySeconds: TimeInterval, readiness: UpdateReadiness?) -> Bool {
+        guard let readiness, readiness.releasable, awaySeconds >= away else { return false }
+        return readiness.idle || awaySeconds >= longAway
+    }
+
+    /// Seconds since the last keyboard, mouse or trackpad input in this login
+    /// session. Reading it needs no Input Monitoring or Accessibility access.
+    static func userAwaySeconds() -> TimeInterval {
+        guard let anyInput = CGEventType(rawValue: ~0) else { return 0 }
+        return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
     }
 }
 
