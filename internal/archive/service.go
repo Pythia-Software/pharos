@@ -197,25 +197,34 @@ func (s *Server) release(w http.ResponseWriter, r *http.Request) {
 }
 
 // releaseCheck answers GET /api/release?for=update: whether a release for
-// an update would go ahead now. The broker asks every library before it
-// stops any of them.
+// an update would go ahead now, and whether it would interrupt nothing at
+// all (idle), which an update that waits for an idle Mac also requires. The
+// broker asks every library before it stops any of them.
 func (s *Server) releaseCheck(w http.ResponseWriter, r *http.Request) {
-	reason := s.updateRefusal(r.Context())
-	writeJSON(w, map[string]any{"releasable": reason == "", "error": nilIfEmpty(reason)}, http.StatusOK)
+	reason, idle := s.updateReadiness(r.Context())
+	writeJSON(w, map[string]any{"releasable": reason == "", "idle": idle, "error": nilIfEmpty(reason)}, http.StatusOK)
 }
 
 // updateRefusal is why stopping this service for an update would interrupt
-// work that cannot stop in time, or "" (see updateInputs). A stop already
-// under way has nothing left to refuse.
+// work that cannot stop in time, or "" (see updateInputs).
 func (s *Server) updateRefusal(ctx context.Context) string {
+	reason, _ := s.updateReadiness(ctx)
+	return reason
+}
+
+// updateReadiness is updateRefusal, and whether an update would interrupt
+// none of this service's work: no writer it would stop, even at a safe
+// point. A stop already under way has nothing left to refuse or interrupt.
+func (s *Server) updateReadiness(ctx context.Context) (string, bool) {
 	s.life.mu.Lock()
 	stopping := s.life.stopping
 	s.life.mu.Unlock()
 	if stopping {
-		return ""
+		return "", true
 	}
 	in, _ := s.ejectInputs(ctx, false)
-	return updateRefusal(computeEjectVerdict(updateInputs(in)))
+	verdict := computeEjectVerdict(updateInputs(in))
+	return updateRefusal(verdict), updateIdle(verdict)
 }
 
 // serveUntilStopped serves until a signal, a release, the exit of the app

@@ -1,7 +1,8 @@
 export type HostErrorCode = 'unsupported' | 'invalid-request' | 'native-failure';
 export interface HostError extends Error { code: HostErrorCode }
 export interface HostCapability { supported: boolean; available: boolean; reason?: string }
-export interface HostUpdateState { version: string; phase: string; progress?: number }
+/** `phase` is available, downloading, preparing, waiting (for an idle Mac) or installing; `whenIdle` marks an install the person chose to run once this Mac is idle. */
+export interface HostUpdateState { version: string; phase: string; progress?: number; whenIdle?: boolean }
 export interface HostDictationHandlers {
   /** A non-final result replaces the previous non-final one; a final one is kept. */
   onText?(text: string, final: boolean): void;
@@ -16,7 +17,7 @@ export interface PharosHost {
   readonly capabilities: Record<'clipboard' | 'folders' | 'updates' | 'menu' | 'eject' | 'dictation', HostCapability>;
   clipboard: { writeText(text: string): Promise<void> };
   folders: { chooseLibraryFolder(purpose?: 'library' | 'source' | 'export'): Promise<string | null> };
-  updates: { status(): Promise<HostUpdateState>; install(): Promise<HostUpdateState> };
+  updates: { status(): Promise<HostUpdateState>; install(): Promise<HostUpdateState>; installWhenIdle(): Promise<HostUpdateState>; stopWaiting(): Promise<HostUpdateState> };
   /** Dispatch confirms only that the one-way notification was sent. */
   menu: { applyPreferences(settings: Record<string, unknown>): {dispatched: true}; refreshUsage(): {dispatched: true} };
   /** Release acknowledgement is not proof of physical ejection. */

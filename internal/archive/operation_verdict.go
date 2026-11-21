@@ -239,6 +239,11 @@ func updateRefusal(v ejectVerdict) string {
 	return "Pharos is running work that cannot stop in time: " + lowerFirst(joinLabels(labels)) + ". Install the update when it has finished."
 }
 
+// updateIdle is whether an update would interrupt nothing: no holder of
+// the drive would have to stop, even at a safe point. An update that waits
+// for an idle Mac waits for this rather than for updateRefusal's "".
+func updateIdle(v ejectVerdict) bool { return v.Verdict == verdictSafe }
+
 // leaseLabel names a lease's work for people: "Capture (Terminal), in
 // another process (pharos capture)".
 func leaseLabel(info leaseInfo) string {

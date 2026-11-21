@@ -188,15 +188,16 @@ func TestBrokerCleansDeadAppLeases(t *testing.T) {
 
 // A release for an update refuses before stopping anything while a broker
 // operation runs or a library's service says its work cannot stop in time.
+// GET asks the same, and whether the update would interrupt nothing.
 func TestBrokerUpdateReleaseAsksEveryLibraryFirst(t *testing.T) {
 	refusal := "Pharos is running work that cannot stop in time: prepare the library. Install the update when it has finished."
-	busy := true
+	busy, working := true, true
 	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/release" || r.URL.Query().Get("for") != "update" || r.Header.Get("Authorization") != "Bearer child-token" {
 			http.Error(w, "no", http.StatusNotFound)
 			return
 		}
-		answer := map[string]any{"releasable": !busy}
+		answer := map[string]any{"releasable": !busy, "idle": !busy && !working}
 		if busy {
 			answer["error"] = refusal
 		}
@@ -213,15 +214,43 @@ func TestBrokerUpdateReleaseAsksEveryLibraryFirst(t *testing.T) {
 		m.ServeHTTP(response, request)
 		return response
 	}
+	check := func() (releasable, idle bool, reason string) {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, "/api/release?for=update", nil)
+		request.Header.Set("Authorization", "Bearer broker-token")
+		response := httptest.NewRecorder()
+		m.ServeHTTP(response, request)
+		var answer struct {
+			Releasable, Idle bool
+			Error            string
+		}
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &answer) != nil {
+			t.Fatalf("check: %d %s", response.Code, response.Body.String())
+		}
+		return answer.Releasable, answer.Idle, answer.Error
+	}
 	transfer := m.operations.begin(OperationSpec{Kind: "library.transfer", Variant: "move"}, "a")
+	if releasable, idle, reason := check(); releasable || idle || !strings.Contains(reason, "move library") {
+		t.Fatalf("check during a move: %v %v %q", releasable, idle, reason)
+	}
 	if response := release(); response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "move library") || m.released {
 		t.Fatalf("update release during a move: %d %s (released %v)", response.Code, response.Body.String(), m.released)
 	}
 	transfer.Finish(nil)
+	if releasable, idle, reason := check(); releasable || idle || reason != refusal {
+		t.Fatalf("check while the library is busy: %v %v %q", releasable, idle, reason)
+	}
 	if response := release(); response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), refusal) || m.released {
 		t.Fatalf("update release while the library is busy: %d %s (released %v)", response.Code, response.Body.String(), m.released)
 	}
 	busy = false
+	if releasable, idle, _ := check(); !releasable || idle {
+		t.Fatalf("check while the library's work would stop at a safe point: %v %v", releasable, idle)
+	}
+	working = false
+	if releasable, idle, _ := check(); !releasable || !idle || m.released {
+		t.Fatalf("check once nothing runs: %v %v (released %v)", releasable, idle, m.released)
+	}
 	if response := release(); response.Code != http.StatusOK || !m.released {
 		t.Fatalf("update release once nothing is busy: %d %s", response.Code, response.Body.String())
 	}

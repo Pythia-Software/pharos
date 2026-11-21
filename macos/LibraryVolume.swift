@@ -120,6 +120,27 @@ final class LibraryVolumeMonitor {
     }
 }
 
+/// A service's answer to GET /api/release?for=update. `releasable`: every
+/// holder stops at a safe point in time, as an explicit install requires.
+/// `idle`: nothing would have to stop at all.
+struct UpdateReadiness: Equatable {
+    var releasable: Bool
+    var idle: Bool
+    var reason: String? = nil
+
+    init(releasable: Bool, idle: Bool, reason: String? = nil) {
+        self.releasable = releasable
+        self.idle = idle
+        self.reason = reason
+    }
+
+    init?(json: Data) {
+        guard let answer = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
+              let releasable = answer["releasable"] as? Bool else { return nil }
+        self.init(releasable: releasable, idle: releasable && answer["idle"] as? Bool == true, reason: answer["error"] as? String)
+    }
+}
+
 /// Asks a library's service to let go of its catalog (POST /api/release).
 enum ServiceClient {
     enum Release: Equatable {
@@ -139,6 +160,25 @@ enum ServiceClient {
     /// take longer than an eject's release.
     static func releaseForUpdate(_ service: URL, token: String) -> Release {
         release(service, token: token, timeout: 30, query: "for=update")
+    }
+
+    /// Before an update that waits for an idle Mac: GET /api/release?for=update
+    /// asks the same check without stopping anything, and whether stopping
+    /// would interrupt nothing at all. nil when the service did not say.
+    static func updateReadiness(_ service: URL, token: String, timeout: TimeInterval = 20,
+                                completion: @escaping (UpdateReadiness?) -> Void) {
+        var components = URLComponents(url: service, resolvingAgainstBaseURL: false)
+        components?.path = "/api/release"
+        components?.query = "for=update"
+        guard let url = components?.url else { completion(nil); return }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let session = URLSession(configuration: .ephemeral)
+        session.dataTask(with: request) { data, response, _ in
+            session.finishTasksAndInvalidate()
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { completion(nil); return }
+            completion(UpdateReadiness(json: data ?? Data()))
+        }.resume()
     }
 
     /// The reason in a refused release's JSON answer, if it gave one.

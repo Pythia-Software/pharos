@@ -29,7 +29,8 @@ test('app updates distinguish available releases from download and install progr
   assert.equal(available.icon, 'download');
   assert.equal(available.progress, null);
   assert.ok(available.title.includes('12.123.456-beta.123'));
-  assert.match(available.title, /restart/);
+  assert.match(available.title, /restart/i);
+  assert.match(available.title, /idle/);
   for (const phase of ['downloading', 'preparing', 'installing']) {
     assert.equal(present({version: '0.8.0', phase}).busy, true);
   }
@@ -45,6 +46,21 @@ test('app updates distinguish available releases from download and install progr
   assert.match(preparing.title, /Verifying and preparing.*0\.8\.0/);
   assert.equal(present({version: '0.8.0', phase: 'installing'}).icon, 'restart');
   assert.match(present({version: '0.8.0', phase: 'installing'}).title, /Installing.*0\.8\.0.*restarting/);
+});
+
+test('app updates install now or once this Mac is idle', () => {
+  const present = state => plain(library.appUpdatePresentation(state));
+  const actions = state => present(state).actions.map(action => action.id);
+  assert.deepEqual(actions({version: '0.8.0', phase: 'available'}), ['install', 'installWhenIdle']);
+  for (const phase of ['downloading', 'preparing', 'installing']) assert.deepEqual(actions({version: '0.8.0', phase}), []);
+  const waiting = present({version: '0.8.0', phase: 'waiting', whenIdle: true});
+  assert.equal(waiting.busy, false, 'a waiting update can still install now or stop waiting');
+  assert.equal(waiting.icon, 'clock');
+  assert.deepEqual(waiting.actions.map(action => action.id), ['install', 'stopWaiting']);
+  assert.match(waiting.title, /0\.8\.0.*idle/);
+  assert.match(present({version: '0.8.0', phase: 'downloading', whenIdle: true}).title, /Downloading.*idle/);
+  assert.match(present({version: '0.8.0', phase: 'preparing', whenIdle: true}).title, /preparing.*idle/);
+  assert.doesNotMatch(present({version: '0.8.0', phase: 'downloading'}).title, /idle/);
 });
 
 test('library copy actions use host services and keep copy failures visible', async () => {

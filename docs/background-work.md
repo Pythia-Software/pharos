@@ -202,9 +202,13 @@ cancellation, so locks and ordering do not change.
   stopping nothing, while the verdict over this process's own work is `busy`
   or `unsafe` (`updateInputs`: another process's leases, operations and
   capture locks do not count, since the drive stays mounted).
-  `GET /api/release?for=update` runs only that check; the broker's
-  `POST /api/release?for=update` refuses while one of its own operations
-  runs, and asks every running library's service before it stops any.
+  `GET /api/release?for=update` runs only that check, and also answers
+  `idle`: the verdict is `safe`, so the update would interrupt nothing, not
+  even work that stops at a safe point. The app's **Update when idle** waits
+  for it. The broker answers the same GET over its own operations and every
+  running library's answer. Its `POST /api/release?for=update` refuses while
+  one of its own operations runs, and asks every running library's service
+  before it stops any.
 - **Request-scoped work.** An operation started inside an HTTP handler
   (`begin` with `r.Context()`) is not cancelled by a release, and the
   release waits for the request (`s.life.requests`). Such an operation must

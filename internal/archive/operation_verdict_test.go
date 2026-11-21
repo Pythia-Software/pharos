@@ -99,20 +99,27 @@ func TestEjectVerdictErrsTowardNotSafe(t *testing.T) {
 func TestUpdateRefusesOnlyWorkItWouldInterrupt(t *testing.T) {
 	terminal := leaseProbe{Path: "/x/a.json", Live: true, Info: &leaseInfo{Instance: "a", Process: "cli:capture", Kinds: []string{"capture.cli"}, Holds: resolveHolds(parseHolds("D:w"))}}
 	foreign := runningView("index.captures", func(view *opView) { view.Foreign, view.SafePoint, view.SafePointSet = true, time.Minute, true })
+	// Idle (an update that waits for an idle Mac) also waits for work that
+	// would stop at a safe point.
 	for _, test := range []struct {
 		name, refusal string
+		idle          bool
 		in            verdictInput
 	}{
-		{"nothing", "", verdictInput{}},
-		{"a batch writer", "", verdictInput{ops: []opView{runningView("index.changes.manual", nil)}}},
-		{"another process", "", verdictInput{ops: []opView{foreign}, leases: []leaseProbe{terminal}, locks: []heldLock{{Kind: "capture", Path: "/c/.capture.lock"}}}},
-		{"a step-latency writer", "in time: prepare the library.", verdictInput{ops: []opView{runningView("catalog.initialize", nil)}}},
-		{"a broker operation", "in time: copy library.", verdictInput{ops: []opView{runningView("library.transfer", func(view *opView) { view.Spec.Variant = "copy" })}}},
-		{"unregistered work", "in time: indexing sources.", verdictInput{unregistered: []string{"Indexing sources"}}},
+		{"nothing", "", true, verdictInput{}},
+		{"a batch writer", "", false, verdictInput{ops: []opView{runningView("index.changes.manual", nil)}}},
+		{"another process", "", true, verdictInput{ops: []opView{foreign}, leases: []leaseProbe{terminal}, locks: []heldLock{{Kind: "capture", Path: "/c/.capture.lock"}}}},
+		{"a step-latency writer", "in time: prepare the library.", false, verdictInput{ops: []opView{runningView("catalog.initialize", nil)}}},
+		{"a broker operation", "in time: copy library.", false, verdictInput{ops: []opView{runningView("library.transfer", func(view *opView) { view.Spec.Variant = "copy" })}}},
+		{"unregistered work", "in time: indexing sources.", false, verdictInput{unregistered: []string{"Indexing sources"}}},
 	} {
-		got := updateRefusal(computeEjectVerdict(updateInputs(test.in)))
+		verdict := computeEjectVerdict(updateInputs(test.in))
+		got := updateRefusal(verdict)
 		if test.refusal == "" && got != "" || test.refusal != "" && !strings.Contains(got, test.refusal) {
 			t.Errorf("%s: %q; want %q", test.name, got, test.refusal)
+		}
+		if idle := updateIdle(verdict); idle != test.idle {
+			t.Errorf("%s: idle %v; want %v", test.name, idle, test.idle)
 		}
 	}
 }

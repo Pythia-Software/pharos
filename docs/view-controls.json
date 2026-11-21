@@ -1933,6 +1933,15 @@
       "reason": "Settings, diagnostics or feedback editing are explicitly excluded."
     },
     {
+      "key": "3eb7e14bcdf135bf:0",
+      "file": "internal/archive/assets/library.js",
+      "owner": "renderAppUpdate",
+      "tag": "button",
+      "control": "'button', ''",
+      "contract": "transient",
+      "reason": "The app update menu's items (restart and update now, update when idle, stop waiting) are a transient action menu that starts a native update action; the menu and the update are not view state."
+    },
+    {
       "key": "7fab2ce7b03c27bf:0",
       "file": "internal/archive/assets/library.js",
       "owner": "renderDriveHealth",

@@ -4,12 +4,16 @@ import SwiftUI
 
 struct HeaderUpdateState: Equatable {
     var version = ""
+    /// available, downloading, preparing, waiting (for an idle Mac) or installing.
     var phase = ""
     var progress: Int? = nil
+    /// The person chose to install once this Mac is idle, not at once.
+    var whenIdle = false
 
     var dictionary: [String: Any] {
         var value: [String: Any] = ["version": version, "phase": phase]
         if let progress { value["progress"] = progress }
+        if whenIdle { value["whenIdle"] = true }
         return value
     }
 }
@@ -17,21 +21,32 @@ struct HeaderUpdateState: Equatable {
 /// Keep Sparkle's native UI, retaining only its public cancellation/reply
 /// callbacks. A dismissed install-on-quit is resumed through checkForUpdates
 /// before replying Skip; merely clearing our flag would leave it armed.
+/// Install When Idle holds Sparkle's ready-to-install reply, with no native
+/// alert, until UpdateNotice finds this Mac idle; the header can still
+/// install at once or stop waiting.
 @MainActor final class UpdateUserDriver: SPUStandardUserDriver {
     var deferring = false
     var resumingInstallation = false
     var cancellation: (() -> Void)?
     var didCancel: (() -> Void)?
-    var prepareInstallation: ((@escaping (Error?) -> Void) -> Void)?
+    /// Prepares Pharos's processes for replacement. The Bool is true for an
+    /// install the idle watcher started, which reports no failure: it waits.
+    var prepareInstallation: ((Bool, @escaping (Error?) -> Void) -> Void)?
     var stateChanged: ((HeaderUpdateState) -> Void)?
     private(set) var headerState = HeaderUpdateState() {
         didSet { if headerState != oldValue { stateChanged?(headerState) } }
     }
     private var headerInstall: (() -> Void)?
+    private var headerWhenIdle: (() -> Void)?
+    private var idleInstall: (() -> Void)?
     private var installInOneClick = false
+    private var installWhenIdle = false
     private var expectedLength: UInt64 = 0
     private var receivedLength: UInt64 = 0
     private var generation = UUID()
+
+    /// A downloaded update waits for an idle Mac.
+    var waitingForIdle: Bool { idleInstall != nil && !deferring }
 
     private func choice(installing: Bool, offerInHeader: Bool = false, reply: @escaping (SPUUserUpdateChoice) -> Void,
                         present: (@escaping (SPUUserUpdateChoice) -> Void) -> Void) {
@@ -42,6 +57,8 @@ struct HeaderUpdateState: Equatable {
             self.generation = UUID()
             self.cancellation = nil
             self.headerInstall = nil
+            self.headerWhenIdle = nil
+            self.idleInstall = nil
             if choice != .install { self.clearHeaderUpdate() }
             else { self.headerState.phase = installing ? "installing" : "downloading" }
             if choice == .skip { self.didCancel?() }
@@ -49,33 +66,71 @@ struct HeaderUpdateState: Equatable {
         }
         cancellation = { answer(installing ? .skip : .dismiss) }
         if deferring { cancellation?(); return }
-        let respond: (SPUUserUpdateChoice) -> Void = { [weak self] choice in
-            guard let self, self.generation == token else { return }
-            if choice == .install {
-                self.headerInstall = nil
-                self.headerState.phase = installing ? "installing" : "downloading"
-            }
-            if choice == .install, installing, let prepare = self.prepareInstallation {
-                // Do not ask Sparkle to terminate until replacement is safe.
-                prepare { error in
-                    if let error { NSLog("Pharos update deferred: %@", error.localizedDescription) }
-                    answer(error == nil ? .install : .skip)
-                }
-            } else { answer(choice) }
+        weak var owner = self
+        func current() -> UpdateUserDriver? {
+            guard let driver = owner, driver.generation == token else { return nil }
+            return driver
         }
-        if offerInHeader {
-            headerInstall = { [weak self] in
-                guard let self, self.generation == token else { return }
-                self.headerInstall = nil
-                self.installInOneClick = true
-                self.headerState.phase = installing ? "installing" : "downloading"
-                respond(.install)
+        // Install now, or (before download) start downloading. `idle`: the
+        // idle watcher asked; a refusal keeps waiting instead of skipping.
+        func install(idle: Bool) {
+            guard let driver = current() else { return }
+            driver.headerInstall = nil
+            driver.headerWhenIdle = nil
+            driver.idleInstall = nil
+            driver.headerState.phase = installing ? "installing" : "downloading"
+            guard installing, let prepare = driver.prepareInstallation else { answer(.install); return }
+            // Do not ask Sparkle to terminate until replacement is safe.
+            prepare(idle) { error in
+                guard let error else { answer(.install); return }
+                NSLog("Pharos update deferred: %@", error.localizedDescription)
+                if idle, let driver = current(), !driver.deferring { waitForIdle() }
+                else { answer(.skip) }
             }
-            headerState.phase = "available"
         }
-        if installing && installInOneClick { respond(.install) }
-        else { present(respond) }
+        func offer() {
+            guard let driver = current() else { return }
+            driver.headerInstall = {
+                guard let driver = current() else { return }
+                driver.installInOneClick = true
+                driver.installWhenIdle = false
+                driver.headerState.whenIdle = false
+                install(idle: false)
+            }
+            driver.headerWhenIdle = {
+                guard let driver = current() else { return }
+                driver.installWhenIdle = true
+                driver.headerState.whenIdle = true
+                if installing { waitForIdle() } else { install(idle: false) }
+            }
+        }
+        func waitForIdle() {
+            guard let driver = current() else { return }
+            offer()
+            driver.idleInstall = { install(idle: true) }
+            driver.headerState.progress = nil
+            driver.headerState.phase = "waiting"
+            // Sparkle's status window would otherwise sit at "Ready to Install".
+            driver.closeNativeUpdateUI()
+        }
+        let respond: (SPUUserUpdateChoice) -> Void = { choice in
+            guard current() != nil else { return }
+            if choice == .install { install(idle: false) } else { answer(choice) }
+        }
+        if installing && installInOneClick {
+            install(idle: false)
+        } else if installing && installWhenIdle && !headerState.version.isEmpty {
+            waitForIdle()
+        } else {
+            if offerInHeader {
+                offer()
+                headerState.phase = "available"
+            }
+            present(respond)
+        }
     }
+
+    private func closeNativeUpdateUI() { super.dismissUpdateInstallation() }
 
     @discardableResult func installFromHeader() -> Bool {
         guard !deferring, let install = headerInstall else { return false }
@@ -87,11 +142,40 @@ struct HeaderUpdateState: Equatable {
         return true
     }
 
+    /// Download now if needed, then wait for UpdateNotice's idle watcher.
+    @discardableResult func installWhenIdleFromHeader() -> Bool {
+        guard !deferring, let whenIdle = headerWhenIdle else { return false }
+        if headerState.phase == "waiting" { return true }
+        super.dismissUpdateInstallation()
+        whenIdle()
+        return true
+    }
+
+    /// Keeps the downloaded update offered in the header, without waiting.
+    @discardableResult func stopWaitingForIdle() -> Bool {
+        guard !deferring, idleInstall != nil else { return false }
+        idleInstall = nil
+        installWhenIdle = false
+        headerState.whenIdle = false
+        headerState.phase = "available"
+        return true
+    }
+
+    /// The idle watcher found this Mac idle: install the held update.
+    @discardableResult func installHeldUpdate() -> Bool {
+        guard !deferring, let install = idleInstall else { return false }
+        install()
+        return true
+    }
+
     func clearHeaderUpdate() {
         generation = UUID()
         cancellation = nil
         headerInstall = nil
+        headerWhenIdle = nil
+        idleInstall = nil
         installInOneClick = false
+        installWhenIdle = false
         headerState = HeaderUpdateState()
     }
 
@@ -173,8 +257,15 @@ struct HeaderUpdateState: Equatable {
     private(set) var installationPending = false
     private(set) var installationPrepared = false
     private(set) var preparingInstallation = false
-    var prepareInstallation: ((@escaping (Error?) -> Void) -> Void)?
+    /// Prepares Pharos's processes for replacement; true for an install the
+    /// idle watcher started, whose failure is not shown (it keeps waiting).
+    var prepareInstallation: ((Bool, @escaping (Error?) -> Void) -> Void)?
     var cancelInstallationPreparation: (() -> Void)?
+    /// What an update would interrupt now (ArchiveService.updateReadiness).
+    var updateReadiness: ((@escaping (UpdateReadiness?) -> Void) -> Void)?
+    var userAwaySeconds: () -> TimeInterval = IdleUpdatePolicy.userAwaySeconds
+    private var idleTimer: Timer?
+    private var checkingIdle = false
     private var started = false
     private var observations: [NSKeyValueObservation] = []
     private var deferrals: [(Error?) -> Void] = []
@@ -192,14 +283,17 @@ struct HeaderUpdateState: Equatable {
     }
     private lazy var driver: UpdateUserDriver = {
         let driver = UpdateUserDriver(hostBundle: .main, delegate: nil)
-        driver.stateChanged = { [weak self] in self?.headerState = $0 }
+        driver.stateChanged = { [weak self] state in
+            self?.headerState = state
+            self?.watchForIdle(state.phase == "waiting")
+        }
         driver.didCancel = { [weak self] in self?.cancellationSent = true }
-        driver.prepareInstallation = { [weak self] completion in
+        driver.prepareInstallation = { [weak self] idle, completion in
             guard let self, let prepare = self.prepareInstallation else {
                 completion(UpdateFailure(message: "Pharos cannot prepare the update right now.")); return
             }
             self.preparingInstallation = true
-            prepare { error in
+            prepare(idle) { error in
                 self.preparingInstallation = false
                 self.installationPrepared = error == nil
                 completion(error)
@@ -242,6 +336,38 @@ struct HeaderUpdateState: Equatable {
         updater.checkForUpdates()
     }
     func installFromHeader() -> Bool { driver.installFromHeader() }
+    func installWhenIdleFromHeader() -> Bool { driver.installWhenIdleFromHeader() }
+    func stopWaitingForIdle() -> Bool { driver.stopWaitingForIdle() }
+
+    /// While a downloaded update waits for an idle Mac, look once a minute.
+    private func watchForIdle(_ waiting: Bool) {
+        guard waiting else { idleTimer?.invalidate(); idleTimer = nil; return }
+        guard idleTimer == nil else { return }
+        let timer = Timer(timeInterval: IdleUpdatePolicy.interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkIdle() }
+        }
+        timer.tolerance = 15
+        RunLoop.main.add(timer, forMode: .common)
+        idleTimer = timer
+    }
+
+    /// Installs the waiting update when IdleUpdatePolicy allows. Asks the
+    /// service only once the person has been away long enough.
+    func checkIdle(completion: (() -> Void)? = nil) {
+        guard driver.waitingForIdle, deferrals.isEmpty, !checkingIdle, !preparingInstallation,
+              userAwaySeconds() >= IdleUpdatePolicy.away, let probe = updateReadiness else { completion?(); return }
+        checkingIdle = true
+        probe { [weak self] readiness in
+            guard let self else { return }
+            self.checkingIdle = false
+            // Ask again: the person may have come back while the service answered.
+            if self.driver.waitingForIdle, self.deferrals.isEmpty,
+               IdleUpdatePolicy.mayInstall(awaySeconds: self.userAwaySeconds(), readiness: readiness) {
+                self.driver.installHeldUpdate()
+            }
+            completion?()
+        }
+    }
     func setAutomaticChecks(_ enabled: Bool) { updater.automaticallyChecksForUpdates = enabled }
     func setAutomaticDownloads(_ enabled: Bool) { updater.automaticallyDownloadsUpdates = enabled }
 
@@ -392,13 +518,14 @@ struct UpdateCommands: Commands {
             updates.deferInstallation(completion: completion)
         }
         service.resumeUpdates = { [weak updates] in updates?.resumeAfterFailedEject() }
-        updates.prepareInstallation = { [weak self, weak service] completion in
+        updates.prepareInstallation = { [weak self, weak service] idle, completion in
             guard let service else { completion(UpdateFailure(message: "Pharos is closing.")); return }
             // An explicit install waits for work that cannot stop in time,
-            // as an eject does, and says why it did not install.
+            // as an eject does, and says why it did not install. One that
+            // waits for an idle Mac keeps waiting instead.
             service.prepareToTerminate(installing: true, unlessBusy: true) { error in
                 completion(error)
-                if let error {
+                if let error, !idle {
                     DispatchQueue.main.async {
                         self?.showFailure(error, title: "The update was not installed",
                                           next: "To try again, choose Pharos → Check for Updates…")
@@ -407,6 +534,10 @@ struct UpdateCommands: Commands {
             }
         }
         updates.cancelInstallationPreparation = { [weak service] in service?.cancelUpdatePreparation() }
+        updates.updateReadiness = { [weak service] completion in
+            guard let service else { completion(nil); return }
+            service.updateReadiness(completion: completion)
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

@@ -35,13 +35,15 @@ test('host adapter preserves legacy payloads, reply objects and one-way dispatch
   assert.equal(await host.folders.chooseLibraryFolder(), '/Volumes/Archive');
   assert.equal(await host.updates.status(), update);
   assert.equal(await host.updates.install(), update);
+  assert.equal(await host.updates.installWhenIdle(), update);
+  assert.equal(await host.updates.stopWaiting(), update);
   assert.deepEqual(plain(await host.lifecycle.requestEject()), {released: true});
   assert.deepEqual(plain(host.menu.applyPreferences({enabled: true, order: ['open', 'quit']})), {dispatched: true});
   assert.deepEqual(plain(host.menu.refreshUsage()), {dispatched: true});
   assert.deepEqual(plain(await host.dictation.status()), {available: true});
   assert.deepEqual(sent, [
     ['clipboard', 'hello'], ['library', {action: 'chooseFolder'}],
-    ['updates', {action: 'status'}], ['updates', {action: 'install'}],
+    ['updates', {action: 'status'}], ['updates', {action: 'install'}], ['updates', {action: 'installWhenIdle'}], ['updates', {action: 'stopWaiting'}],
     ['library', {action: 'eject'}], ['menu', {enabled: true, order: ['open', 'quit']}], ['menu', {refreshUsage: true}],
     ['dictation', {action: 'status'}],
   ]);

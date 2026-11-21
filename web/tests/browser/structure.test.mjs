@@ -167,8 +167,9 @@ async function publishAppUpdate(page, state) {
   await page.evaluate(state => {
     window.pharosUpdateFixture = state;
     window.webkit = {messageHandlers: {pharosUpdates: {postMessage: async ({action}) => {
-      if (action === 'install') {
-        window.pharosUpdateFixture = {...window.pharosUpdateFixture, phase: 'downloading'};
+      const next = {install: {phase: 'downloading'}, installWhenIdle: {phase: 'downloading', whenIdle: true}, stopWaiting: {phase: 'available', whenIdle: false}}[action];
+      if (next) {
+        window.pharosUpdateFixture = {...window.pharosUpdateFixture, ...next};
         dispatchEvent(new CustomEvent('pharos:app-update', {detail: window.pharosUpdateFixture}));
       }
       return window.pharosUpdateFixture;
@@ -1310,12 +1311,30 @@ for (const width of [1440, 320]) test(`Pharos release action fits through downlo
   const updateWidth = (await page.locator('#pharosAppUpdate').boundingBox()).width;
   await page.locator('#pharosAppUpdate').hover();
   await shot('release-available');
-  await page.locator('#pharosAppUpdate').click();
-  await reveal();
+  // The release action offers restarting now or once this Mac is idle, in
+  // a menu that fits beside the header (and over More tools at 320).
+  const choose = async item => {
+    await page.locator('#pharosAppUpdate').click();
+    const menu = page.getByRole('menu', {name: 'Pharos update'});
+    await menu.waitFor();
+    const box = await menu.boundingBox();
+    assert.ok(box.x >= 0 && box.x + box.width <= width, `the update menu fits the viewport: ${JSON.stringify(box)}`);
+    await shot(`menu-${item.source.split(' ')[0].toLowerCase()}`);
+    await menu.getByRole('menuitem', {name: item}).click();
+    await menu.waitFor({state: 'hidden'});
+    await reveal();
+  };
+  await choose(/^Update when idle/);
   await shot('download-started');
+  await publishAppUpdate(page, {version: '0.8.0', phase: 'waiting', whenIdle: true});
+  await reveal();
+  await choose(/^Stop waiting/);
+  assert.equal(await page.locator('#pharosAppUpdate').getAttribute('data-phase'), 'available');
+  await choose(/^Restart and update now/);
   for (const state of [
     {version: '0.8.0', phase: 'downloading', progress: 42},
     {version: '0.8.0', phase: 'preparing'},
+    {version: '0.8.0', phase: 'waiting', whenIdle: true},
     {version: '0.8.0', phase: 'installing'},
     {version: '12.123.456-beta.123', phase: 'available'},
   ]) {

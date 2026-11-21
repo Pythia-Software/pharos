@@ -504,7 +504,7 @@ final class HeaderTestWindow: NSWindow {
                 userDriver = driver
                 return StagedUpdater(hostBundle: .main, applicationBundle: .main, userDriver: driver, delegate: delegate)
             }
-            updates.prepareInstallation = { completion in
+            updates.prepareInstallation = { _, completion in
                 service.prepareToTerminate(installing: true, completion: completion)
             }
             var recoveries = 0
@@ -515,7 +515,7 @@ final class HeaderTestWindow: NSWindow {
             updates.check() // Creates the injected updater without network or helpers.
             updates.updater(updater, willInstallUpdate: item)
             var prepared = false
-            userDriver.prepareInstallation? { error in
+            userDriver.prepareInstallation?(false) { error in
                 expect(error == nil, "the installation handoff must succeed before testing a Sparkle failure")
                 prepared = true
             }
@@ -571,7 +571,7 @@ final class HeaderTestWindow: NSWindow {
         expect(downloadChoices == [.install], "native and header controls share a single-use reply")
         var preparation: ((Error?) -> Void)?
         var installChoices: [SPUUserUpdateChoice] = []
-        headerDriver.prepareInstallation = { preparation = $0 }
+        headerDriver.prepareInstallation = { preparation = $1 }
         headerDriver.showReady(toInstallAndRelaunch: { installChoices.append($0) })
         expect(preparation != nil && installChoices.isEmpty, "one-click installation waits for Pharos's process handoff")
         preparation?(nil)
@@ -593,8 +593,99 @@ final class HeaderTestWindow: NSWindow {
         }
         headerDriver.deferring = false
         headerDriver.offerUpdate(version: "", installing: false, reply: { _ in }, present: { nativeReply = $0 })
-        expect(!headerDriver.installFromHeader(), "information-only releases cannot start an install")
+        expect(!headerDriver.installFromHeader() && !headerDriver.installWhenIdleFromHeader(), "information-only releases cannot start an install")
         nativeReply?(.dismiss)
+
+        // Install When Idle downloads at once, then holds Sparkle's
+        // ready-to-install reply, with no native alert, until the idle
+        // watcher installs it quietly. A refusal keeps waiting; the header
+        // can still stop waiting or install at once.
+        var quietly: [Bool] = []
+        headerDriver.prepareInstallation = { quietly.append($0); preparation = $1 }
+        preparation = nil
+        downloadChoices = []
+        installChoices = []
+        headerDriver.offerUpdate(version: "1.0.0", installing: false, reply: { downloadChoices.append($0) }, present: { nativeReply = $0 })
+        expect(headerDriver.installWhenIdleFromHeader(), "the header starts the download for an idle install")
+        expect(downloadChoices == [.install] && headerDriver.headerState.whenIdle && headerDriver.headerState.phase == "downloading",
+               "an idle install downloads at once and says it will wait: \(headerDriver.headerState)")
+        headerDriver.dismissUpdateInstallation()
+        var nativeReady = false
+        headerDriver.offerUpdate(version: "1.0.0", installing: true, reply: { installChoices.append($0) }, present: { _ in nativeReady = true })
+        expect(nativeReady, "a staged update offered afresh shows Sparkle's alert")
+        expect(headerDriver.installWhenIdleFromHeader() && headerDriver.waitingForIdle && headerDriver.headerState.phase == "waiting",
+               "a staged update can wait for an idle Mac")
+        headerDriver.dismissUpdateInstallation()
+        expect(!headerDriver.waitingForIdle && installChoices.isEmpty, "session completion ends the wait")
+        installChoices = []
+        headerDriver.offerUpdate(version: "1.0.0", installing: false, reply: { _ in }, present: { nativeReply = $0 })
+        expect(headerDriver.installWhenIdleFromHeader(), "the header starts another download for an idle install")
+        headerDriver.showReady(toInstallAndRelaunch: { installChoices.append($0) })
+        expect(headerDriver.waitingForIdle && headerDriver.headerState.phase == "waiting" && preparation == nil && installChoices.isEmpty,
+               "a downloaded update waits instead of installing or asking again")
+        expect(headerDriver.stopWaitingForIdle() && !headerDriver.waitingForIdle && headerDriver.headerState.phase == "available"
+               && !headerDriver.installHeldUpdate(), "stopping the wait keeps the update offered")
+        expect(headerDriver.installWhenIdleFromHeader() && headerDriver.waitingForIdle, "choosing again waits again")
+        expect(headerDriver.installHeldUpdate() && quietly == [true] && !headerDriver.waitingForIdle, "the idle watcher installs quietly")
+        preparation?(UpdateFailure(message: "test writer still running"))
+        expect(installChoices.isEmpty && headerDriver.waitingForIdle && headerDriver.headerState.phase == "waiting",
+               "a refused idle install keeps waiting rather than skipping")
+        preparation = nil
+        expect(headerDriver.installFromHeader() && quietly == [true, false], "the header still installs at once while waiting")
+        preparation?(nil)
+        expect(installChoices == [.install], "installing at once answers Sparkle once")
+        headerDriver.dismissUpdateInstallation()
+        headerDriver.offerUpdate(version: "1.0.1", installing: true, reply: { installChoices.append($0) }, present: { _ in })
+        expect(headerDriver.installWhenIdleFromHeader() && headerDriver.waitingForIdle, "a staged update waits again")
+        headerDriver.cancellation?()
+        expect(installChoices.last == .skip && !headerDriver.waitingForIdle && headerDriver.headerState.version.isEmpty,
+               "Quit or Eject cancels a waiting update as it does an offered one")
+
+        // The policy: away long enough, and nothing to interrupt, or after a
+        // long absence work that stops at a safe point in time.
+        let idle = UpdateReadiness(releasable: true, idle: true), safePoint = UpdateReadiness(releasable: true, idle: false)
+        expect(!IdleUpdatePolicy.mayInstall(awaySeconds: IdleUpdatePolicy.away - 1, readiness: idle), "someone using this Mac postpones an idle install")
+        expect(IdleUpdatePolicy.mayInstall(awaySeconds: IdleUpdatePolicy.away, readiness: idle), "an idle Mac and idle Pharos install")
+        expect(!IdleUpdatePolicy.mayInstall(awaySeconds: IdleUpdatePolicy.away, readiness: safePoint), "running work postpones a short absence's install")
+        expect(IdleUpdatePolicy.mayInstall(awaySeconds: IdleUpdatePolicy.longAway, readiness: safePoint), "work that never pauses cannot postpone it forever")
+        expect(!IdleUpdatePolicy.mayInstall(awaySeconds: .infinity, readiness: UpdateReadiness(releasable: false, idle: false)),
+               "work that cannot stop in time always postpones it")
+        expect(!IdleUpdatePolicy.mayInstall(awaySeconds: .infinity, readiness: nil), "a service that cannot say postpones it")
+        expect(UpdateReadiness(json: Data(#"{"releasable":true,"idle":true,"error":null}"#.utf8)) == idle
+               && UpdateReadiness(json: Data(#"{"releasable":true}"#.utf8)) == safePoint
+               && UpdateReadiness(json: Data(#"{"releasable":false,"idle":true,"error":"busy"}"#.utf8)) == UpdateReadiness(releasable: false, idle: false, reason: "busy")
+               && UpdateReadiness(json: Data("{}".utf8)) == nil, "the service's readiness answer parses conservatively")
+
+        // The controller asks the service only once the person is away, and
+        // installs the waiting update only when the policy allows.
+        var idleDriver: UpdateUserDriver!
+        let idleUpdates = UpdateNotice { driver, delegate in
+            idleDriver = driver
+            return StagedUpdater(hostBundle: .main, applicationBundle: .main, userDriver: driver, delegate: delegate)
+        }
+        var probes = 0, answer: UpdateReadiness? = safePoint, away: TimeInterval = 0, idlePrepared = 0
+        idleUpdates.updateReadiness = { probes += 1; $0(answer) }
+        idleUpdates.userAwaySeconds = { away }
+        idleUpdates.prepareInstallation = { quiet, completion in
+            expect(quiet, "the idle watcher's install is quiet")
+            idlePrepared += 1
+            completion(UpdateFailure(message: "test: still refusing"))
+        }
+        idleUpdates.check() // Creates the injected updater without network or helpers.
+        idleDriver.offerUpdate(version: "1.1.0", installing: true, reply: { _ in }, present: { _ in })
+        expect(idleUpdates.installWhenIdleFromHeader() && idleUpdates.headerState.phase == "waiting", "the controller publishes the wait")
+        idleUpdates.checkIdle()
+        expect(probes == 0, "nobody away: the service is not asked")
+        away = IdleUpdatePolicy.away
+        idleUpdates.checkIdle()
+        expect(probes == 1 && idlePrepared == 0, "away, with work running: wait")
+        answer = idle
+        idleUpdates.checkIdle()
+        expect(probes == 2 && idlePrepared == 1 && idleDriver.waitingForIdle, "away and idle: install, and a refusal waits again")
+        expect(idleUpdates.stopWaitingForIdle(), "the controller stops waiting")
+        idleUpdates.checkIdle()
+        expect(probes == 2, "no waiting update: the service is not asked")
+        idleDriver.clearHeaderUpdate()
 
         // Exercise the actual update controller: dismissing a staged update
         // preserves install-on-quit, while Skip cancels without an error callback.
