@@ -144,7 +144,8 @@ leaves that task and its schedule unspecified. Capture rows carry `task_id`
 Preserve originals, which indexes every Mac's captures; when this Mac's Other
 sources task also reads the source in full, `task_ids` lists both and the modal
 uses whichever has the earlier planned run, since only the schedule knows which
-comes first.
+comes first. A kind whose tool deletes its older conversations (Antigravity) is
+captured hourly by Preserve expiring originals, which its rows name first.
 
 Bespoke chart indicators resolve dataset IDs through the same card-source reader
 as saved cards, rather than using schema names. Waiting results depend on the

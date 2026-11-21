@@ -673,6 +673,10 @@ func (l *ledger) captures() {
 		entry.taskID = "preserve"
 		if kind := l.in.sourceKinds[capture.source]; kind != "" && !automaticProvider(kind) && !isConductorSource(kind) {
 			entry.taskIDs = []string{"preserve", "other-sources"}
+		} else if expiringProvider(kind) {
+			// The hourly capture comes first, unless it is set to run only
+			// when asked.
+			entry.taskID, entry.taskIDs = "expiring", []string{"expiring", "preserve"}
 		}
 		for _, task := range append([]string{entry.taskID}, entry.taskIDs...) {
 			if cadence := l.itemCadence(task); cadence != cadenceManual {

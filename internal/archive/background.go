@@ -117,6 +117,9 @@ type backgroundItem struct {
 	Kinds             []string
 	continuous        bool
 	readsWholeSources bool
+	// preservesExpiring items capture the sources whose tools delete older
+	// conversations (expiringProvider).
+	preservesExpiring bool
 	// requiresLabels items run only where labels_enabled is on;
 	// requiresAgentEvents ones only where agent_events_enabled is.
 	requiresLabels      bool
@@ -147,6 +150,8 @@ var backgroundItems = []backgroundItem{
 		Why: "It updates the conversations that changed, as soon as they are added."},
 	{ID: "other-sources", Label: "Other sources", Verb: "Reading other sources", Feeds: "Pages for those sources, such as TL1", Cadence: cadenceHourly, readsWholeSources: true,
 		Kinds: []string{"background.capture/sources"}, Why: "These sources can’t be checked for small changes, so each update reads them in full."},
+	{ID: "expiring", Label: "Preserve expiring originals", Verb: "Preserving expiring originals", Feeds: "Recovery of conversations their tool deletes", Cadence: cadenceHourly, preservesExpiring: true,
+		Kinds: []string{"background.capture/expiring"}, Why: "These tools keep only their newest conversations, so their transcripts are copied into the library before the tool deletes them."},
 	{ID: "preserve", Label: "Preserve originals", Verb: "Preserving originals", Feeds: "Recovery, and history from your other Macs", Cadence: cadenceDaily,
 		Kinds: []string{"background.capture/preserve"}, Why: "Copies this Mac’s transcripts into the library, so they survive tools deleting them, and indexes what your other Macs captured."},
 	{ID: "bucket-import", Label: "Collect from other machines", Verb: "Collecting from other machines", Feeds: "Conversations from sandboxes and other machines that push to your bucket", Cadence: cadenceHourly,
@@ -897,6 +902,9 @@ type backgroundInputs struct {
 	writingRefinementPending     bool
 	upgradePending               bool
 	otherSources                 []string
+	// expiringSources are this Mac's enabled sources whose tools delete
+	// older conversations (expiringProvider).
+	expiringSources []string
 	// backupLocations are the library's backup folders, backupConnected how
 	// many of them can be reached now.
 	backupLocations                []string
@@ -1098,6 +1106,12 @@ func backgroundPlan(settings backgroundSettings, in backgroundInputs, at time.Ti
 			}
 		case item.readsWholeSources:
 			if len(in.otherSources) == 0 {
+				continue
+			}
+			plan.Pending = true
+			standaloneNext(&plan, settings, time.Time{}, at)
+		case item.preservesExpiring:
+			if len(in.expiringSources) == 0 {
 				continue
 			}
 			plan.Pending = true
@@ -1393,6 +1407,9 @@ func (s *Server) backgroundInputsFor(ctx context.Context, requested map[string]b
 	for _, source := range config.Sources {
 		if source.Enabled && !automaticProvider(source.Kind) && !isConductorSource(source.Kind) {
 			in.otherSources = append(in.otherSources, source.Name)
+		}
+		if source.Enabled && expiringProvider(source.Kind) {
+			in.expiringSources = append(in.expiringSources, source.Name)
 		}
 	}
 	backups := s.cachedBackupSchedule(config)

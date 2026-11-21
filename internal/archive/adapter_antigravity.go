@@ -41,7 +41,7 @@ var antigravityProducts = map[string]string{"antigravity": "Antigravity", "antig
 
 // antigravityExtractor versions the parser; bump it when parsing changes so
 // every transcript is parsed again.
-const antigravityExtractor = "antigravity-v3-effort"
+const antigravityExtractor = "antigravity-v4-thinking"
 
 const (
 	antigravitySummaries = "conversation_summaries.db"
@@ -933,6 +933,12 @@ func (a *antigravityAdapter) record(id, path string, summary antigravitySummary,
 				messages = append(messages, item)
 			}
 		case stepType == "PLANNER_RESPONSE":
+			// The step keeps the model's thought summary beside its reply.
+			if thinking := firstString(event["thinking"]); strings.TrimSpace(thinking) != "" {
+				item := base
+				item.NativeID = step + ":thinking"
+				messages = append(messages, reasoningRecord(item, thinking, "summary", ""))
+			}
 			if text := strings.TrimSpace(content); text != "" {
 				item := base
 				item.Role, item.Kind, item.Text = "assistant", "message", text

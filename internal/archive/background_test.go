@@ -354,13 +354,23 @@ func TestBackgroundPlanRunsEachCadenceWhenDue(t *testing.T) {
 	}
 
 	for _, plan := range backgroundPlan(settings(), backgroundInputs{runs: map[string]backgroundRunRow{}}, at) {
-		if plan.ID == "other-sources" {
-			t.Fatalf("with no source read in full there is no other-sources item: %+v", plan)
+		if plan.ID == "other-sources" || plan.ID == "expiring" {
+			t.Fatalf("with no source read in full or expiring there is no item for them: %+v", plan)
 		}
 	}
 	other := backgroundInputs{otherSources: []string{"tl1"}, runs: map[string]backgroundRunRow{"other-sources": {succeeded: ago(65 * time.Minute)}}}
 	if got := plan(settings(), other, "other-sources"); !got.Due || got.Cadence != cadenceHourly {
 		t.Fatalf("sources read in full are read hourly: %+v", got)
+	}
+	// Antigravity deletes its older sessions, so its originals are captured
+	// hourly, not with the daily Preserve originals.
+	expiring := backgroundInputs{expiringSources: []string{"antigravity-cli"}, runs: map[string]backgroundRunRow{"expiring": {succeeded: ago(65 * time.Minute)}}}
+	if got := plan(settings(), expiring, "expiring"); !got.Due || got.Cadence != cadenceHourly {
+		t.Fatalf("expiring sources are captured hourly: %+v", got)
+	}
+	expiring.runs["expiring"] = backgroundRunRow{succeeded: ago(20 * time.Minute)}
+	if got := plan(settings(), expiring, "expiring"); got.Due {
+		t.Fatalf("an hourly capture waits for the hour: %+v", got)
 	}
 }
 
@@ -450,9 +460,9 @@ func TestBackgroundStandaloneCadencesWaitAfterCompletion(t *testing.T) {
 	at := time.Date(2026, 10, 29, 13, 0, 0, 0, time.Local)
 	for _, cadence := range cadences {
 		settings := backgroundSettings{Mode: "on", Interval: 300, DailyAt: defaultDailyAt, Temporary: map[string]temporaryCadence{}}
-		in := backgroundInputs{otherSources: []string{"tl1"}, backupLocations: []string{"/backup"}, backupConnected: 1, lastBackup: formatTime(at.Add(-time.Minute)), upgradePending: true,
+		in := backgroundInputs{otherSources: []string{"tl1"}, expiringSources: []string{"antigravity-cli"}, backupLocations: []string{"/backup"}, backupConnected: 1, lastBackup: formatTime(at.Add(-time.Minute)), upgradePending: true,
 			verificationNext: at.Add(-time.Hour), runs: map[string]backgroundRunRow{}}
-		for _, id := range []string{"search", "preserve", "verification", "other-sources", "upgrade", "backup"} {
+		for _, id := range []string{"search", "preserve", "expiring", "verification", "other-sources", "upgrade", "backup"} {
 			settings.Temporary[id] = temporaryCadence{Cadence: cadence}
 			in.runs[id] = backgroundRunRow{succeeded: formatTime(at.Add(-time.Minute))}
 		}
