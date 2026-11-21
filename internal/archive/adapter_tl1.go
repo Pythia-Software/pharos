@@ -276,23 +276,6 @@ func resolvedPath(path string) string {
 	}
 }
 
-// tl1CapturedFile reports the files under an installation's transcripts
-// directory that the adapter reads, and so a capture copies: agent
-// transcripts (<attempt>-<executor>.jsonl) and procedural attempts' script
-// logs (see tl1LogTail).
-func tl1CapturedFile(name string) bool {
-	name = strings.ToLower(name)
-	if strings.HasSuffix(name, ".jsonl") {
-		return true
-	}
-	for _, suffix := range tl1ScriptLogs {
-		if strings.HasSuffix(name, "-"+suffix) {
-			return true
-		}
-	}
-	return false
-}
-
 func (a *tl1Adapter) Fingerprint() (string, error) {
 	installations, err := a.installations()
 	if err != nil {
@@ -335,10 +318,12 @@ func (a *tl1Adapter) Fingerprint() (string, error) {
 }
 
 // tl1ReadsTranscriptFile reports whether indexing reads a file of this name
-// in a task's transcripts directory: an agent transcript or a script log.
+// in a task's transcripts directory, and so a capture copies: an agent transcript
+// (<attempt>-<executor>.jsonl), the inputs of an agy one (its prompt), or a
+// procedural attempt's script log (see tl1LogTail).
 func tl1ReadsTranscriptFile(name string) bool {
 	name = strings.ToLower(name)
-	if strings.HasSuffix(name, ".jsonl") {
+	if strings.HasSuffix(name, ".jsonl") || strings.HasSuffix(name, tl1AGYInputsSuffix) {
 		return true
 	}
 	for _, suffix := range tl1ScriptLogs {
@@ -350,8 +335,11 @@ func tl1ReadsTranscriptFile(name string) bool {
 }
 
 // v7 keeps every item of a Codex exec file whose item numbering restarts
-// (parseCodexExec), which earlier versions stored under one ID.
-func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v7-codex-item-ids" }
+// (parseCodexExec), which earlier versions stored under one ID. v8 reads agy
+// stream-json transcripts (parseAGYStream), which earlier versions passed to
+// the Claude Code parser and stored without messages. v9 selects the provider
+// from each transcript's filename before falling back to its attempt.
+func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v9-transcript-provider" }
 
 func (a *tl1Adapter) Discover(emit func(WorkspaceRecord) error) error {
 	a.snapshots = nil
@@ -782,13 +770,35 @@ func (a *tl1Adapter) transcript(installation tl1Installation, taskID string, att
 		return ConversationRecord{}, false, nil
 	}
 	provider := "claude"
-	if strings.Contains(strings.ToLower(filename), "codex") || firstString(attempt["executor"]) == "codex" {
+	switch {
+	case tl1AGYTranscript(filename):
+		provider = "antigravity"
+	case strings.Contains(strings.ToLower(filename), "codex"):
 		provider = "codex"
+	case strings.HasSuffix(strings.ToLower(filename), "-claude.jsonl"):
+		provider = "claude"
+	case matchesFold(firstString(attempt["executor"]), "codex"):
+		provider = "codex"
+	case matchesFold(firstString(attempt["executor"]), "agy", "antigravity"):
+		provider = "antigravity"
 	}
-	model := firstString(attempt["model"])
+	model, effort := firstString(attempt["model"]), recordedEffort(attempt)
+	if provider == "antigravity" {
+		var level string
+		if model, level = agyModel(model); effort == "" {
+			effort = level
+		}
+	}
 	origin := a.originalOf(installation, path)
 	var source ConversationRecord
-	if provider == "codex" && a.files().codexExecTranscript(path) {
+	if provider == "antigravity" && a.files().agyStreamTranscript(path) {
+		inputs := strings.TrimSuffix(path, filepath.Ext(path)) + "-inputs.ndjson"
+		conversation, ok, err := a.files().parseAGYStream(path, origin, inputs)
+		if err != nil || !ok {
+			return ConversationRecord{}, false, err
+		}
+		source = conversation
+	} else if provider == "codex" && a.files().codexExecTranscript(path) {
 		conversation, ok, err := a.files().parseCodexExec(path, origin, recordedEffort(attempt))
 		if err != nil || !ok {
 			return ConversationRecord{}, false, err
@@ -835,6 +845,16 @@ func (a *tl1Adapter) transcript(installation tl1Installation, taskID string, att
 	for index := range source.Messages {
 		if source.Messages[index].Model == "" {
 			source.Messages[index].Model = source.Model
+		}
+	}
+	if provider == "antigravity" && source.Effort == "" {
+		source.Effort = effort
+	}
+	// A transcript the parser found nothing in is in a format it does not
+	// read, not a run with nothing to show.
+	if len(source.Messages) == 0 {
+		if info, err := a.files().Stat(path); err == nil && info.Size() > 0 {
+			source.Coverage = "partial"
 		}
 	}
 	return source, true, nil

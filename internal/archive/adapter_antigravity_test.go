@@ -194,7 +194,7 @@ func TestAntigravityTranscriptsBecomeConversations(t *testing.T) {
 	}
 	want := []string{
 		"step-0 user message ", "step-0:attachments user attachment ", "step-0:context:0 system context ", "step-0:context:1 system context ",
-		"step-1 assistant message ", "step-1:call:0 assistant tool_call step-1:call:0", "step-1:call:1 assistant tool_call step-1:call:1", "step-1:usage system metadata ",
+		"step-1:thinking assistant reasoning ", "step-1 assistant message ", "step-1:call:0 assistant tool_call step-1:call:0", "step-1:call:1 assistant tool_call step-1:call:1", "step-1:usage system metadata ",
 		"step-2 tool tool_result step-1:call:0", "step-3 tool tool_result step-1:call:1",
 		"step-4:call:0 assistant delegation step-4:call:0", "step-4:usage system metadata ", "step-5 tool delegation_result step-4:call:0",
 		"step-6 system metadata ", "step-7 assistant message ", "step-7:usage system metadata ",
@@ -216,8 +216,9 @@ func TestAntigravityTranscriptsBecomeConversations(t *testing.T) {
 	if err := json.Unmarshal([]byte(byID["step-3"].Text), &failed); err != nil || failed["tool"] != "view_file" || failed["is_error"] != true || mapValue(failed["details"])["error"] != "permission denied" {
 		t.Fatalf("failed tool result = %s", byID["step-3"].Text)
 	}
-	if strings.Contains(jsonText(main.Messages), "private reasoning") {
-		t.Fatal("model reasoning was kept")
+	// The step's thought summary is kept as the model's reasoning.
+	if thinking := byID["step-1:thinking"]; thinking.Text != "private reasoning" || thinking.ReasoningFormat != "summary" || thinking.Model != "gemini-3.8-flash" {
+		t.Fatalf("thought summary = %+v", thinking)
 	}
 	if byID["step-0"].Model != "Gemini 3.8 Flash (High)" || byID["step-1"].Model != "gemini-3.8-flash" || byID["step-7:usage"].EvidenceLocator != filepath.Join(dir, "conversations", antigravityRoot+".db")+":gen_metadata:2" {
 		t.Fatalf("models %q %q, usage evidence %q", byID["step-0"].Model, byID["step-1"].Model, byID["step-7:usage"].EvidenceLocator)

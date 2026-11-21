@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -589,6 +590,43 @@ func TestTL1CombinesAProjectAcrossMacs(t *testing.T) {
 }
 
 func TestTL1ReingestCorrectsLegacyProviderInPlace(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		t.Run("AGY previously parsed as "+provider, func(t *testing.T) {
+			catalog, _ := testCatalog(t)
+			registry := tl1Fixture(t, 0)
+			tl1AGYFixture(t, filepath.Dir(registry))
+			adapter, err := MakeAdapter(SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Older parsers wrote this transcript under the fallback provider.
+			if err := adapter.Discover(func(record WorkspaceRecord) error {
+				if record.SourceID == "install-1:task-agy" {
+					for index := range record.Conversations {
+						conversation := &record.Conversations[index]
+						conversation.Provider, conversation.Harness, conversation.Coverage = provider, "claude-code", "complete"
+						conversation.Messages, conversation.Aliases = nil, nil
+					}
+					ingestRecordTx(t, catalog, record)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			const native = "install-1:att-agy:1-agy.jsonl"
+			oldID := stableID("conversation", provider, "local", native)
+			for range 2 {
+				if result := catalog.Ingest(adapter, nil); result.Error != nil {
+					t.Fatal(result.Error)
+				}
+				rows, err := queryMaps(catalog.DB, "SELECT id,provider,(SELECT COUNT(*) FROM messages WHERE conversation_id=c.id) messages FROM conversations c WHERE native_id=?", native)
+				if err != nil || len(rows) != 1 || firstString(rows[0]["id"]) != oldID || rows[0]["provider"] != "antigravity" || integer(rows[0]["messages"]) == 0 {
+					t.Fatalf("AGY upgrade must fill the existing conversation %s: %v, %v", oldID, rows, err)
+				}
+			}
+		})
+	}
+
 	catalog, _ := testCatalog(t)
 	ingestTL1Fixture(t, catalog, 0)
 	native := "install-1:att-impl:1-codex.jsonl"
@@ -860,4 +898,210 @@ func mustTL1Flavor(t *testing.T, catalog *Catalog, name string) map[string]any {
 		t.Fatal(err)
 	}
 	return flavor
+}
+
+// TL1 runs Antigravity agents through the agy CLI, whose stream-json
+// transcript names Antigravity's own conversation. The TL1 conversation reads
+// the stream (prompt, replies, tool calls, per-request usage) and links to the
+// session the Antigravity source indexes, so the run counts once and both sit
+// in the TL1 project.
+func TestTL1AgyTranscriptLinksItsAntigravitySession(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	registry := tl1Fixture(t, 0)
+	root := filepath.Dir(registry)
+	session := tl1AGYFixture(t, root)
+	folder := filepath.Join(root, "transcripts", "task-agy")
+	// An attempt can leave several executors' transcripts. Its executor is
+	// only a fallback when a transcript's filename does not name one.
+	for _, executor := range []string{"codex", "claude", "agy"} {
+		adapter := &tl1Adapter{}
+		conversation, ok, err := adapter.transcript(tl1Installation{ID: "install-1", Transcripts: filepath.Dir(folder)}, "task-agy",
+			map[string]any{"id": "att-agy", "executor": executor, "model": "gpt-5.6-terra"}, "1-agy.jsonl")
+		if err != nil || !ok || conversation.Provider != "antigravity" || conversation.Model != "gemini-4-neon" || len(conversation.Messages) == 0 {
+			t.Fatalf("AGY transcript under %s attempt: provider=%q model=%q messages=%d ok=%v: %v", executor, conversation.Provider, conversation.Model, len(conversation.Messages), ok, err)
+		}
+	}
+	// The session as Antigravity keeps it, run in TL1's transcripts folder.
+	native := filepath.Join(t.TempDir(), "antigravity-cli")
+	antigravityTranscript(t, native, session, "transcript_full.jsonl", antigravitySteps(
+		map[string]any{"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Design the crib.", "created_at": "2026-11-20T22:04:04Z"},
+		map[string]any{"source": "MODEL", "type": "PLANNER_RESPONSE", "thinking": "Read the request first.", "content": "All done.", "created_at": "2026-11-20T22:14:06Z"},
+	))
+	antigravityRequestRows(t, native, session, []any{[]uint64{1}, "gemini-4-neon", 200, 60, 3000, 15})
+	// The native source keeps children in the parent's workspace. The TL1
+	// stream names the parent alone and does not repeat this child's usage.
+	const child = "aaaaaaaa-0000-4000-8000-000000000002"
+	antigravityTranscript(t, native, child, "transcript_full.jsonl", antigravitySteps(
+		map[string]any{"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Check the crib.", "created_at": "2026-11-20T22:05:00Z"},
+		map[string]any{"source": "MODEL", "type": "PLANNER_RESPONSE", "content": "Checked.", "created_at": "2026-11-20T22:06:00Z"},
+	))
+	antigravityRequestRows(t, native, child, []any{[]uint64{1}, "gemini-4-neon", 1000, 100, 0, 0})
+	antigravitySummaryRows(t, native,
+		[]any{session, "Design the crib", jsonText([]string{"file://" + filepath.Join(folder, ".att-agy-ipc-3o7scs7w")}), "", 0, ""},
+		[]any{child, "Check the crib", "[]", session, 1, "checker"})
+
+	ingest := func(source SourceConfig) {
+		t.Helper()
+		adapter, err := MakeAdapter(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result := catalog.Ingest(adapter, nil); result.Error != nil {
+			t.Fatalf("ingest %s: %v", source.Kind, result.Error)
+		}
+	}
+	ingest(SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true})
+	ingest(SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: native, Account: "local", Enabled: true})
+
+	const conversation = "install-1:att-agy:1-agy.jsonl"
+	var provider, model, effort, harness, coverage, workspace string
+	if err := catalog.DB.QueryRow(`SELECT c.provider,c.model,c.effort,c.harness,c.coverage,c.workspace_id FROM conversations c WHERE c.native_id=?`, conversation).Scan(&provider, &model, &effort, &harness, &coverage, &workspace); err != nil {
+		t.Fatal(err)
+	}
+	// The stream reports only a summary of each tool's output.
+	if provider != "antigravity" || model != "gemini-4-neon" || effort != "medium" || harness != "antigravity-cli" || coverage != "partial" {
+		t.Fatalf("agy conversation: provider=%q model=%q effort=%q harness=%q coverage=%q", provider, model, effort, harness, coverage)
+	}
+	rows, err := queryMaps(catalog.DB, `SELECT m.role,m.kind,m.text FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.native_id=? AND m.kind IN ('message','tool_result') ORDER BY m.source_order`, conversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []string{}
+	for _, row := range rows {
+		got = append(got, firstString(row["role"])+": "+firstString(row["text"]))
+	}
+	if len(got) != 4 || got[0] != "user: Design the crib." || !strings.Contains(got[1], "3 lines, 120 bytes") || !strings.Contains(got[2], "file does not exist") || got[3] != "assistant: All done." {
+		t.Fatalf("agy messages: %q", got)
+	}
+	var calls, failed int
+	if err := catalog.DB.QueryRow(`SELECT COUNT(*),COALESCE(SUM(t.status='error'),0) FROM tool_calls t JOIN conversations c ON c.id=t.conversation_id WHERE c.native_id=?`, conversation).Scan(&calls, &failed); err != nil || calls != 2 || failed != 1 {
+		t.Fatalf("tool calls = %d (%d failed), %v", calls, failed, err)
+	}
+	// Input counts cached input, output counts thinking, and the result's
+	// totals fill in what the steps left out.
+	var input, cached, output, reasoning int64
+	if err := catalog.DB.QueryRow(`SELECT s.input_tokens,s.cache_read_input_tokens,s.output_tokens,s.reasoning_output_tokens
+		FROM agent_sessions s JOIN conversations c ON c.id=s.conversation_id WHERE c.native_id=?`, conversation).Scan(&input, &cached, &output, &reasoning); err != nil {
+		t.Fatal(err)
+	}
+	if input != 3200 || cached != 3000 || output != 60 || reasoning != 15 {
+		t.Fatalf("agy usage: input=%d cached=%d output=%d reasoning=%d", input, cached, output, reasoning)
+	}
+	var relationship string
+	if err := catalog.DB.QueryRow(`SELECT l.relationship FROM conversation_identity_links l JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id
+		WHERE (a.native_id=? AND b.native_id=?) OR (a.native_id=? AND b.native_id=?)`, conversation, session, session, conversation).Scan(&relationship); err != nil || relationship != "native-alias" {
+		t.Fatalf("TL1 and Antigravity copies not linked: %q %v", relationship, err)
+	}
+	var nativeWorkspace, nativeProject, taskRepository string
+	if err := catalog.DB.QueryRow(`SELECT w.id,COALESCE(w.repository_id,w.folder_repository_id,''),(SELECT COALESCE(repository_id,'') FROM workspaces WHERE id=?)
+		FROM workspaces w JOIN conversations c ON c.workspace_id=w.id WHERE c.native_id=?`, workspace, session).Scan(&nativeWorkspace, &nativeProject, &taskRepository); err != nil {
+		t.Fatal(err)
+	}
+	if taskRepository == "" || nativeProject != taskRepository {
+		t.Fatalf("Antigravity session's project %q, TL1 task's %q", nativeProject, taskRepository)
+	}
+	// Count the linked parent once, while retaining native-only children.
+	ledger, err := catalog.representativeLedger()
+	if err != nil {
+		t.Fatal(err)
+	}
+	childID := stableID("conversation", "antigravity", "local", child)
+	childTokens, parentTokens := int64(0), int64(0)
+	for _, entry := range ledger {
+		if firstString(entry["conversation_id"]) == childID {
+			childTokens += integer(entry["total_tokens"])
+		} else if firstString(entry["workspace_id"]) == nativeWorkspace {
+			t.Fatalf("Antigravity copy counted beside its TL1 task: %v", entry)
+		}
+		if firstString(entry["workspace_id"]) == workspace {
+			parentTokens += integer(entry["total_tokens"])
+		}
+	}
+	if childTokens != 1100 || parentTokens != 3260 {
+		t.Fatalf("linked usage: parent=%d child=%d", parentTokens, childTokens)
+	}
+	// The header summary uses a compact ledger of its own. It must make the
+	// same choice as the Usage page, and the child's root stays the TL1 copy.
+	summaryLedger, err := catalog.usageSummaryLedger(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summaryTokens int64
+	for _, entry := range summaryLedger {
+		if entry.workspaceID == nativeWorkspace || entry.workspaceID == workspace {
+			summaryTokens += entry.tokens["total_tokens"]
+		}
+	}
+	if summaryTokens != parentTokens+childTokens {
+		t.Fatalf("summary usage=%d, parent+child=%d", summaryTokens, parentTokens+childTokens)
+	}
+	lineage, err := catalog.usageConversationRoots(t.Context(), ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root := lineage.roots[childID]; firstString(root["workspace_id"]) != workspace {
+		t.Fatalf("native child's usage must retain its TL1 root: %v", root)
+	}
+	overview, err := catalog.TL1Overview(tl1Selection{}, tl1Window{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agy map[string]any
+	for _, row := range overview["coverage"].(map[string]any)["by_executor"].([]map[string]any) {
+		if row["executor"] == "agy" {
+			agy = row
+		}
+	}
+	if agy["attempts"] != 1 || agy["with_tokens"] != 1 || agy["priced_from_tokens"] != 1 {
+		t.Fatalf("agy coverage: %v", agy)
+	}
+	candidate, err := catalog.TL1Candidate(tl1Selection{}, "cand-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range candidate["tasks"].([]map[string]any) {
+		if task["task_id"] == "task-agy" {
+			// $3 input, $0.15 cached input and $15 output per million.
+			if cost, _ := task["cost_usd"].(float64); math.Abs(cost-(200*3+3000*0.15+60*15)/1e6) > 1e-9 || task["tokens"] != int64(3260) {
+				t.Fatalf("agy task cost %v, tokens %v", task["cost_usd"], task["tokens"])
+			}
+		}
+	}
+}
+
+// tl1AGYFixture adds to a tl1Fixture installation a design task whose one
+// attempt ran on agy, with its stream-json transcript and inputs, and returns
+// the Antigravity conversation ID the stream names.
+func tl1AGYFixture(t *testing.T, root string) string {
+	t.Helper()
+	const session = "9ef2ffd2-0000-4000-8000-000000000001"
+	execSQL(t, openWritableSQLite(t, filepath.Join(root, "tl1.db")),
+		`INSERT INTO task_flavors VALUES ('f-design','design','llm','Design it.','{"agy-gemini-4-neon-medium-medium":{"executor":"agy","model":"gemini-4-neon-medium","effort":"medium"}}','agy-gemini-4-neon-medium-medium','{}','{}','{}',0,'v1')`,
+		`INSERT INTO tasks(id,flavor_id,title,status,outcome,candidate_id,shape_version,inputs,created_at,claimed_at,completed_at,updated_at) VALUES ('task-agy','f-design','Design the crib','done','ready','cand-1','v1','{}','2026-11-20 22:04:00','2026-11-20 22:04:00','2026-11-20 22:14:29','2026-11-20 22:14:29')`,
+		`INSERT INTO task_attempts VALUES ('att-agy','task-agy',1,'wt-2','agy','gemini-4-neon-medium','medium','agy-gemini-4-neon-medium-medium','agy','succeeded',NULL,'2026-11-20 22:04:01','2026-11-20 22:14:29')`)
+	usage := func(input, output, thinking, cache int) string {
+		return fmt.Sprintf(`{"input_tokens":%d,"output_tokens":%d,"thinking_tokens":%d,"cache_read_tokens":%d,"total_tokens":%d}`, input, output, thinking, cache, input+output)
+	}
+	step := func(index int, state, kind, rest string) string {
+		return fmt.Sprintf(`{"event":"step_update","step_update":{"conversation_id":%q,"step_index":%d,"state":%q,"step_type":%q%s}}`, session, index, state, kind, rest)
+	}
+	folder := filepath.Join(root, "transcripts", "task-agy")
+	writeSourceFile(t, filepath.Join(folder, "1-agy.jsonl"), strings.Join([]string{
+		fmt.Sprintf(`{"event":"init","conversation_id":%q,"init":{"model":"gemini-4-neon-medium","cwd":"/repo/.candidate-worktrees/c1","tools":["run_command","read_file"]}}`, session),
+		step(0, "DONE", "user_input", ""),
+		step(1, "DONE", "agent_response", `,"usage":`+usage(100, 40, 10, 1000)),
+		step(2, "ACTIVE", "tool", `,"tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"make test"}}`),
+		step(2, "DONE", "tool", `,"tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"make test"},"output":"3 lines, 120 bytes"}`),
+		step(3, "ERROR", "tool", `,"tool_name":"read_file","tool_info":{"name":"read_file","parameters":{"Path":"/repo/missing.go"},"error":{"type":"TOOL_ERROR","message":"file does not exist"}}`),
+		step(4, "ACTIVE", "agent_response", `,"text_delta":"All "`),
+		step(4, "DONE", "agent_response", `,"text_delta":"done.","usage":`+usage(50, 20, 5, 2000)),
+		step(5, "DONE", "system_message", ""),
+		// The run's totals cover a request no step reported.
+		fmt.Sprintf(`{"event":"result","result":{"conversation_id":%q,"status":"SUCCESS","response":"All done.","duration_seconds":628,"num_turns":1,"usage":%s}}`, session, usage(200, 60, 15, 3000)),
+	}, "\n")+"\n")
+	writeSourceFile(t, filepath.Join(folder, "1-agy-inputs.ndjson"), strings.Join([]string{
+		`{"event":"launch_requested","format":"tl1.invocation/v1","observed_at":"2026-11-20T22:04:01.702299Z","stdin_text":"{\"event\": \"user\", \"message\": {\"content\": \"Design the crib.\"}}"}`,
+		`{"event":"process_completed","format":"tl1.invocation/v1","observed_at":"2026-11-20T22:14:29.086Z","exit_code":0}`,
+	}, "\n")+"\n")
+	return session
 }

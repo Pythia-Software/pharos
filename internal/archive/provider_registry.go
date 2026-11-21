@@ -54,6 +54,10 @@ type providerSpec struct {
 	Import *providerImport
 	// Automatic sources are read by background updates.
 	Automatic bool
+	// Expiring kinds' tools delete their older conversations on their own, so
+	// Preserve expiring originals captures them every hour, before they go
+	// (see backgroundInputs.expiringSources).
+	Expiring bool
 	// Setup is the provider's place in the setup wizard's list of tools,
 	// from 1, or 0 when the wizard does not offer it.
 	Setup int
@@ -363,8 +367,11 @@ func init() {
 		},
 		{
 			Kind: "antigravity", DisplayName: "Antigravity", Summary: "Conversations from Antigravity.", FolderHint: "The Antigravity profile folder (usually ~/.gemini/antigravity).", Instructions: "~/.gemini/GEMINI.md", Mutation: "retrieval-only", Automatic: true, Setup: 7, MirrorRank: 1,
-			Content: contentCapabilities{Supported: "tool_calls tool_results timestamps subagents", Varies: "cwd model effort message_tokens title harness_version",
-				Notes: map[string]string{"reasoning": "Only how many tokens it spent thinking.", "message_tokens": "When the conversation’s database is present.", "harness_version": "The installed app’s version, seen on this Mac."}, VariesNote: "When the conversation records it."},
+			// Antigravity keeps about its newest 500 sessions, which a busy
+			// day of runs (TL1's, say) passes within hours.
+			Expiring: true,
+			Content: contentCapabilities{Supported: "tool_calls tool_results timestamps subagents", Varies: "cwd model effort message_tokens reasoning title harness_version",
+				Notes: map[string]string{"reasoning": "A summary, or only how many tokens it spent thinking when the transcript keeps none.", "message_tokens": "When the conversation’s database is present.", "harness_version": "The installed app’s version, seen on this Mac."}, VariesNote: "When the conversation records it."},
 			New:          func(base baseAdapter) Adapter { return &antigravityAdapter{baseAdapter: base} },
 			Plan:         (*capturePlan).antigravity,
 			Preservation: sqliteGroupPreservation, Acquisition: acquireSQLiteGroup,
@@ -414,7 +421,7 @@ func init() {
 		{
 			Kind: "tl1", DisplayName: "TL1", Summary: "Agent runs, tasks and project context from TL1.", FolderHint: "The TL1 folder holding registry.json or workspaces.json.", OfferWhenFound: true, Mutation: "retrieval-only", Setup: 12, MirrorRank: 0,
 			Content: contentCapabilities{Supported: "cwd model effort tool_calls title", Varies: "git_branch speed message_tokens tool_results reasoning timestamps subagents harness_version cost",
-				Notes: map[string]string{"cwd": "The repository’s folder.", "message_tokens": "Per request for Claude Code runs, per turn for Codex.", "timestamps": "Not in Codex exec runs.", "subagents": "Codex runs that record which session started another.", "harness_version": "Claude Code runs only.", "cost": "From TL1’s run summary."}, VariesNote: "When the run records it."},
+				Notes: map[string]string{"cwd": "The repository’s folder.", "message_tokens": "Per request for Claude Code and Antigravity runs, per turn for Codex.", "tool_results": "A summary of each tool’s output in Antigravity runs.", "timestamps": "Not in Codex exec runs.", "subagents": "Codex runs that record which session started another.", "harness_version": "Claude Code runs only.", "cost": "From TL1’s run summary."}, VariesNote: "When the run records it."},
 			New: func(base baseAdapter) Adapter { return &tl1Adapter{baseAdapter: base} },
 			Plan: func(p *capturePlan, ctx context.Context, source SourceConfig, info fs.FileInfo) error {
 				return p.tl1(source)

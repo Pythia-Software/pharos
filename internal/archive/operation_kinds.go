@@ -98,7 +98,7 @@ var operationKinds = []operationKind{
 		VariantLabels: map[string]string{"frequent": "Frequent update", "hourly": "Hourly update", "daily": "Daily update", "requested": "Requested update"},
 		Holds:         "D:w W:w I:w", Affects: "capt:this/*, conv:*, an.*, findings, upgrade", Stop: "index",
 		OnEject: "Stops after the record in progress; each item runs again at its next time.", Latency: "batch", Journal: journalLonger(10 * time.Second), Priority: priorityBackground},
-	{Kind: "background.capture", Class: workClassCoordinator, Label: "Capture & index", Verb: "Capturing and indexing", VariantLabels: map[string]string{"sources": "Read other sources", "preserve": "Preserve originals"},
+	{Kind: "background.capture", Class: workClassCoordinator, Label: "Capture & index", Verb: "Capturing and indexing", VariantLabels: map[string]string{"sources": "Read other sources", "preserve": "Preserve originals", "expiring": "Preserve expiring originals"},
 		Holds: "D:w W:w I:w C(this):w", Affects: "capt:this/*, conv:*", Stop: "index",
 		OnEject: "Stops between files and records; what was captured stays valid, and the next run resumes it.", Latency: "batch", Journal: journalStage, Priority: priorityBackground},
 	{Kind: "capture.this-mac", Class: workClassSource, Label: "Capture this Mac", Verb: "Capturing", Holds: "D:w I:w C(this):w", Affects: "capt:this/*",

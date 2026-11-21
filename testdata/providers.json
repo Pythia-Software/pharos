@@ -695,8 +695,8 @@
         {
           "key": "reasoning",
           "label": "Thinking",
-          "note": "Only how many tokens it spent thinking.",
-          "support": "unsupported"
+          "note": "A summary, or only how many tokens it spent thinking when the transcript keeps none.",
+          "support": "varies"
         },
         {
           "key": "timestamps",
@@ -1140,7 +1140,7 @@
         {
           "key": "message_tokens",
           "label": "Token usage",
-          "note": "Per request for Claude Code runs, per turn for Codex.",
+          "note": "Per request for Claude Code and Antigravity runs, per turn for Codex.",
           "support": "varies"
         },
         {
@@ -1151,7 +1151,7 @@
         {
           "key": "tool_results",
           "label": "Tool results",
-          "note": "When the run records it.",
+          "note": "A summary of each tool’s output in Antigravity runs.",
           "support": "varies"
         },
         {

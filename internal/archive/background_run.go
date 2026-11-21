@@ -20,6 +20,9 @@ func (s *Server) runBackgroundItem(ctx context.Context, op *Op, id string) error
 	case "other-sources":
 		names := s.backgroundInputsFor(ctx, nil).otherSources
 		return s.backgroundCapture(ctx, op, "sources", names)
+	case "expiring":
+		names := s.backgroundInputsFor(ctx, nil).expiringSources
+		return s.backgroundCapture(ctx, op, "expiring", names)
 	case "preserve":
 		return s.backgroundCapture(ctx, op, "preserve", nil)
 	case "verification":

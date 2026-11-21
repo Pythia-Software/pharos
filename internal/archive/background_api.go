@@ -23,7 +23,7 @@ var runningItem = map[string]string{
 	"index.changes.automatic": "conversations", "index.changes.manual": "conversations", "index.sources.legacy": "conversations",
 	"maintenance.library-view": "search", kindMetrics: "search", "analysis.github": "repositories", "analysis.identities": "repositories", "analysis.git": "repositories",
 	"analysis.authorship.refine": "writing-refine", "analysis.tools": "tools", "analysis.authorship": "writing", "analysis.peers": "writing", "analysis.findings": "findings", "analysis.labels": "labels", "analysis.agent_events": "agent_events", "analysis.engagement": "engagement",
-	"background.capture/sources": "other-sources", "background.capture/preserve": "preserve", "capture.this-mac": "preserve", "index.captures": "preserve", "library.update": "preserve",
+	"background.capture/sources": "other-sources", "background.capture/preserve": "preserve", "background.capture/expiring": "expiring", "capture.this-mac": "preserve", "index.captures": "preserve", "library.update": "preserve",
 	"forge.reviews":   "pull-request-reviews",
 	"library.upgrade": "upgrade", "tools.ledger.build": "upgrade", "backup.local": "backup", "capture.import/bucket": "bucket-import",
 }
@@ -221,6 +221,12 @@ func (s *Server) itemAsOf(item backgroundItem, plan itemPlan, rows map[string]fr
 			if strings.HasPrefix(domain, prefix) {
 				domains = append(domains, domain)
 			}
+		}
+		value = oldest(domains...)
+	case "expiring":
+		domains := []string{}
+		for _, name := range in.expiringSources {
+			domains = append(domains, "capt:"+currentHost().ID+"/"+name)
 		}
 		value = oldest(domains...)
 	case "upgrade":
@@ -489,6 +495,8 @@ func itemSub(item backgroundItem, in backgroundInputs) string {
 		return "Your automatic sources"
 	case "other-sources":
 		return strings.Join(in.otherSources, ", ")
+	case "expiring":
+		return strings.Join(in.expiringSources, ", ")
 	case "labels":
 		if in.labelerProblem != "" {
 			return "Labeling cannot run: " + in.labelerProblem

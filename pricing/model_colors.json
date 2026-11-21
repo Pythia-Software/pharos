@@ -229,7 +229,7 @@
     "gemini-4-argon-d": {
       "provider": "google",
       "class": "Gemini",
-      "color": "#8d9cf4"
+      "color": "#909ff3"
     },
     "gemini-nano-banana-2.1": {
       "provider": "google",
@@ -344,12 +344,12 @@
     "gemini-4-carbon": {
       "provider": "google",
       "class": "Gemini",
-      "color": "#8191f9"
+      "color": "#8797f6"
     },
     "gemini-4-hydrogen": {
       "provider": "google",
       "class": "Gemini",
-      "color": "#7686fd"
+      "color": "#7e8ffa"
     },
     "codex-auto-review": {
       "provider": "openai",
@@ -365,6 +365,11 @@
       "provider": "openai",
       "class": "Sol",
       "color": "#44b298"
+    },
+    "gemini-4-neon": {
+      "provider": "google",
+      "class": "Gemini",
+      "color": "#7686fd"
     }
   },
   "sources": {

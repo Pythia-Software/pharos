@@ -822,6 +822,9 @@ func ingestRecordContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord
 	if err != nil {
 		return 0, 0, err
 	}
+	if err := correctConversationProviders(tx, record, workspaceID); err != nil {
+		return 0, 0, err
+	}
 	authority, err := resolveAuthority(tx, record, workspaceID, host)
 	if err != nil {
 		return 0, 0, err
@@ -840,17 +843,6 @@ func ingestRecordContext(ctx context.Context, tx *sql.Tx, record WorkspaceRecord
 				}
 			}
 			record.Conversations, authority.conversations = conversations, claims
-		}
-	}
-	if (record.SourceKind == "conductor" || record.SourceKind == "tl1") && workspaceID != "" {
-		for _, conversation := range record.Conversations {
-			if conversation.Provider != record.SourceKind {
-				// Preserve the existing conversation/message identity while correcting
-				// the old source-container provider to the native agent provider.
-				if _, err := tx.Exec("UPDATE conversations SET provider=? WHERE workspace_id=? AND provider=? AND account=? AND native_id=?", conversation.Provider, workspaceID, record.SourceKind, conversation.Account, conversation.NativeID); err != nil {
-					return 0, 0, err
-				}
-			}
 		}
 	}
 	repoID, stalePaths := "", []string(nil)
@@ -1589,6 +1581,36 @@ func versionSource(value ConversationRecord) any {
 			return value.HarnessVersionSource
 		}
 		return "transcript"
+	}
+	return nil
+}
+
+// Correct historical parser/provider mistakes before resolving copy authority:
+// provider is part of conversation lookup, but saved IDs and references must
+// continue to identify the same transcript after its parser changes.
+func correctConversationProviders(tx *sql.Tx, record WorkspaceRecord, workspaceID string) error {
+	if workspaceID == "" || (record.SourceKind != "conductor" && record.SourceKind != "tl1") {
+		return nil
+	}
+	for _, conversation := range record.Conversations {
+		previous := []string{record.SourceKind}
+		// TL1's AGY streams used to fall through to Claude, or to Codex
+		// when that was the executor recorded on a mixed-executor attempt.
+		if record.SourceKind == "tl1" && conversation.Provider == "antigravity" {
+			previous = append(previous, "claude", "codex")
+		}
+		for _, provider := range previous {
+			if provider == conversation.Provider {
+				continue
+			}
+			if _, err := tx.Exec(`UPDATE conversations SET provider=?
+				WHERE workspace_id=? AND provider=? AND account=? AND native_id=?
+				AND NOT EXISTS(SELECT 1 FROM conversations WHERE provider=? AND account=? AND native_id=?)`,
+				conversation.Provider, workspaceID, provider, conversation.Account, conversation.NativeID,
+				conversation.Provider, conversation.Account, conversation.NativeID); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

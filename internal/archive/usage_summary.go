@@ -251,11 +251,11 @@ const usageSummaryAuthorshipSQL = `SELECT sent_at,typed_words FROM message_autho
 // keep this query off those records, and typed scans avoid materializing
 // metadata maps for every ledger row. INDEXED BY prevents SQLite from choosing
 // the primary-key indexes, which would fetch the full records again.
-const usageSummaryLedgerSQL = `SELECT a.workspace_id,w.source_kind,u.usage_hour,u.model,COALESCE(a.model,''),
+const usageSummaryLedgerSQL = `SELECT a.workspace_id,a.conversation_id,w.source_kind,u.usage_hour,u.model,COALESCE(a.model,''),
 	u.total_tokens,u.uncached_input_tokens,u.cache_read_input_tokens,u.cache_creation_input_tokens,
 	u.cache_creation_1h_input_tokens,u.output_tokens,u.unclassified_tokens,u.is_estimate,u.input_tokens_available
 	FROM agent_session_usage u
-	JOIN agent_sessions a INDEXED BY agent_sessions_summary_idx ON a.id=u.agent_session_id
+	JOIN agent_sessions a INDEXED BY agent_sessions_usage_idx ON a.id=u.agent_session_id
 	JOIN workspaces w INDEXED BY workspaces_library_idx ON w.id=a.workspace_id
 	WHERE u.total_tokens>0`
 
@@ -266,14 +266,15 @@ func (c *Catalog) usageSummaryLedger(ctx context.Context) ([]usageSummaryEntry, 
 	}
 	defer rows.Close()
 	var ledger []usageSummaryEntry
-	var workspaces []map[string]any
+	var conversations []map[string]any
+	var conversationIDs []string
 	seen := map[string]bool{}
 	for rows.Next() {
 		var entry usageSummaryEntry
-		var source, sessionModel string
+		var conversationID, source, sessionModel string
 		var total, input, read, write, write1h, output, unclassified int64
 		var estimated, inputAvailable int64
-		if err := rows.Scan(&entry.workspaceID, &source, &entry.hour, &entry.model, &sessionModel,
+		if err := rows.Scan(&entry.workspaceID, &conversationID, &source, &entry.hour, &entry.model, &sessionModel,
 			&total, &input, &read, &write, &write1h, &output, &unclassified, &estimated, &inputAvailable); err != nil {
 			return nil, err
 		}
@@ -292,27 +293,24 @@ func (c *Catalog) usageSummaryLedger(ctx context.Context) ([]usageSummaryEntry, 
 			"output_tokens": output, "unclassified_tokens": unclassified,
 		}
 		ledger = append(ledger, entry)
-		if !seen[entry.workspaceID] {
-			seen[entry.workspaceID] = true
-			workspaces = append(workspaces, map[string]any{"id": entry.workspaceID, "source_kind": source})
+		conversationIDs = append(conversationIDs, conversationID)
+		if !seen[conversationID] {
+			seen[conversationID] = true
+			conversations = append(conversations, map[string]any{"id": conversationID, "source_kind": source})
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// Match representativeLedger: choose among workspaces with positive usage
+	// Match representativeLedger: choose among conversations with positive usage
 	// across all time, even when a mirror has no usage in a trailing window.
-	representative := map[string]bool{}
-	representatives, err := c.suppressMirrorsContext(ctx, workspaces)
+	representative, err := c.usageConversationRepresentatives(ctx, conversations)
 	if err != nil {
 		return nil, err
 	}
-	for _, workspace := range representatives {
-		representative[firstString(workspace["id"])] = true
-	}
 	kept := ledger[:0]
-	for _, entry := range ledger {
-		if representative[entry.workspaceID] {
+	for index, entry := range ledger {
+		if representative[conversationIDs[index]] {
 			kept = append(kept, entry)
 		}
 	}

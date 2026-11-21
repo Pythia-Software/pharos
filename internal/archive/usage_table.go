@@ -35,9 +35,8 @@ func fieldSet(names ...string) libraryFields {
 }
 
 // usageRows returns one row per agent session, local calendar day, model, and effort.
-// Linked mirrors of the same work (for example a Conductor workspace and the
-// native Claude session it wraps) keep only the representative workspace, as
-// Library does, so the same requests are not counted twice.
+// Linked copies of a conversation count once. Other conversations in either
+// workspace, such as native-only subagents, keep their own usage.
 func (c *Catalog) usageRows(location *time.Location) ([]map[string]any, error) {
 	return c.usageRowsByPeriod(location, false)
 }
@@ -430,28 +429,42 @@ func (c *Catalog) representativeLedgerContext(ctx context.Context) ([]map[string
 	if err != nil {
 		return nil, err
 	}
-	workspaces := []map[string]any{}
+	conversations := []map[string]any{}
 	seen := map[string]bool{}
 	for _, row := range ledger {
-		id := firstString(row["workspace_id"])
+		id := firstString(row["conversation_id"])
 		if !seen[id] {
 			seen[id] = true
-			workspaces = append(workspaces, map[string]any{"id": id, "source_kind": row["source_kind"]})
+			conversations = append(conversations, map[string]any{"id": id, "source_kind": row["source_kind"]})
 		}
 	}
-	representative := map[string]bool{}
-	mirrors, err := c.suppressMirrorsContext(ctx, workspaces)
+	representative, err := c.usageConversationRepresentatives(ctx, conversations)
 	if err != nil {
 		return nil, err
 	}
-	for _, row := range mirrors {
-		representative[firstString(row["id"])] = true
-	}
 	kept := ledger[:0]
 	for _, entry := range ledger {
-		if representative[firstString(entry["workspace_id"])] {
+		if representative[firstString(entry["conversation_id"])] {
 			kept = append(kept, entry)
 		}
+	}
+	return kept, nil
+}
+
+// Use the Library's source preference and stable tie breaking for each linked
+// conversation with positive usage, across all time. A link between parents
+// does not establish that the rest of their workspaces are copies too.
+func (c *Catalog) usageConversationRepresentatives(ctx context.Context, conversations []map[string]any) (map[string]bool, error) {
+	links, err := cachedValue(ctx, c, "usage-conversation-links", func(ctx context.Context) ([]map[string]any, error) {
+		// Adapt conversation endpoints to suppressMirrorRows' selection shape.
+		return queryMapsContext(ctx, c.reader(), `SELECT left_id left_workspace,right_id right_workspace FROM conversation_identity_links`)
+	})
+	if err != nil {
+		return nil, err
+	}
+	kept := map[string]bool{}
+	for _, row := range suppressMirrorRows(conversations, links) {
+		kept[firstString(row["id"])] = true
 	}
 	return kept, nil
 }
