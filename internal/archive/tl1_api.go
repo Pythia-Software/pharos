@@ -141,6 +141,16 @@ func tl1TaskRowJSON(data *tl1Data, task *tl1Task) map[string]any {
 	}
 	if final != nil {
 		row["conversation_native_id"] = nilIfEmpty(final.Conversation)
+		if ref := final.Evidence; ref != nil {
+			row["conversation_id"] = defaultString(ref.NativeConversationID, ref.ConversationID)
+			row["native_conversation_id"] = nilIfEmpty(ref.NativeConversationID)
+			row["shared_native_session"] = ref.Shared
+			if ref.Shared || !ref.Readable {
+				row["conversation_id"] = ref.ConversationID
+			}
+			row["workflow_conversation_id"] = ref.ConversationID
+			row["native_session_id"] = nilIfEmpty(ref.SessionID)
+		}
 		row["transcript_path"] = nilIfEmpty(tl1TranscriptPath(data, task, final))
 		row["log_tail"] = nilIfEmpty(tl1Clip(final.LogTail, 1200))
 		// No recorded usage is unknown, not zero.

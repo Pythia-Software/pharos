@@ -761,11 +761,13 @@ func tl1ReviewSummary(data *tl1Data) map[string]any {
 
 func tl1Totals(data *tl1Data, candidates, human map[string]any) map[string]any {
 	cost, reported := 0.0, 0.0
+	priced := false
 	llm, procedural, llmErrors, agentErrors, infra := 0, 0, 0, 0, 0
 	tokens := map[string]int64{}
 	durations := []float64{}
 	for _, attempt := range data.Attempts {
 		if attempt.HasCost {
+			priced = true
 			cost += attempt.Cost
 			if attempt.CostSource == "tl1-reported" {
 				reported += attempt.Cost
@@ -792,10 +794,14 @@ func tl1Totals(data *tl1Data, candidates, human map[string]any) map[string]any {
 		}
 	}
 	finished := integer(candidates["finished"])
+	var costPerFinished any
+	if priced {
+		costPerFinished = tl1Ratio(cost, float64(finished))
+	}
 	medianDuration, ok := tl1Median(durations)
-	return map[string]any{"cost_usd": cost, "reported_only_cost_usd": reported, "tasks": len(data.Tasks), "llm_attempts": llm, "procedural_attempts": procedural,
+	return map[string]any{"cost_usd": tl1Optional(cost, priced), "reported_only_cost_usd": reported, "tasks": len(data.Tasks), "llm_attempts": llm, "procedural_attempts": procedural,
 		"human_tasks": human["tasks"], "pending_human": human["pending"], "candidates": candidates["count"], "finished_candidates": finished,
-		"cost_per_finished_candidate_usd": tl1Ratio(cost, float64(finished)), "median_steps": candidates["median_steps"],
+		"cost_per_finished_candidate_usd": costPerFinished, "median_steps": candidates["median_steps"],
 		"llm_error_rate": tl1Ratio(float64(llmErrors), float64(llm)), "agent_error_rate": tl1Ratio(float64(agentErrors), float64(llm-infra)),
 		"infrastructure_errors": infra, "human_tasks_per_candidate": tl1Ratio(float64(integer(human["tasks"])), float64(integer(candidates["count"]))),
 		"median_llm_duration_ms": tl1Optional(medianDuration, ok), "tokens": tokens,
@@ -842,7 +848,7 @@ func tl1Coverage(data *tl1Data) map[string]any {
 		total.priced += value.priced + value.reported
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i]["attempts"].(int) > rows[j]["attempts"].(int) })
-	return map[string]any{"by_executor": rows, "transcript_share": tl1Ratio(float64(total.transcripts), float64(total.attempts)),
+	return map[string]any{"by_executor": rows, "native_transcripts": tl1NativeCoverage(data), "transcript_share": tl1Ratio(float64(total.transcripts), float64(total.attempts)),
 		"cost_share": tl1Ratio(float64(total.priced), float64(total.attempts))}
 }
 

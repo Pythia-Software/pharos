@@ -95,7 +95,7 @@ func usageConversationRootsWith(q queryer, ledger, derived []map[string]any) (*u
 func usageConversationRootsOf(ctx context.Context, q queryer, r *executionResolution, ledger []map[string]any) (*usageConversationAttribution, error) {
 	conversations, err := queryMapsContext(ctx, q, `SELECT c.id,c.workspace_id,c.provider,
 		COALESCE(NULLIF(c.model,''),a.model) model,COALESCE(NULLIF(c.effort,''),a.effort) effort,
-		w.title root_title,r.display_name root_repository_name,`+projectNameSQL("w")+` root_project_name
+		w.source_kind,w.title root_title,r.display_name root_repository_name,`+projectNameSQL("w")+` root_project_name
 		FROM conversations c LEFT JOIN agent_sessions a ON a.conversation_id=c.id AND a.native_id='main'
 		LEFT JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id`+projectJoin("w")+` ORDER BY c.id`)
 	if err != nil {
@@ -134,6 +134,14 @@ func usageAttributionFrom(r *executionResolution, conversations, sessions, ledge
 		return id
 	}
 	better := func(a, b string) bool {
+		// Native Antigravity content can supply the usage ledger while TL1
+		// remains the root workflow envelope for this execution and its children.
+		if firstString(byID[a]["provider"]) == "antigravity" && firstString(byID[b]["provider"]) == "antigravity" {
+			ta, tb := byID[a]["source_kind"] == "tl1", byID[b]["source_kind"] == "tl1"
+			if ta != tb {
+				return ta
+			}
+		}
 		ka, kb := kept[a], kept[b]
 		if ka != kb {
 			return ka

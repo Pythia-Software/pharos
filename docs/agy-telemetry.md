@@ -21,8 +21,9 @@ and never enter the code-zero bucket; non-command tools often have no exit code.
 A call with no result remains `no_result`.
 
 Native Antigravity and TL1 AGY stream ingestion extract the numeric code from
-`Command exited with code N.` anywhere in a `run_command` result, including after
-Created At / Completed At headers. It is stored on the result JSON as `exit_code`
+`Command exited with code N.` in the CLI header of a `run_command` result,
+including after Created At / Completed At lines. The command-output body cannot
+invent an exit status by printing that sentence. The code is stored on the result JSON as `exit_code`
 and `details.exit_code`, and indexed in `tool_calls.exit_code`. The ledger upgrade
 also recovers codes from already-retained command output. Parser versions request
 reindexing of available sources. No source or capture is written by these reads.

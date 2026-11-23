@@ -23,6 +23,12 @@ func TestTL1DollarDisplay(t *testing.T) {
 			t.Errorf("tl1Dollars(%v) = %q, want %q", value, got, want)
 		}
 	}
+	task := &tl1Task{ExecutionClass: "llm"}
+	data := &tl1Data{Attempts: []*tl1Attempt{{Task: task}}}
+	totals := tl1Totals(data, map[string]any{"finished": int64(1)}, map[string]any{})
+	if totals["cost_usd"] != nil || totals["cost_per_finished_candidate_usd"] != nil {
+		t.Fatalf("unpriced attempts became zero cost: %v", totals)
+	}
 }
 
 func TestClassifyTL1Error(t *testing.T) {
@@ -906,176 +912,351 @@ func mustTL1Flavor(t *testing.T, catalog *Catalog, name string) map[string]any {
 // session the Antigravity source indexes, so the run counts once and both sit
 // in the TL1 project.
 func TestTL1AgyTranscriptLinksItsAntigravitySession(t *testing.T) {
+	for _, nativeFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("native_first=%t", nativeFirst), func(t *testing.T) {
+			useHost(t, "host-a")
+			catalog, config := testCatalog(t)
+			registry := tl1Fixture(t, 0)
+			root := filepath.Dir(registry)
+			session := tl1AGYFixture(t, root)
+			folder := filepath.Join(root, "transcripts", "task-agy")
+			// An attempt can leave several executors' transcripts. Its executor is
+			// only a fallback when a transcript's filename does not name one.
+			for _, executor := range []string{"codex", "claude", "agy"} {
+				adapter := &tl1Adapter{}
+				conversation, ok, err := adapter.transcript(tl1Installation{ID: "install-1", Transcripts: filepath.Dir(folder)}, "task-agy",
+					map[string]any{"id": "att-agy", "executor": executor, "model": "gpt-5.6-terra"}, "1-agy.jsonl")
+				if err != nil || !ok || conversation.Provider != "antigravity" || conversation.Model != "gemini-4-neon" || len(conversation.Messages) == 0 {
+					t.Fatalf("AGY transcript under %s attempt: provider=%q model=%q messages=%d ok=%v: %v", executor, conversation.Provider, conversation.Model, len(conversation.Messages), ok, err)
+				}
+			}
+			// The session as Antigravity keeps it, run in TL1's transcripts folder.
+			native := filepath.Join(t.TempDir(), "antigravity-cli")
+			antigravityTranscript(t, native, session, "transcript_full.jsonl", antigravitySteps(
+				map[string]any{"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Design the crib.", "created_at": "2026-11-20T22:04:04Z"},
+				map[string]any{"source": "MODEL", "type": "PLANNER_RESPONSE", "tool_calls": []any{map[string]any{"name": "run_command", "args": map[string]any{"CommandLine": "make test"}}}, "created_at": "2026-11-20T22:04:05Z"},
+				map[string]any{"source": "TOOL", "type": "RUN_COMMAND", "content": "Native-only command output", "created_at": "2026-11-20T22:04:06Z"},
+				map[string]any{"source": "MODEL", "type": "PLANNER_RESPONSE", "thinking": "Read the request first.", "content": "All done.", "created_at": "2026-11-20T22:14:06Z"},
+			))
+			antigravityRequestRows(t, native, session, []any{[]uint64{3}, "gemini-4-neon", 220, 70, 3000, 15})
+			// The native source keeps children in the parent's workspace. The TL1
+			// stream names the parent alone and does not repeat this child's usage.
+			const child = "aaaaaaaa-0000-4000-8000-000000000002"
+			antigravityTranscript(t, native, child, "transcript_full.jsonl", antigravitySteps(
+				map[string]any{"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Check the crib.", "created_at": "2026-11-20T22:05:00Z"},
+				map[string]any{"source": "MODEL", "type": "PLANNER_RESPONSE", "content": "Checked.", "created_at": "2026-11-20T22:06:00Z", "tool_calls": []any{map[string]any{"name": "read_file", "args": map[string]any{"Path": "crib.go"}}}},
+				map[string]any{"source": "MODEL", "type": "GENERIC", "content": "crib code", "created_at": "2026-11-20T22:06:01Z"},
+			))
+			antigravityRequestRows(t, native, child, []any{[]uint64{1}, "gemini-4-neon", 1000, 100, 0, 0})
+			antigravitySummaryRows(t, native,
+				[]any{session, "Design the crib", "[]", "", 0, ""},
+				[]any{child, "Check the crib", "[]", session, 1, "checker"})
+
+			ingest := func(source SourceConfig) {
+				t.Helper()
+				adapter, err := MakeAdapter(source)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if result := catalog.Ingest(adapter, nil); result.Error != nil {
+					t.Fatalf("ingest %s: %v", source.Kind, result.Error)
+				}
+			}
+			tl1Source := SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true}
+			nativeSource := SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: native, Account: "local", Enabled: true}
+			if nativeFirst {
+				ingest(nativeSource)
+				ingest(tl1Source)
+			} else {
+				ingest(tl1Source)
+				ingest(nativeSource)
+			}
+
+			const conversation = "install-1:att-agy:1-agy.jsonl"
+			var provider, model, effort, harness, coverage, workspace string
+			if err := catalog.DB.QueryRow(`SELECT c.provider,c.model,c.effort,c.harness,c.coverage,c.workspace_id FROM conversations c WHERE c.native_id=?`, conversation).Scan(&provider, &model, &effort, &harness, &coverage, &workspace); err != nil {
+				t.Fatal(err)
+			}
+			// The stream reports only a summary of each tool's output.
+			if provider != "antigravity" || model != "gemini-4-neon" || effort != "medium" || harness != "agy" || coverage != "partial" {
+				t.Fatalf("agy conversation: provider=%q model=%q effort=%q harness=%q coverage=%q", provider, model, effort, harness, coverage)
+			}
+			rows, err := queryMaps(catalog.DB, `SELECT m.role,m.kind,m.text FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.native_id=? AND m.kind IN ('message','tool_result') ORDER BY m.source_order`, conversation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := []string{}
+			for _, row := range rows {
+				got = append(got, firstString(row["role"])+": "+firstString(row["text"]))
+			}
+			if len(got) != 4 || got[0] != "user: Design the crib." || !strings.Contains(got[1], "3 lines, 120 bytes") || !strings.Contains(got[2], "file does not exist") || got[3] != "assistant: All done." {
+				t.Fatalf("agy messages: %q", got)
+			}
+			var calls, failed int
+			if err := catalog.DB.QueryRow(`SELECT COUNT(*),COALESCE(SUM(t.status='error'),0) FROM tool_calls t JOIN conversations c ON c.id=t.conversation_id WHERE c.native_id=?`, conversation).Scan(&calls, &failed); err != nil || calls != 2 || failed != 1 {
+				t.Fatalf("tool calls = %d (%d failed), %v", calls, failed, err)
+			}
+			// Input counts cached input, output counts thinking, and the result's
+			// totals fill in what the steps left out.
+			var input, cached, output, reasoning int64
+			if err := catalog.DB.QueryRow(`SELECT s.input_tokens,s.cache_read_input_tokens,s.output_tokens,s.reasoning_output_tokens
+		FROM agent_sessions s JOIN conversations c ON c.id=s.conversation_id WHERE c.native_id=?`, conversation).Scan(&input, &cached, &output, &reasoning); err != nil {
+				t.Fatal(err)
+			}
+			if input != 3200 || cached != 3000 || output != 60 || reasoning != 15 {
+				t.Fatalf("agy usage: input=%d cached=%d output=%d reasoning=%d", input, cached, output, reasoning)
+			}
+			var relationship string
+			if err := catalog.DB.QueryRow(`SELECT l.relationship FROM conversation_identity_links l JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id
+		WHERE (a.native_id=? AND b.native_id=?) OR (a.native_id=? AND b.native_id=?)`, conversation, session, session, conversation).Scan(&relationship); err != nil || relationship != "native-alias" {
+				t.Fatalf("TL1 and Antigravity copies not linked: %q %v", relationship, err)
+			}
+			var nativeWorkspace, nativeProject, taskRepository string
+			if err := catalog.DB.QueryRow(`SELECT w.id,COALESCE(w.repository_id,w.folder_repository_id,''),(SELECT COALESCE(repository_id,'') FROM workspaces WHERE id=?)
+		FROM workspaces w JOIN conversations c ON c.workspace_id=w.id WHERE c.native_id=?`, workspace, session).Scan(&nativeWorkspace, &nativeProject, &taskRepository); err != nil {
+				t.Fatal(err)
+			}
+			if taskRepository == "" || nativeProject != taskRepository {
+				t.Fatalf("Antigravity session's project %q, TL1 task's %q", nativeProject, taskRepository)
+			}
+			// Count the linked parent once, while retaining native-only children.
+			ledger, err := catalog.representativeLedger()
+			if err != nil {
+				t.Fatal(err)
+			}
+			childID := stableID("conversation", "antigravity", "local", child)
+			nativeID := stableID("conversation", "antigravity", "local", session)
+			childTokens, parentTokens := int64(0), int64(0)
+			for _, entry := range ledger {
+				if firstString(entry["conversation_id"]) == childID {
+					childTokens += integer(entry["total_tokens"])
+				} else if firstString(entry["conversation_id"]) == nativeID {
+					parentTokens += integer(entry["total_tokens"])
+				}
+				if firstString(entry["workspace_id"]) == workspace {
+					t.Fatalf("TL1 fallback counted beside native usage: %v", entry)
+				}
+			}
+			if childTokens != 1100 || parentTokens != 3290 {
+				t.Fatalf("linked usage: parent=%d child=%d", parentTokens, childTokens)
+			}
+			// The header summary uses a compact ledger of its own. It must make the
+			// same choice as the Usage page, and the child's root stays the TL1 copy.
+			summaryLedger, err := catalog.usageSummaryLedger(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var summaryTokens int64
+			for _, entry := range summaryLedger {
+				if entry.workspaceID == nativeWorkspace || entry.workspaceID == workspace {
+					summaryTokens += entry.tokens["total_tokens"]
+				}
+			}
+			if summaryTokens != parentTokens+childTokens {
+				t.Fatalf("summary usage=%d, parent+child=%d", summaryTokens, parentTokens+childTokens)
+			}
+			lineage, err := catalog.usageConversationRoots(t.Context(), ledger)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if root := lineage.roots[childID]; firstString(root["workspace_id"]) != workspace {
+				t.Fatalf("native child's usage must retain its TL1 root: %v", root)
+			}
+			overview, err := catalog.TL1Overview(tl1Selection{}, tl1Window{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var agy map[string]any
+			for _, row := range overview["coverage"].(map[string]any)["by_executor"].([]map[string]any) {
+				if row["executor"] == "agy" {
+					agy = row
+				}
+			}
+			if agy["attempts"] != 1 || agy["with_tokens"] != 1 || agy["priced_from_tokens"] != 1 {
+				t.Fatalf("agy coverage: %v", agy)
+			}
+			report := statisticsCall(t, catalog, "query_statistics", map[string]any{"entity": "tool_call", "provider": "antigravity"})
+			toolGroup := report["groups"].([]map[string]any)[0]
+			if integer(toolGroup["tool_call_count"]) != 3 || integer(toolGroup["failed_tool_call_count"]) != 1 {
+				t.Fatalf("native-only child must survive alias suppression: %v", report)
+			}
+			nativeCoverage := overview["coverage"].(map[string]any)["native_transcripts"].(map[string]any)
+			if nativeCoverage["referenced"] != 1 || nativeCoverage["matched"] != 1 || len(nativeCoverage["missing"].([]map[string]any)) != 0 {
+				t.Fatalf("native coverage: %v", nativeCoverage)
+			}
+			detail, err := catalog.WorkDetail(workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			content := detail["conversations"].([]map[string]any)
+			if len(content) != 1 || content[0]["id"] != nativeID || !strings.Contains(jsonText(content[0]["messages"]), "Native-only command output") || !strings.Contains(jsonText(content[0]["messages"]), "Read the request first.") {
+				t.Fatalf("TL1 reader did not choose native content: %v", content)
+			}
+			fallbackID := content[0]["workflow_conversation_id"].(string)
+			messageResult, err := catalog.conversationMessages(map[string]any{"conversation_id": content[0]["id"], "limit": 12, "include_tool_output": true})
+			if err != nil || messageResult["conversation_id"] != nativeID {
+				t.Fatalf("MCP native transcript: %v, %v", messageResult, err)
+			}
+			found, err := catalog.searchConversations(map[string]any{"project": "fixture", "query": "All done", "max_output_tokens": 4000})
+			if err != nil {
+				t.Fatal(err)
+			}
+			seenNative := false
+			for _, item := range found["items"].([]map[string]any) {
+				seenNative = seenNative || item["conversation_id"] == nativeID
+			}
+			if !seenNative {
+				t.Fatalf("native transcript missing from project search: %v", found)
+			}
+			candidate, err := catalog.TL1Candidate(tl1Selection{}, "cand-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, task := range candidate["tasks"].([]map[string]any) {
+				if task["task_id"] == "task-agy" {
+					if task["queue_wait_seconds"] != float64(0) || task["attempt_seconds"] != float64(628) || task["wall_seconds"] != float64(629) {
+						t.Fatalf("persisted task timing: %v", task)
+					}
+					// $3 input, $0.15 cached input and $15 output per million.
+					if cost, _ := task["cost_usd"].(float64); math.Abs(cost-(220*3+3000*0.15+70*15)/1e6) > 1e-9 || task["tokens"] != int64(3290) || task["conversation_id"] != nativeID {
+						t.Fatalf("agy task cost %v, tokens %v", task["cost_usd"], task["tokens"])
+					}
+				}
+			}
+			// The retained capture remains usable after the CLI evicts the original
+			// session and a later capture observes that eviction.
+			config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
+			config.Sources = []SourceConfig{
+				{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true},
+				{Name: "antigravity-cli", Kind: "antigravity", Path: native, Account: "local", Enabled: true},
+			}
+			runCapture(t, config)
+			if err := os.RemoveAll(filepath.Join(native, "brain", session)); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(native, "conversations", session+".db")); err != nil {
+				t.Fatal(err)
+			}
+			runCapture(t, config)
+			restored, _ := testCatalog(t)
+			indexCaptures(t, restored, config.CaptureRoot, "host-a")
+			retained, err := restored.WorkDetail(workspace)
+			if err != nil || !strings.Contains(jsonText(retained["conversations"]), "Native-only command output") {
+				t.Fatalf("native evidence lost after source eviction: %v, %v", retained, err)
+			}
+			// A different TL1 run can reuse the same native ID. Its stream
+			// remains the attempt-scoped evidence; native aggregate usage must
+			// never be assigned in full to both attempts.
+			tx := seedTx(t, restored.DB)
+			_, _, err = ingestWorkspace(tx, WorkspaceRecord{SourceID: "install-1:shared-task", SourceKind: "tl1", Account: "local", Title: "Resumed run",
+				Conversations: []ConversationRecord{{NativeID: "install-1:shared-attempt:1-agy.jsonl", Provider: "antigravity", Account: "local", Aliases: []string{session}, Coverage: "partial"}}}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			usage, err := restored.tl1AttemptUsage("install-1")
+			if err != nil || usage["att-agy"] == nil || usage["att-agy"].tokens["total_tokens"] != 3260 {
+				t.Fatalf("shared native usage must retain scoped fallback: %v, %v", usage, err)
+			}
+			refs, err := restored.tl1TranscriptEvidence(t.Context(), "install-1")
+			if err != nil || !refs[conversation].Shared {
+				t.Fatalf("shared native identity not reported: %v, %v", refs, err)
+			}
+			if id, err := restored.tl1ContentConversation(t.Context(), fallbackID); err != nil || id != fallbackID {
+				t.Fatalf("shared native content assigned to one run: %s, %v", id, err)
+			}
+			const absentSession = "ffffffff-0000-4000-8000-000000000001"
+			if _, err := restored.DB.Exec("UPDATE declared_native_aliases SET native_id=? WHERE conversation_id=? AND native_id=?", absentSession, fallbackID, session); err != nil {
+				t.Fatal(err)
+			}
+			missing, err := restored.TL1Overview(tl1Selection{}, tl1Window{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			missingRefs := missing["coverage"].(map[string]any)["native_transcripts"].(map[string]any)["missing"].([]map[string]any)
+			if len(missingRefs) != 1 || missingRefs[0]["native_session_id"] != absentSession {
+				t.Fatalf("missing native session not named: %v", missingRefs)
+			}
+		})
+	}
+}
+
+func TestTL1AgyStreamExitStatusAndUsage(t *testing.T) {
+	folder := t.TempDir()
+	path := filepath.Join(folder, "1-agy.jsonl")
+	output := "Created At: 2026-11-20T15:04:08-07:00\nCompleted At: 2026-11-20T15:04:10-07:00\nCommand exited with code 2.\n\nCommand output:\nCommand exited with code 0.\nfailed test output"
+	usage := `{"input_tokens":124742,"output_tokens":58908,"thinking_tokens":33731,"cache_read_tokens":1379881}`
+	step := `{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"agent_response","usage":` + usage + `}}`
+	writeSourceFile(t, path, strings.Join([]string{
+		`{"event":"init","conversation_id":"9ef2ffd2-0000-4000-8000-000000000001","init":{"model":"gemini-4-neon-xhigh"}}`,
+		fmt.Sprintf(`{"event":"step_update","step_update":{"step_index":0,"state":"DONE","step_type":"tool","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"make test"},"output":%q}}}`, output),
+		step, step, // A repeated DONE event must not count usage twice.
+		`{"event":"result","result":{"status":"SUCCESS","response":"Finished.","usage":` + usage + `}}`,
+	}, "\n")+"\n")
+	record, ok, err := (sourceFiles{}).parseAGYStream(path, path, "")
+	if err != nil || !ok || record.Model != "gemini-4-neon" || record.Effort != "xhigh" || record.Coverage != "partial" {
+		t.Fatalf("AGY record: %+v %v %v", record, ok, err)
+	}
+	results, usages := 0, 0
+	for _, message := range record.Messages {
+		var payload map[string]any
+		_ = json.Unmarshal([]byte(message.Text), &payload)
+		if message.Kind == "tool_result" {
+			results++
+			if integer(payload["exit_code"]) != 2 || payload["is_error"] != true || payload["content"] != output {
+				t.Fatalf("shell result lost output or status: %v", payload)
+			}
+		}
+		if payload["type"] == "token_usage" {
+			usages++
+		}
+	}
+	counts := conversationTokenCounts(record.Messages)
+	// Pharos input/total include cache reads; AGY's result.total_tokens does
+	// not. Thinking is already within output in both representations.
+	if results != 1 || usages != 1 || counts["uncached_input_tokens"] != 124742 || counts["output_tokens"] != 58908 || counts["reasoning_output_tokens"] != 33731 || counts["total_tokens"] != 1563531 {
+		t.Fatalf("counts=%v results=%d usages=%d", counts, results, usages)
+	}
+	if code, known := agyExitCode("Command output:\nCommand exited with code 0."); known {
+		t.Fatalf("command output invented exit status %d", code)
+	}
+	for _, model := range []string{"gemini-4-neon", "gemini-4-argon"} {
+		for _, effort := range []string{"low", "medium", "high", "xhigh"} {
+			if base, level := agyModel(model + "-" + effort); base != model || level != effort {
+				t.Fatalf("model/effort = %s/%s", base, level)
+			}
+		}
+	}
+}
+
+func TestTL1TranscriptParserMismatchIsReported(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	registry := tl1Fixture(t, 0)
 	root := filepath.Dir(registry)
-	session := tl1AGYFixture(t, root)
-	folder := filepath.Join(root, "transcripts", "task-agy")
-	// An attempt can leave several executors' transcripts. Its executor is
-	// only a fallback when a transcript's filename does not name one.
-	for _, executor := range []string{"codex", "claude", "agy"} {
-		adapter := &tl1Adapter{}
-		conversation, ok, err := adapter.transcript(tl1Installation{ID: "install-1", Transcripts: filepath.Dir(folder)}, "task-agy",
-			map[string]any{"id": "att-agy", "executor": executor, "model": "gpt-5.6-terra"}, "1-agy.jsonl")
-		if err != nil || !ok || conversation.Provider != "antigravity" || conversation.Model != "gemini-4-neon" || len(conversation.Messages) == 0 {
-			t.Fatalf("AGY transcript under %s attempt: provider=%q model=%q messages=%d ok=%v: %v", executor, conversation.Provider, conversation.Model, len(conversation.Messages), ok, err)
-		}
+	tl1AGYFixture(t, root)
+	path := filepath.Join(root, "transcripts", "task-agy", "1-agy.jsonl")
+	// A still-starting run has an identity but no messages yet.
+	writeSourceFile(t, path, `{"event":"init","conversation_id":"9ef2ffd2-0000-4000-8000-000000000001"}`+"\n")
+	adapter := &tl1Adapter{}
+	conversation, ok, err := adapter.transcript(tl1Installation{ID: "install-1", Transcripts: filepath.Join(root, "transcripts")}, "task-agy", map[string]any{"id": "att-agy"}, "1-agy.jsonl")
+	if err != nil || !ok || conversation.Coverage != "partial" {
+		t.Fatalf("init-only run: %+v, %v, %v", conversation, ok, err)
 	}
-	// The session as Antigravity keeps it, run in TL1's transcripts folder.
-	native := filepath.Join(t.TempDir(), "antigravity-cli")
-	antigravityTranscript(t, native, session, "transcript_full.jsonl", antigravitySteps(
-		map[string]any{"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Design the crib.", "created_at": "2026-11-20T22:04:04Z"},
-		map[string]any{"source": "MODEL", "type": "PLANNER_RESPONSE", "thinking": "Read the request first.", "content": "All done.", "created_at": "2026-11-20T22:14:06Z"},
-	))
-	antigravityRequestRows(t, native, session, []any{[]uint64{1}, "gemini-4-neon", 200, 60, 3000, 15})
-	// The native source keeps children in the parent's workspace. The TL1
-	// stream names the parent alone and does not repeat this child's usage.
-	const child = "aaaaaaaa-0000-4000-8000-000000000002"
-	antigravityTranscript(t, native, child, "transcript_full.jsonl", antigravitySteps(
-		map[string]any{"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Check the crib.", "created_at": "2026-11-20T22:05:00Z"},
-		map[string]any{"source": "MODEL", "type": "PLANNER_RESPONSE", "content": "Checked.", "created_at": "2026-11-20T22:06:00Z", "tool_calls": []any{map[string]any{"name": "read_file", "args": map[string]any{"Path": "crib.go"}}}},
-		map[string]any{"source": "MODEL", "type": "GENERIC", "content": "crib code", "created_at": "2026-11-20T22:06:01Z"},
-	))
-	antigravityRequestRows(t, native, child, []any{[]uint64{1}, "gemini-4-neon", 1000, 100, 0, 0})
-	antigravitySummaryRows(t, native,
-		[]any{session, "Design the crib", jsonText([]string{"file://" + filepath.Join(folder, ".att-agy-ipc-3o7scs7w")}), "", 0, ""},
-		[]any{child, "Check the crib", "[]", session, 1, "checker"})
-
-	ingest := func(source SourceConfig) {
-		t.Helper()
-		adapter, err := MakeAdapter(source)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if result := catalog.Ingest(adapter, nil); result.Error != nil {
-			t.Fatalf("ingest %s: %v", source.Kind, result.Error)
-		}
-	}
-	ingest(SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true})
-	ingest(SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: native, Account: "local", Enabled: true})
-
-	const conversation = "install-1:att-agy:1-agy.jsonl"
-	var provider, model, effort, harness, coverage, workspace string
-	if err := catalog.DB.QueryRow(`SELECT c.provider,c.model,c.effort,c.harness,c.coverage,c.workspace_id FROM conversations c WHERE c.native_id=?`, conversation).Scan(&provider, &model, &effort, &harness, &coverage, &workspace); err != nil {
-		t.Fatal(err)
-	}
-	// The stream reports only a summary of each tool's output.
-	if provider != "antigravity" || model != "gemini-4-neon" || effort != "medium" || harness != "antigravity-cli" || coverage != "partial" {
-		t.Fatalf("agy conversation: provider=%q model=%q effort=%q harness=%q coverage=%q", provider, model, effort, harness, coverage)
-	}
-	rows, err := queryMaps(catalog.DB, `SELECT m.role,m.kind,m.text FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.native_id=? AND m.kind IN ('message','tool_result') ORDER BY m.source_order`, conversation)
+	writeSourceFile(t, path, `{"type":"unsupported","opaque":true}`+"\n")
+	source := SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true}
+	badAdapter, err := MakeAdapter(source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := []string{}
-	for _, row := range rows {
-		got = append(got, firstString(row["role"])+": "+firstString(row["text"]))
+	result := catalog.Ingest(badAdapter, nil)
+	if result.Error == nil || !strings.Contains(fmt.Sprint(result.Error), "parser mismatch") {
+		t.Fatalf("unsupported transcript reported success: %+v", result)
 	}
-	if len(got) != 4 || got[0] != "user: Design the crib." || !strings.Contains(got[1], "3 lines, 120 bytes") || !strings.Contains(got[2], "file does not exist") || got[3] != "assistant: All done." {
-		t.Fatalf("agy messages: %q", got)
-	}
-	var calls, failed int
-	if err := catalog.DB.QueryRow(`SELECT COUNT(*),COALESCE(SUM(t.status='error'),0) FROM tool_calls t JOIN conversations c ON c.id=t.conversation_id WHERE c.native_id=?`, conversation).Scan(&calls, &failed); err != nil || calls != 2 || failed != 1 {
-		t.Fatalf("tool calls = %d (%d failed), %v", calls, failed, err)
-	}
-	// Input counts cached input, output counts thinking, and the result's
-	// totals fill in what the steps left out.
-	var input, cached, output, reasoning int64
-	if err := catalog.DB.QueryRow(`SELECT s.input_tokens,s.cache_read_input_tokens,s.output_tokens,s.reasoning_output_tokens
-		FROM agent_sessions s JOIN conversations c ON c.id=s.conversation_id WHERE c.native_id=?`, conversation).Scan(&input, &cached, &output, &reasoning); err != nil {
-		t.Fatal(err)
-	}
-	if input != 3200 || cached != 3000 || output != 60 || reasoning != 15 {
-		t.Fatalf("agy usage: input=%d cached=%d output=%d reasoning=%d", input, cached, output, reasoning)
-	}
-	var relationship string
-	if err := catalog.DB.QueryRow(`SELECT l.relationship FROM conversation_identity_links l JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id
-		WHERE (a.native_id=? AND b.native_id=?) OR (a.native_id=? AND b.native_id=?)`, conversation, session, session, conversation).Scan(&relationship); err != nil || relationship != "native-alias" {
-		t.Fatalf("TL1 and Antigravity copies not linked: %q %v", relationship, err)
-	}
-	var nativeWorkspace, nativeProject, taskRepository string
-	if err := catalog.DB.QueryRow(`SELECT w.id,COALESCE(w.repository_id,w.folder_repository_id,''),(SELECT COALESCE(repository_id,'') FROM workspaces WHERE id=?)
-		FROM workspaces w JOIN conversations c ON c.workspace_id=w.id WHERE c.native_id=?`, workspace, session).Scan(&nativeWorkspace, &nativeProject, &taskRepository); err != nil {
-		t.Fatal(err)
-	}
-	if taskRepository == "" || nativeProject != taskRepository {
-		t.Fatalf("Antigravity session's project %q, TL1 task's %q", nativeProject, taskRepository)
-	}
-	// Count the linked parent once, while retaining native-only children.
-	ledger, err := catalog.representativeLedger()
-	if err != nil {
-		t.Fatal(err)
-	}
-	childID := stableID("conversation", "antigravity", "local", child)
-	childTokens, parentTokens := int64(0), int64(0)
-	for _, entry := range ledger {
-		if firstString(entry["conversation_id"]) == childID {
-			childTokens += integer(entry["total_tokens"])
-		} else if firstString(entry["workspace_id"]) == nativeWorkspace {
-			t.Fatalf("Antigravity copy counted beside its TL1 task: %v", entry)
-		}
-		if firstString(entry["workspace_id"]) == workspace {
-			parentTokens += integer(entry["total_tokens"])
-		}
-	}
-	if childTokens != 1100 || parentTokens != 3260 {
-		t.Fatalf("linked usage: parent=%d child=%d", parentTokens, childTokens)
-	}
-	// The header summary uses a compact ledger of its own. It must make the
-	// same choice as the Usage page, and the child's root stays the TL1 copy.
-	summaryLedger, err := catalog.usageSummaryLedger(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var summaryTokens int64
-	for _, entry := range summaryLedger {
-		if entry.workspaceID == nativeWorkspace || entry.workspaceID == workspace {
-			summaryTokens += entry.tokens["total_tokens"]
-		}
-	}
-	if summaryTokens != parentTokens+childTokens {
-		t.Fatalf("summary usage=%d, parent+child=%d", summaryTokens, parentTokens+childTokens)
-	}
-	lineage, err := catalog.usageConversationRoots(t.Context(), ledger)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if root := lineage.roots[childID]; firstString(root["workspace_id"]) != workspace {
-		t.Fatalf("native child's usage must retain its TL1 root: %v", root)
-	}
-	overview, err := catalog.TL1Overview(tl1Selection{}, tl1Window{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var agy map[string]any
-	for _, row := range overview["coverage"].(map[string]any)["by_executor"].([]map[string]any) {
-		if row["executor"] == "agy" {
-			agy = row
-		}
-	}
-	if agy["attempts"] != 1 || agy["with_tokens"] != 1 || agy["priced_from_tokens"] != 1 {
-		t.Fatalf("agy coverage: %v", agy)
-	}
-	report := statisticsCall(t, catalog, "query_statistics", map[string]any{"entity": "tool_call", "provider": "antigravity"})
-	toolGroup := report["groups"].([]map[string]any)[0]
-	if integer(toolGroup["tool_call_count"]) != 3 || integer(toolGroup["failed_tool_call_count"]) != 1 {
-		t.Fatalf("native-only child must survive alias suppression: %v", report)
-	}
-
-	candidate, err := catalog.TL1Candidate(tl1Selection{}, "cand-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, task := range candidate["tasks"].([]map[string]any) {
-		if task["task_id"] == "task-agy" {
-			if task["queue_wait_seconds"] != float64(0) || task["attempt_seconds"] != float64(628) || task["wall_seconds"] != float64(629) {
-				t.Fatalf("persisted task timing: %v", task)
-			}
-			// $3 input, $0.15 cached input and $15 output per million.
-			if cost, _ := task["cost_usd"].(float64); math.Abs(cost-(200*3+3000*0.15+60*15)/1e6) > 1e-9 || task["tokens"] != int64(3260) {
-				t.Fatalf("agy task cost %v, tokens %v", task["cost_usd"], task["tokens"])
-			}
-		}
+	status, err := catalog.archiveStatus(map[string]any{"source": "tl1", "max_output_tokens": 4000})
+	if err != nil || !strings.Contains(jsonText(status), "parser mismatch") {
+		t.Fatalf("archive status hid parser failure: %v, %v", status, err)
 	}
 }
 

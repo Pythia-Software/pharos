@@ -1,5 +1,5 @@
 {
-  "index_version": "tl1-analysis-v10-agy-tool-exits",
+  "index_version": "tl1-analysis-v11-agy-telemetry-evidence",
   "records": [
     {
       "SourceID": "install-1:task-agy",
@@ -44,7 +44,7 @@
           "Coverage": "partial",
           "StartedAt": "2026-11-20T22:04:01.702Z",
           "EndedAt": "2026-11-20T22:14:29.086Z",
-          "Harness": "antigravity-cli",
+          "Harness": "agy",
           "Aliases": [
             "9ef2ffd2-0000-4000-8000-000000000001"
           ],

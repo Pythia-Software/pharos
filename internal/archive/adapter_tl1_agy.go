@@ -35,29 +35,23 @@ import (
 // what TL1 sent it.
 const tl1AGYInputsSuffix = "-agy-inputs.ndjson"
 
+var agyCommandExit = regexp.MustCompile(`(?m)^Command exited with code (-?[0-9]+)\.\r?$`)
+
+// Only the CLI's header is exit-status evidence. A command may print that
+// same sentence in its own output, which must not change its recorded status.
+func agyExitCode(output string) (int, bool) {
+	header, _, _ := strings.Cut(output, "Command output:")
+	match := agyCommandExit.FindStringSubmatch(header)
+	if len(match) != 2 {
+		return 0, false
+	}
+	code, err := strconv.Atoi(match[1])
+	return code, err == nil
+}
+
 // tl1AGYTranscript reports a TL1 file name of an agy transcript.
 func tl1AGYTranscript(name string) bool {
 	return strings.HasSuffix(strings.ToLower(name), "-agy.jsonl")
-}
-
-// agyStreamTranscript reports whether path holds agy's stream-json events,
-// which name their kind in "event" where Claude and Codex use "type".
-func (s sourceFiles) agyStreamTranscript(path string) bool {
-	file, err := s.Open(path)
-	if err != nil {
-		return false
-	}
-	defer file.Close()
-	line, _ := bufio.NewReaderSize(file, 64*1024).ReadBytes('\n')
-	var event map[string]any
-	if json.Unmarshal(bytes.TrimSpace(line), &event) != nil || event["type"] != nil {
-		return false
-	}
-	switch firstString(event["event"]) {
-	case "init", "step_update", "result":
-		return true
-	}
-	return false
 }
 
 // agyModel splits the effort suffix TL1 and the agy CLI add to a model
@@ -150,6 +144,7 @@ func (s sourceFiles) parseAGYStream(path, origin, inputs string) (ConversationRe
 	messages := []MessageRecord{}
 	conversationID, model, effort := "", "", ""
 	line, prompt := 0, 0
+	recognized := false
 	locator := func(at int) string { return fmt.Sprintf("%s:%d", origin, at) }
 	add := func(id, role, kind, text, callID string, at int) {
 		messages = append(messages, MessageRecord{NativeID: id, Role: role, Kind: kind, Text: text, Effort: effort, CallID: callID, EvidenceLocator: locator(at), Selected: true})
@@ -232,6 +227,7 @@ func (s sourceFiles) parseAGYStream(path, origin, inputs string) (ConversationRe
 		}
 		switch firstString(event["event"]) {
 		case "init":
+			recognized = true
 			conversationID = defaultString(event["conversation_id"], conversationID)
 			details := mapValue(event["init"])
 			if selection := firstString(details["model"]); selection != "" {
@@ -240,6 +236,7 @@ func (s sourceFiles) parseAGYStream(path, origin, inputs string) (ConversationRe
 				effort = defaultString(level, effort)
 			}
 		case "step_update":
+			recognized = true
 			step := mapValue(event["step_update"])
 			conversationID = defaultString(step["conversation_id"], conversationID)
 			index := integer(step["step_index"])
@@ -309,6 +306,7 @@ func (s sourceFiles) parseAGYStream(path, origin, inputs string) (ConversationRe
 				add(id, "system", "metadata", jsonText(step), "", line)
 			}
 		case "result":
+			recognized = true
 			result, resultLine = mapValue(event["result"]), line
 			conversationID = defaultString(result["conversation_id"], conversationID)
 		}
@@ -348,28 +346,26 @@ func (s sourceFiles) parseAGYStream(path, origin, inputs string) (ConversationRe
 			}
 		}
 	}
-	if len(messages) == 0 {
+	if !recognized && info.Size() > 0 {
+		return ConversationRecord{}, false, fmt.Errorf("parser mismatch: %s is a nonempty AGY transcript with no recognized stream events", origin)
+	}
+	if !recognized {
 		return ConversationRecord{}, false, nil
 	}
 	nativeID := defaultString(conversationID, strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
-	return ConversationRecord{NativeID: nativeID, Provider: "antigravity", Model: model, Effort: effort, Origin: origin, Harness: "antigravity-cli", Coverage: "partial",
+	return ConversationRecord{NativeID: nativeID, Provider: "antigravity", Model: model, Effort: effort, Origin: origin, Harness: "agy", Coverage: "partial",
 		Messages: messages, StartedAt: invocation.launched, EndedAt: invocation.completed, Observed: info.ModTime().UnixNano()}, true, nil
 }
 
-// AGY prefixes results with Created At / Completed At headers, and may put the
-// exit line after other text. Match it anywhere, preserving the numeric code.
-var antigravityExitPattern = regexp.MustCompile(`\bCommand exited with code (-?\d+)\.`)
-
+// The CLI's header is exit evidence even after timestamp lines. Command
+// output may print the same sentence and must not invent an exit status.
 func antigravityExitCode(content string) *int64 {
-	match := antigravityExitPattern.FindStringSubmatch(content)
-	if len(match) != 2 {
+	code, known := agyExitCode(content)
+	if !known {
 		return nil
 	}
-	code, err := strconv.ParseInt(match[1], 10, 64)
-	if err != nil {
-		return nil
-	}
-	return &code
+	value := int64(code)
+	return &value
 }
 
 func antigravityToolResult(tool string, content any, failed bool, message string) map[string]any {
