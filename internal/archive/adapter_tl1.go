@@ -341,7 +341,8 @@ func tl1ReadsTranscriptFile(name string) bool {
 // reads shell exit status and reports unsupported transcript formats. v11
 // retains numeric exit evidence alongside native transcript selection. v12 publishes
 // workflow analysis before transcript ingestion, and reads newest tasks first.
-func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v12-workflow-snapshot-first" }
+// v13 retains Claude startup, rate-limit and retry diagnostics before any reply.
+func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v13-claude-diagnostics" }
 
 func (a *tl1Adapter) Discover(emit func(WorkspaceRecord) error) error {
 	installations, err := a.installations()
