@@ -339,8 +339,9 @@ func tl1ReadsTranscriptFile(name string) bool {
 // stream-json transcripts (parseAGYStream), which earlier versions passed to
 // the Claude Code parser and stored without messages. v9 selects the provider
 // from each transcript's filename before falling back to its attempt. v10
-// reads shell exit status and reports unsupported transcript formats.
-func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v10-agy-exit-status" }
+// reads shell exit status and reports unsupported transcript formats. v11
+// retains numeric exit evidence alongside native transcript selection.
+func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v11-agy-telemetry-evidence" }
 
 func (a *tl1Adapter) Discover(emit func(WorkspaceRecord) error) error {
 	a.snapshots = nil

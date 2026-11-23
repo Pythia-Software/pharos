@@ -24,12 +24,13 @@ import (
 // of a patch recorded as a list of changes. v15 repairs Claude.ai export
 // tool-block timestamps before replaying the ledger. v16 records harness
 // waits (background commands, Monitor watches, scheduled wakeups) to the
-// notice that ends them (harness_waits.go).
+// notice that ends them (harness_waits.go). v17 counts every non-zero exit
+// and explicit tool error, without interpreting command-specific meanings.
 //
 // This is the version of every conversation, so changing it rebuilds the
 // whole library's ledger: an hour or more on a large one. A change that can
 // alter only some conversations' rows adds a toolLedgerScopes entry instead.
-const toolLedgerVersion = "tools-v16-harness-waits"
+const toolLedgerVersion = "tools-v17-exit-evidence"
 
 // toolLedgerScope names the conversations one change to the derivation can
 // affect, and the revision that change gives their ledgers. A conversation is
@@ -199,7 +200,6 @@ var (
 	patchFilePattern      = regexp.MustCompile(`(?m)^\*\*\* (?:Update|Add|Delete) File: (.+)$`)
 	harnessBlockedPattern = regexp.MustCompile(`(?s)<tool_use_error>\s*blocked:`)
 	blockSuffixPattern    = regexp.MustCompile(`(:(reasoning-)?block:\d+|:usage)$`)
-	benignExitPrograms    = map[string]bool{"grep": true, "rg": true, "ag": true, "egrep": true, "fgrep": true, "diff": true, "cmp": true, "test": true, "[": true, "[[": true}
 	shellToolNames        = map[string]bool{"bash": true, "shell": true, "exec_command": true, "exec": true, "local_shell": true, "run": true, "container.exec": true, "run_command": true, "execute_command": true, "run_commands": true, "run_in_terminal": true, "run_terminal_cmd": true, "run_terminal_command_v2": true, "terminal": true}
 	toolCategoryByName    = map[string]string{}
 	toolCategoryEntries   = map[string][]string{
@@ -375,8 +375,14 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 				content = result.Text
 			} else {
 				content, images = toolResultText(payload["content"])
-				isError = payload["is_error"] == true || ((call.MCPServer != "" || call.Category == "mcp") && mcpResultError(payload["content"]))
-				details = mapValue(payload["details"])
+				isError = toolResultFailed(payload) || ((call.MCPServer != "" || call.Category == "mcp") && mcpResultError(payload["content"]))
+				details = mapValueDefault(payload["details"])
+				// Some formats put exit/status evidence on the result envelope.
+				for _, field := range []string{"exit_code", "exitCode", "status", "error"} {
+					if details[field] == nil && payload[field] != nil {
+						details[field] = payload[field]
+					}
+				}
 			}
 			last := result.NativeID
 			for _, index := range later[key] {
@@ -386,7 +392,7 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 				}
 				last = messages[index].NativeID
 				text, count := toolResultText(payload["content"])
-				content, images, isError = content+"\n"+text, images+count, isError || payload["is_error"] == true
+				content, images, isError = content+"\n"+text, images+count, isError || toolResultFailed(payload)
 				call.EndedAt = defaultString(nilIfEmpty(messages[index].CreatedAt), call.EndedAt)
 			}
 			call.ResultBytes = int64(len(content))
@@ -1034,6 +1040,8 @@ func classifyToolOutcome(call *toolCall, content string, isError bool, details m
 	if code, ok := number(firstNonNil(details["exitCode"], details["exit_code"])); ok {
 		value := int64(code)
 		call.ExitCode = &value
+	} else if call.ToolName == "run_command" && antigravityExitCode(content) != nil {
+		call.ExitCode = antigravityExitCode(content)
 	} else if match := exitCodePattern.FindStringSubmatch(content); len(match) == 2 {
 		if code, err := strconv.ParseInt(match[1], 10, 64); err == nil {
 			call.ExitCode = &code
@@ -1041,7 +1049,7 @@ func classifyToolOutcome(call *toolCall, content string, isError bool, details m
 	}
 	failedCommand := false
 	for _, command := range call.Commands {
-		if command.ExitCode != nil && *command.ExitCode != 0 && !(*command.ExitCode == 1 && benignExitPrograms[command.Program]) {
+		if command.ExitCode != nil && *command.ExitCode != 0 {
 			failedCommand = true
 			if call.ExitCode == nil {
 				value := *command.ExitCode
@@ -1057,14 +1065,10 @@ func classifyToolOutcome(call *toolCall, content string, isError bool, details m
 	persisted := firstString(details["persistedOutputPath"]) != ""
 	call.Truncated = persisted || details["truncated"] == true || strings.Contains(content, "<persisted-output>") ||
 		strings.Contains(content, "Output truncated") || strings.Contains(content, "tokens truncated") || strings.Contains(content, "[... truncated")
-	benign := call.ExitCode != nil && *call.ExitCode == 1 && benignExitPrograms[call.Program] && len(call.Commands) <= 1
 	// An adapter names the harness policy (a hook) that turned a call down.
 	blocked := firstString(details["blocked_by"]) != ""
 	failed := isError || failedCommand || call.Interrupted || blocked || call.ErrorType != "" || status == "failed" || status == "declined" || status == "error" ||
-		(call.ExitCode != nil && *call.ExitCode != 0 && !benign)
-	if benign && !failedCommand && call.ErrorType == "" && !call.Interrupted && !blocked {
-		failed = false
-	}
+		(call.ExitCode != nil && *call.ExitCode != 0) || toolResultHasError(details["error"])
 	if !failed {
 		return
 	}
@@ -1185,4 +1189,13 @@ func applyLineCounts(call *toolCall, input any, details map[string]any) {
 	if found {
 		call.LinesAdded, call.LinesRemoved = &added, &removed
 	}
+}
+
+// A false flag never cancels a separate explicit error or exit-code evidence.
+func toolResultFailed(payload map[string]any) bool {
+	return payload["is_error"] == true || payload["isError"] == true || toolResultHasError(payload["error"])
+}
+
+func toolResultHasError(value any) bool {
+	return value != nil && value != false && value != ""
 }

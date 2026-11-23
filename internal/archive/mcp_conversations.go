@@ -394,7 +394,7 @@ func (c *Catalog) collapseConversationMirrors(rows []map[string]any) []map[strin
 
 func (c *Catalog) conversationOverview(args map[string]any) (map[string]any, error) {
 	id := firstString(args["conversation_id"])
-	rows, err := queryMaps(c.DB, `SELECT c.id conversation_id,c.workspace_id,c.provider,c.model,c.effort,c.coverage,c.started_at,c.ended_at,
+	rows, err := queryMaps(c.DB, `SELECT c.id conversation_id,c.workspace_id,c.provider,c.model,c.effort,c.coverage,c.started_at,c.ended_at,w.source_kind,
 		substr(w.title,1,121) title,substr(w.outcome,1,201) outcome,w.activity_at,substr(r.display_name,1,101) repository,
 		d.initiation,d.initiation_message_id,d.outcome conversation_outcome,d.outcome_message_id,d.indexed_at,
 		(SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id) message_count
@@ -419,6 +419,13 @@ func (c *Catalog) conversationOverview(args map[string]any) (map[string]any, err
 		"last_response":     map[string]any{"text": clipText(firstString(row["conversation_outcome"]), min(500, budget)), "message_id": row["outcome_message_id"]},
 		"workspace_outcome": clipText(firstString(row["outcome"]), 200),
 		"note":              "Extractive previews; inspect cited messages before treating an outcome as verified."}
+	if row["provider"] == "antigravity" {
+		if row["source_kind"] == "tl1" {
+			result["reasoning_coverage_note"] = "AGY stream-json includes thinking token counts but no thinking text. A linked native Antigravity conversation may retain summaries."
+		} else {
+			result["reasoning_coverage_note"] = "Native Antigravity thinking summaries, when recorded, are retained separately as reasoning and searchable. Missing text in retained history does not prove the model did not think."
+		}
+	}
 	copyOrigin(result, row)
 	if content, err := c.tl1ContentConversation(context.Background(), id); err != nil {
 		return nil, err

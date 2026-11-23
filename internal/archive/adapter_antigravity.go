@@ -41,7 +41,7 @@ var antigravityProducts = map[string]string{"antigravity": "Antigravity", "antig
 
 // antigravityExtractor versions the parser; bump it when parsing changes so
 // every transcript is parsed again.
-const antigravityExtractor = "antigravity-v4-thinking"
+const antigravityExtractor = "antigravity-v5-tool-exits"
 
 const (
 	antigravitySummaries = "conversation_summaries.db"
@@ -986,10 +986,7 @@ func (a *antigravityAdapter) record(id, path string, summary antigravitySummary,
 			if call.kind == "delegation" {
 				item.Kind = "delegation_result"
 			}
-			payload := map[string]any{"tool": call.tool, "content": content, "is_error": failed}
-			if message := firstString(event["error"]); message != "" {
-				payload["details"] = map[string]any{"error": message}
-			}
+			payload := antigravityToolResult(call.tool, content, failed, firstString(event["error"]))
 			item.Text = jsonText(payload)
 			messages = append(messages, item)
 		default:

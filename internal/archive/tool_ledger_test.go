@@ -243,8 +243,8 @@ func TestCodexExecToolLedger(t *testing.T) {
 	if call == nil || len(calls) != 1 {
 		t.Fatalf("calls: %#v", calls)
 	}
-	// rg exiting 1 means "no matches", not a failure.
-	if call["status"] != "ok" || call["command_category"] != "search" || integer(call["command_count"]) != 2 {
+	// Every non-zero exit is counted; the consumer interprets no-match verdicts.
+	if call["status"] != "error" || call["command_category"] != "search" || integer(call["command_count"]) != 2 {
 		t.Fatalf("exec call: %#v", call)
 	}
 	if integer(call["duration_ms"]) != 1200 || call["duration_source"] != "reported" || integer(call["result_tokens"]) != 60 || call["model"] != "gpt-5.5" {
@@ -1025,5 +1025,37 @@ func TestToolLedgerScopeRebuildsOnlyItsConversations(t *testing.T) {
 		}}}})
 	if got := versions(); !strings.Contains(got, "later="+plain+"+codex-change ") || pending() != "" {
 		t.Fatalf("ingest under a scope stored %q, pending %q", got, pending())
+	}
+}
+
+func TestToolOutcomeUsesAllFailureEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name, output string
+		payload      map[string]any
+		failed       bool
+	}{
+		{name: "nonzero verdict", output: "Command exited with code 2.", failed: true},
+		{name: "header", output: "Created At: x\nCompleted At: y\nCommand exited with code 1.", failed: true},
+		{name: "unknown exit", output: "output only"},
+		{name: "flag", payload: map[string]any{"is_error": true}, failed: true},
+		{name: "camel flag", payload: map[string]any{"isError": true}, failed: true},
+		{name: "error object", payload: map[string]any{"error": map[string]any{"message": "bad"}}, failed: true},
+		{name: "zero but flagged", payload: map[string]any{"exit_code": 0, "is_error": true}, failed: true},
+		{name: "top-level nonzero", payload: map[string]any{"exit_code": 2, "is_error": false}, failed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload := test.payload
+			if payload == nil {
+				payload = map[string]any{}
+			}
+			payload["content"] = test.output
+			_, calls := buildToolLedger([]MessageRecord{{NativeID: "call", Role: "assistant", Kind: "tool_call", CallID: "call", Text: `{"tool":"run_command","input":{"CommandLine":"checker"}}`}, {NativeID: "result", Role: "tool", Kind: "tool_result", CallID: "call", Text: jsonText(payload)}}, "gemini-4-neon")
+			if len(calls) != 1 || (calls[0].Status == "error") != test.failed {
+				t.Fatalf("outcome: %+v", calls)
+			}
+			if test.name == "unknown exit" && calls[0].ExitCode != nil {
+				t.Fatalf("unknown became success: %+v", calls[0])
+			}
+		})
 	}
 }

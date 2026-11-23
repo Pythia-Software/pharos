@@ -1013,3 +1013,58 @@ func TestWorkspaceMetricsStoreDuringAnIngest(t *testing.T) {
 		t.Fatalf("%d workspaces' metrics still waited for the ingest", pending())
 	}
 }
+
+func TestStatisticsToolOutcomes(t *testing.T) {
+	c := statisticsFixture(t)
+	tx := seedTx(t, c.DB)
+	for _, statement := range []string{
+		`UPDATE tool_calls SET model='call-model',started_at='2026-09-20T12:00:00Z',exit_code=0 WHERE id='a'`,
+		`UPDATE tool_calls SET model='other-model',started_at='2026-09-21T12:00:00Z',exit_code=2 WHERE id='b'`,
+		`UPDATE tool_calls SET model='call-model' WHERE id='d'`,
+	} {
+		if _, err := tx.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commitSeed(t, tx)
+	report := statisticsCall(t, c, "query_statistics", map[string]any{"entity": "tool_call", "group_by": []string{"executor", "model", "project", "day"}, "project": "metrics", "max_output_tokens": 8000})
+	groups := report["groups"].([]map[string]any)
+	if len(groups) != 3 || report["population_complete"] != true {
+		t.Fatalf("groups: %v", report)
+	}
+	for _, group := range groups {
+		key := group["key"].(map[string]any)
+		if key["executor"] != "codex" || key["project"] != "metrics" || key["project_id"] != "repository:r" || integer(group["tool_call_count"]) != 1 {
+			t.Fatalf("group: %v", group)
+		}
+	}
+	filtered := statisticsCall(t, c, "query_statistics", map[string]any{"entity": "tool_call", "model": "call-model", "from": "2026-09-20", "to": "2026-09-20"})
+	group := filtered["groups"].([]map[string]any)[0]
+	if integer(group["tool_call_count"]) != 1 || integer(group["failed_tool_call_count"]) != 0 || integer(group["unknown_exit_code_count"]) != 0 {
+		t.Fatalf("call-time/model selection: %v", filtered)
+	}
+	for _, args := range []map[string]any{
+		{"entity": "tool_call", "cursor": "unsupported"},
+		{"entity": "conversation", "executor": "agy"},
+		{"entity": "tool_call", "group_by": []string{"model", "model"}},
+		{"entity": "tool_call", "group_by": "model"},
+		{"entity": "tool_call", "workspace_ids": []string{}},
+		{"entity": "tool_call", "limit": 1}, // three groups
+	} {
+		if args["limit"] != nil {
+			args["group_by"] = []string{"model", "day"}
+		}
+		if _, err := callMCP(c, "query_statistics", args); err == nil {
+			t.Fatalf("accepted invalid/bounded report: %v", args)
+		}
+	}
+	// Pending conversations, including those with no calls yet, prevent claiming
+	// a complete zero. Stale ledger rows are excluded from the measured totals.
+	if _, err := c.DB.Exec("UPDATE tool_ledger_state SET version='old' WHERE conversation_id='c1'"); err != nil {
+		t.Fatal(err)
+	}
+	pending := statisticsCall(t, c, "query_statistics", map[string]any{"entity": "tool_call"})
+	if pending["population_complete"] != false || integer(pending["coverage"].(map[string]any)["pending_conversations"]) != 1 || integer(pending["groups"].([]map[string]any)[0]["tool_call_count"]) != 0 {
+		t.Fatalf("pending counted as success: %v", pending)
+	}
+}

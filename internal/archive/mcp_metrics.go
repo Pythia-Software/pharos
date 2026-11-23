@@ -24,7 +24,7 @@ var metricDefinitions = []metricDefinition{
 	{"cache_read_input_tokens", "tokens", "Cache-read portion of input; absence of reported usage is unknown."},
 	{"user_turn_count", "count", "Retained user messages of kind message, including prompts supplied by the agent app."},
 	{"tool_call_count", "count", "Recorded tool calls including delegations; compound commands count once."},
-	{"tool_error_count", "count", "Calls recorded with error status, rather than mentions of errors in text or the overall task outcome."},
+	{"tool_error_count", "count", "Calls with a non-zero exit code, an explicit error flag or a tool-level error; exit codes are not interpreted as verdicts or crashes."},
 	{"compaction_count", "count", "Attributed Claude boundaries and Codex triggers, excluding replayed events."},
 	{"wall_clock_span_seconds", "seconds", "Recorded start-to-end span including idle time; unfinished intervals are unknown."},
 }
@@ -132,6 +132,9 @@ func metricCall(args map[string]any) bool {
 
 func parseMetricRequest(tool string, args map[string]any) (statisticsRequest, error) {
 	r := statisticsRequest{}
+	if args["executor"] != nil {
+		return r, fmt.Errorf("executor is only supported by query_statistics entity=tool_call")
+	}
 	if tool == "query_statistics" {
 		for _, toolSchema := range mcpTools {
 			if firstString(toolSchema["name"]) != tool {

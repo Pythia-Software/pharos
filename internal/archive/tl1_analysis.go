@@ -151,6 +151,7 @@ func (c *Catalog) TL1Overview(selection tl1Selection, window tl1Window) (map[str
 	result := map[string]any{
 		"project": data.Project, "installations": data.Installations, "days": window.Days, "scope": data.Scope, "since": nilIfEmpty(data.Since),
 		"window": tl1WindowRow(data), "enqueues": tl1EnqueueRows(data, tl1EnqueueListLimit),
+		"timing": tl1TimingSummary(data.Tasks), "timing_batches": tl1TimingBatches(data),
 		"totals": tl1Totals(data, candidates, human), "coverage": tl1Coverage(data), "matrix": matrix, "flavors": flavors,
 		"graph": tl1Graph(data), "errors": errors, "candidates": candidates, "human": human, "contract_repairs": contracts,
 		"reviews": reviews, "followups": tl1Followups(data), "configuration_health": data.Health, "findings": c.tl1Findings(data),
