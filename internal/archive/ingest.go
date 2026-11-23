@@ -262,15 +262,6 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 		report("failed")
 		return result
 	}
-	if provider, ok := adapter.(tl1SnapshotProvider); ok {
-		if err := c.storeTL1Snapshots(ctx, provider.tl1Snapshots(), host.ID, view != nil); err != nil {
-			message := fmt.Sprintf("TL1 analysis snapshot: %v", err)
-			state("failed", "", fingerprint, message, 0, false)
-			result.Error = message
-			report("failed")
-			return result
-		}
-	}
 	if err := state("complete", fingerprint, fingerprint, "", 0, true); err != nil {
 		result.Error = fmt.Sprintf("record source completion: %v", err)
 		report("failed")
@@ -321,6 +312,12 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 	}()
 	config := adapter.Config()
 	mode := modeOf(ctx)
+	if provider, ok := adapter.(tl1SnapshotProvider); ok {
+		provider.setTL1SnapshotSink(func(snapshot tl1Snapshot) error {
+			return c.storeTL1Snapshots(ctx, []tl1Snapshot{snapshot}, host, captureViewOf(adapter) != nil)
+		})
+		defer provider.setTL1SnapshotSink(nil)
+	}
 	indexVersion, err := c.effectiveIndexVersion(host, config.Name, adapter)
 	if err != nil {
 		return err

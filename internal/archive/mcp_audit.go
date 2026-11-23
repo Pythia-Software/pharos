@@ -339,6 +339,18 @@ func (c *Catalog) archiveSourceStatus() (map[string]any, error) {
 				reasons = append(reasons, field)
 			}
 		}
+		if row["kind"] == "tl1" {
+			pending, err := c.tl1AnalysisPending(firstString(row["host_id"]), firstString(row["source"]))
+			if err != nil {
+				row["tl1_analysis_error"] = clipText(err.Error(), 300)
+				reasons = append(reasons, "tl1_analysis_unavailable")
+			} else {
+				row["tl1_analysis_pending_installations"] = pending
+			}
+			if err == nil && pending > 0 {
+				reasons = append(reasons, "tl1_analysis_pending")
+			}
+		}
 		row["stale"] = len(reasons) != 0
 		row["stale_reasons"] = reasons
 		row["is_current_host"] = row["host_id"] == host.ID

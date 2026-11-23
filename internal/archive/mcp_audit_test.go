@@ -444,6 +444,57 @@ func TestMCPArchiveStatus(t *testing.T) {
 	if unknown["capture_times_available"] != false || unknown["items"].([]map[string]any)[0]["last_capture_at"] != nil {
 		t.Fatalf("invented capture time: %#v", unknown)
 	}
+	t.Run("TL1 analysis trails retained or ingested inputs", func(t *testing.T) {
+		useHost(t, "host-a")
+		catalog, config := testCatalog(t)
+		registry := tl1Fixture(t, 0)
+		adapter, err := MakeAdapter(SourceConfig{Name: "workflow-index", Kind: "tl1", Path: registry, Account: "local", Enabled: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result := catalog.Ingest(adapter, nil); result.Error != nil {
+			t.Fatalf("TL1 ingest: %+v", result)
+		}
+		var version int64
+		if err := catalog.DB.QueryRow("SELECT source_version FROM tl1_installations WHERE installation_id='install-1'").Scan(&version); err != nil {
+			t.Fatal(err)
+		}
+		check := func(pending int) {
+			t.Helper()
+			result := auditCall(t, catalog, "get_archive_status", map[string]any{"source": "workflow-index", "max_output_tokens": 4000})
+			items := result["items"].([]map[string]any)
+			if len(items) != 1 || integer(items[0]["tl1_analysis_pending_installations"]) != int64(pending) || items[0]["stale"] != (pending > 0) {
+				t.Fatalf("TL1 analysis freshness pending=%d: %+v", pending, result)
+			}
+			if pending > 0 && !strings.Contains(jsonText(items[0]["stale_reasons"]), "tl1_analysis_pending") {
+				t.Fatalf("missing analysis reason: %+v", items[0])
+			}
+		}
+		// A recent successful scan can still contain analysis from an older
+		// database than the task workspaces already in the catalog.
+		execSQL(t, catalog.DB, "UPDATE tl1_installations SET source_version=1")
+		check(1)
+		execSQL(t, catalog.DB, fmt.Sprintf("UPDATE tl1_installations SET source_version=%d", version))
+		check(0) // Old task dates alone do not make an idle installation stale.
+
+		// New capture evidence is pending before even one workspace is read.
+		catalog.setCaptureRoot(config.CaptureRoot)
+		database := filepath.Join(filepath.Dir(registry), "tl1.db")
+		manifest := captureManifest{Version: captureManifestVersion, Source: captureSourceInfo{Name: "workflow-index", Kind: "tl1"},
+			Snapshots:     []*capturedSnapshot{{Path: database, Captured: "files/tl1.db", Source: sqliteSourceState{MTimeNS: version + 1}}},
+			Installations: []capturedInstallation{{ID: "install-1", DBPath: database, CapturedDB: "files/tl1.db"}}}
+		data, _ := json.Marshal(manifest)
+		file := filepath.Join(config.CaptureRoot, currentHost().ID, "workflow-index", captureManifestName)
+		writeSourceFile(t, file, string(data))
+		check(1)
+		execSQL(t, catalog.DB, fmt.Sprintf("UPDATE tl1_installations SET source_version=%d", version+1))
+		check(0)
+		writeSourceFile(t, file, "invalid manifest")
+		result := auditCall(t, catalog, "get_archive_status", map[string]any{"source": "workflow-index"})
+		if !strings.Contains(jsonText(result["items"]), "tl1_analysis_unavailable") {
+			t.Fatalf("unavailable evidence reported current: %+v", result)
+		}
+	})
 }
 
 func TestMCPArchiveStatusEmptyAndCurrent(t *testing.T) {

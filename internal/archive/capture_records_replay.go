@@ -288,9 +288,9 @@ type sqliteReplayAdapter struct {
 	maxEntityBytes int64
 	entityGap      func(string)
 	baseAdapter
-	store     *recordStore
-	revisions []retainedSQLiteRevision
-	snapshots []tl1Snapshot
+	store        *recordStore
+	revisions    []retainedSQLiteRevision
+	snapshotSink func(tl1Snapshot) error
 }
 
 func (a *sqliteReplayAdapter) Fingerprint() (string, error) {
@@ -311,9 +311,12 @@ func (a *sqliteReplayAdapter) ExtractorVersion() string {
 	if v, ok := ordinary.(VersionedAdapter); ok {
 		return recordWriter + ":" + v.ExtractorVersion()
 	}
+	if version := sourceIndexVersion(ordinary); version != "" {
+		return recordWriter + ":" + version
+	}
 	return recordWriter
 }
-func (a *sqliteReplayAdapter) tl1Snapshots() []tl1Snapshot { return a.snapshots }
+func (a *sqliteReplayAdapter) setTL1SnapshotSink(sink func(tl1Snapshot) error) { a.snapshotSink = sink }
 func (a *sqliteReplayAdapter) Discover(emit func(WorkspaceRecord) error) error {
 	for i, r := range a.revisions {
 		if e := a.context().Err(); e != nil {
@@ -503,6 +506,13 @@ func (a *sqliteReplayAdapter) replay(r retainedSQLiteRevision, emit func(Workspa
 			return nil
 		}
 	}
+	if provider, ok := adapter.(tl1SnapshotProvider); ok && a.snapshotSink != nil {
+		provider.setTL1SnapshotSink(func(snapshot tl1Snapshot) error {
+			snapshot.EvidenceIdentity = retainedSQLiteIdentity(r)
+			snapshot.EvidenceRevision = r.Ref.Hash
+			return a.snapshotSink(snapshot)
+		})
+	}
 	if e = discover(func(record WorkspaceRecord) error {
 		record.EvidenceIdentity = retainedSQLiteIdentity(r)
 		if isConductorSource(v.Source.Kind) {
@@ -516,14 +526,6 @@ func (a *sqliteReplayAdapter) replay(r retainedSQLiteRevision, emit func(Workspa
 		return emit(record)
 	}); e != nil {
 		return e
-	}
-	if provider, ok := adapter.(tl1SnapshotProvider); ok {
-		snapshots := provider.tl1Snapshots()
-		for i := range snapshots {
-			snapshots[i].EvidenceIdentity = retainedSQLiteIdentity(r)
-			snapshots[i].EvidenceRevision = r.Ref.Hash
-		}
-		a.snapshots = append(a.snapshots, snapshots...)
 	}
 	return nil
 }

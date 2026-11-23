@@ -3,6 +3,8 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -218,9 +220,10 @@ func (c *Catalog) ensureTL1Schema() error {
 }
 
 // tl1SnapshotProvider is implemented by adapters that capture TL1 workflow
-// state during Discover.
+// state during Discover. The sink publishes each validated database read before
+// the potentially much longer transcript ingestion, also for retained replay.
 type tl1SnapshotProvider interface {
-	tl1Snapshots() []tl1Snapshot
+	setTL1SnapshotSink(func(tl1Snapshot) error)
 }
 
 // storeTL1Snapshots replaces each installation's TL1 analysis rows in one
@@ -398,4 +401,58 @@ func insertTL1Rows(tx *sql.Tx, table string, rows []map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// tl1AnalysisPending compares workflow analysis with evidence already retained
+// or ingested for this source. A recent reindex of an old capture is not proof
+// that the analysis includes newer input. Idle installations are not stale
+// merely because their last task is old.
+func (c *Catalog) tl1AnalysisPending(host, source string) (int, error) {
+	rows, err := queryMaps(c.reader(), `SELECT DISTINCT substr(w.source_id,1,instr(w.source_id,':')-1) installation_id
+		FROM workspace_sightings s JOIN workspaces w ON w.id=s.workspace_id
+		JOIN copy_versions v ON v.workspace_id=w.id AND v.host_id=s.host_id AND v.conversation_id='' AND v.origin=''
+		LEFT JOIN tl1_installations i ON i.installation_id=substr(w.source_id,1,instr(w.source_id,':')-1)
+		WHERE s.host_id=? AND s.source_name=? AND w.source_kind='tl1'
+		AND v.version>COALESCE(i.source_version,0)`, host, source)
+	if err != nil {
+		return 0, err
+	}
+	pending := map[string]bool{}
+	for _, row := range rows {
+		pending[firstString(row["installation_id"])] = true
+	}
+	root := c.captureRootPath()
+	if root == "" {
+		return len(pending), nil
+	}
+	manifest, err := loadCaptureManifest(filepath.Join(root, host, source))
+	if os.IsNotExist(err) {
+		return len(pending), nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if manifest.Source.Kind != "tl1" {
+		return len(pending), nil
+	}
+	stored, err := queryMaps(c.reader(), "SELECT installation_id,source_version FROM tl1_installations WHERE host_id=?", host)
+	if err != nil {
+		return 0, err
+	}
+	versions := map[string]int64{}
+	for _, row := range stored {
+		versions[firstString(row["installation_id"])] = integer(row["source_version"])
+	}
+	inputs := map[string]int64{}
+	for _, snapshot := range manifest.Snapshots {
+		if snapshot.MissingSince == "" {
+			inputs[snapshot.Path] = snapshot.Source.version()
+		}
+	}
+	for _, installation := range manifest.Installations {
+		if inputs[installation.DBPath] > versions[installation.ID] {
+			pending[installation.ID] = true
+		}
+	}
+	return len(pending), nil
 }
