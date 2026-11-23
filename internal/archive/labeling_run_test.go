@@ -208,7 +208,7 @@ func labelingFakeCLI() int {
 		answer, _ := json.Marshal(output)
 		emit(map[string]any{"type": "thread.started", "thread_id": "thread-fake"})
 		emit(map[string]any{"type": "turn.started"})
-		emit(map[string]any{"type": "item.completed", "item": map[string]any{"id": "item_0", "type": "reasoning", "text": "PRIVATE THOUGHT"}})
+		emit(map[string]any{"type": "item.completed", "item": map[string]any{"id": "item_0", "type": "reasoning", "text": "Compare the supplied evidence.", "encrypted_content": "OPAQUE REASONING"}})
 		if scenario == "tool-answer-hang" {
 			emit(map[string]any{"type": "item.completed", "item": map[string]any{"id": "item_1", "type": "command_execution", "command": "ls", "status": "completed"}})
 		}
@@ -693,7 +693,7 @@ func TestLabelingRunThroughCodex(t *testing.T) {
 	if served[0]["job"] != servedModelUnverified || served[0]["usable"] != int64(6) || attempt["served_model"] != servedModelUnverified {
 		t.Fatalf("served model = %v, attempt %v", served, attempt["served_model"])
 	}
-	if attempt["session_id"] != "thread-fake" || strings.Contains(string(events), "PRIVATE THOUGHT") {
+	if attempt["session_id"] != "thread-fake" || !strings.Contains(string(events), "Compare the supplied evidence.") || strings.Contains(string(events), "OPAQUE REASONING") {
 		t.Fatalf("attempt = %v, events %s", attempt, events)
 	}
 	var called struct{ Argv []string }
@@ -701,7 +701,7 @@ func TestLabelingRunThroughCodex(t *testing.T) {
 	json.Unmarshal(data, &called)
 	joined := strings.Join(called.Argv, " ")
 	for _, want := range []string{"exec --ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox read-only --model gpt-6-luna",
-		`model_reasoning_effort="high"`, "--json --output-schema " + filepath.Join(dir, "contracts"), "--disable shell_tool", " -"} {
+		`model_reasoning_effort="high"`, `model_reasoning_summary="detailed"`, "--json --output-schema " + filepath.Join(dir, "contracts"), "--disable shell_tool", " -"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("argv lacks %q: %s", want, joined)
 		}
