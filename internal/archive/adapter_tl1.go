@@ -19,7 +19,7 @@ import (
 // TL1 analysis layer (see tl1_store.go). Both come from one read transaction.
 type tl1Adapter struct {
 	baseAdapter
-	snapshots []tl1Snapshot
+	snapshotSink func(tl1Snapshot) error
 }
 
 type tl1Installation struct {
@@ -45,8 +45,7 @@ type tl1Snapshot struct {
 	ReviewFindings, HumanTouches, ConfigurationHealth []map[string]any
 }
 
-// tl1Snapshots returns the snapshots captured by the most recent Discover.
-func (a *tl1Adapter) tl1Snapshots() []tl1Snapshot { return a.snapshots }
+func (a *tl1Adapter) setTL1SnapshotSink(sink func(tl1Snapshot) error) { a.snapshotSink = sink }
 
 func (a *tl1Adapter) installations() ([]tl1Installation, error) {
 	if a.view != nil {
@@ -340,21 +339,20 @@ func tl1ReadsTranscriptFile(name string) bool {
 // the Claude Code parser and stored without messages. v9 selects the provider
 // from each transcript's filename before falling back to its attempt. v10
 // reads shell exit status and reports unsupported transcript formats. v11
-// retains numeric exit evidence alongside native transcript selection.
-func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v11-agy-telemetry-evidence" }
+// retains numeric exit evidence alongside native transcript selection. v12 publishes
+// workflow analysis before transcript ingestion, and reads newest tasks first.
+func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v12-workflow-snapshot-first" }
 
 func (a *tl1Adapter) Discover(emit func(WorkspaceRecord) error) error {
-	a.snapshots = nil
 	installations, err := a.installations()
 	if err != nil {
 		return err
 	}
 	for _, installation := range installations {
-		snapshot, err := a.database(installation, emit)
+		_, err := a.database(installation, emit)
 		if err != nil {
 			return fmt.Errorf("TL1 installation %s: %w", installation.Database, err)
 		}
-		a.snapshots = append(a.snapshots, snapshot)
 	}
 	return nil
 }
@@ -463,22 +461,21 @@ func (a *tl1Adapter) database(installation tl1Installation, emit func(WorkspaceR
 	if err := a.readActivity(tx, tables, installation.ID, &snapshot); err != nil {
 		return snapshot, err
 	}
-	tasks, err := queryMaps(tx, "SELECT * FROM tasks ORDER BY created_at,id")
+	tasks, err := queryMaps(tx, "SELECT * FROM tasks ORDER BY created_at DESC,id")
 	if err != nil {
 		return snapshot, err
 	}
+	// Normalize the complete workflow transaction before decoding transcripts.
+	// Ingestion can take hours or be interrupted; that must not hold the
+	// independent task/attempt analysis at the previous completed scan.
+	filesByTask := make(map[string][]string, len(tasks))
 	for _, task := range tasks {
-		taskID := firstString(task["id"])
-		files := a.transcriptFiles(installation, taskID)
-		record, err := a.task(installation, task, attempts[taskID], summaries, resources, tools, handoffs[taskID], candidates, flavors, files)
-		if err != nil {
+		if err := a.context().Err(); err != nil {
 			return snapshot, err
 		}
-		// Its conversations keep their transcripts' versions.
-		record.Observed = snapshot.Version
-		if err := emit(record); err != nil {
-			return snapshot, fmt.Errorf("ingest task %s: %w", taskID, err)
-		}
+		taskID := firstString(task["id"])
+		files := a.transcriptFiles(installation, taskID)
+		filesByTask[taskID] = files
 		taskRow := tl1TaskRow(installation.ID, a.config.Account, task, flavors[firstString(task["flavor_id"])])
 		snapshot.Tasks = append(snapshot.Tasks, taskRow)
 		native := attempts[taskID]
@@ -487,7 +484,30 @@ func (a *tl1Adapter) database(installation tl1Installation, emit func(WorkspaceR
 			snapshot.Attempts = append(snapshot.Attempts, a.attemptRow(installation, taskRow, attempt, summaries[firstString(attempt["id"])], resources[firstString(attempt["id"])], files, final))
 		}
 	}
-	return snapshot, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return snapshot, err
+	}
+	if a.snapshotSink != nil {
+		if err := a.snapshotSink(snapshot); err != nil {
+			return snapshot, fmt.Errorf("TL1 analysis snapshot: %w", err)
+		}
+	}
+	for _, task := range tasks {
+		if err := a.context().Err(); err != nil {
+			return snapshot, err
+		}
+		taskID := firstString(task["id"])
+		record, err := a.task(installation, task, attempts[taskID], summaries, resources, tools, handoffs[taskID], candidates, flavors, filesByTask[taskID])
+		if err != nil {
+			return snapshot, err
+		}
+		// Its conversations keep their transcripts' versions.
+		record.Observed = snapshot.Version
+		if err := emit(record); err != nil {
+			return snapshot, fmt.Errorf("ingest task %s: %w", taskID, err)
+		}
+	}
+	return snapshot, nil
 }
 
 // readActivity copies TL1's event log, review findings, human responses, and

@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -930,7 +931,8 @@ func TestTL1AgyTranscriptLinksItsAntigravitySession(t *testing.T) {
 					t.Fatalf("AGY transcript under %s attempt: provider=%q model=%q messages=%d ok=%v: %v", executor, conversation.Provider, conversation.Model, len(conversation.Messages), ok, err)
 				}
 			}
-			// The session as Antigravity keeps it, run in TL1's transcripts folder.
+			// The native session runs outside Git and TL1's transcript folder.
+			// Its explicit session alias, not a matching basename, owns its project.
 			native := filepath.Join(t.TempDir(), "antigravity-cli")
 			antigravityTranscript(t, native, session, "transcript_full.jsonl", antigravitySteps(
 				map[string]any{"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Design the crib.", "created_at": "2026-11-20T22:04:04Z"},
@@ -949,7 +951,7 @@ func TestTL1AgyTranscriptLinksItsAntigravitySession(t *testing.T) {
 			))
 			antigravityRequestRows(t, native, child, []any{[]uint64{1}, "gemini-4-neon", 1000, 100, 0, 0})
 			antigravitySummaryRows(t, native,
-				[]any{session, "Design the crib", "[]", "", 0, ""},
+				[]any{session, "Design the crib", `["/Users/example/.brick-agent-sessions/2026-11-23T09-20-36.665Z/fixture"]`, "", 0, ""},
 				[]any{child, "Check the crib", "[]", session, 1, "checker"})
 
 			ingest := func(source SourceConfig) {
@@ -1424,5 +1426,71 @@ func TestTL1QueueAdjustedTiming(t *testing.T) {
 	batches := tl1TimingBatches(data)
 	if len(batches) != 1 || batches[0]["tasks"] != 6 || batches[0]["makespan_seconds"] != float64(120) {
 		t.Fatalf("enqueue timing: %v", batches)
+	}
+}
+
+// Workflow tables must be visible even when the first transcript/workspace
+// write is interrupted. The next pass still finishes conversations and links.
+func TestTL1SnapshotPrecedesTranscriptIngestion(t *testing.T) {
+	for _, retained := range []bool{false, true} {
+		t.Run(fmt.Sprintf("retained=%t", retained), func(t *testing.T) {
+			useHost(t, "host-a")
+			catalog, config := testCatalog(t)
+			registry := tl1Fixture(t, 0)
+			source := SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true}
+			if retained {
+				source.Options = map[string]any{"sqlite_record_capture": true}
+				config.CaptureRoot = catalog.captureRootPath()
+				config.Sources = []SourceConfig{source}
+				if result := runCapture(t, config); !result.OK {
+					t.Fatalf("capture: %+v", result)
+				}
+			}
+			adapter, err := MakeAdapter(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			closeReader := func() {}
+			if retained {
+				target := captureTarget{Host: currentHost(), Source: source.Name, Dir: filepath.Join(config.CaptureRoot, currentHost().ID, source.Name)}
+				adapter, closeReader, err = openSQLiteReplay(t.Context(), target)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			defer closeReader()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			seen := 0
+			ctx = withIngestMode(ctx, ingestMode{written: func(string) {
+				seen++
+				var tasks, attempts int
+				if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM tl1_tasks").Scan(&tasks); err != nil {
+					t.Fatal(err)
+				}
+				if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM tl1_attempts").Scan(&attempts); err != nil {
+					t.Fatal(err)
+				}
+				if tasks != 3 || attempts != 2 {
+					t.Fatalf("workflow snapshot lagged transcript ingestion: tasks=%d attempts=%d", tasks, attempts)
+				}
+				var newest string
+				if err := catalog.DB.QueryRow("SELECT source_id FROM workspaces WHERE source_kind='tl1'").Scan(&newest); err != nil || newest != "install-1:task-human" {
+					t.Fatalf("newest task was not ingested first: %q %v", newest, err)
+				}
+				cancel()
+			}})
+			result := catalog.IngestContext(ctx, adapter, nil)
+			if seen != 1 || !result.Pending {
+				t.Fatalf("expected interruption after first workspace: seen=%d result=%+v", seen, result)
+			}
+			if result := catalog.Ingest(adapter, nil); result.Error != nil {
+				t.Fatalf("resume: %+v", result)
+			}
+			var tasks int
+			if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM workspaces WHERE source_kind='tl1'").Scan(&tasks); err != nil || tasks != 3 {
+				t.Fatalf("resume tasks=%d: %v", tasks, err)
+			}
+		})
 	}
 }

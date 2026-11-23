@@ -130,3 +130,29 @@ ramp/tail idle hours therefore remain null with `capacity_status=unavailable`
 and an explanation. Flavor `max_parallelism` and peak observed concurrency are
 not substitutes for capacity history. TL1 must supply capacity changes before
 Pharos can establish the corpus batch's utilisation or split idle ramp/tail time.
+
+## TL1 analysis and project freshness
+
+TL1 task and attempt analysis is published atomically for each installation
+as soon as its database transaction has been read and validated, before
+transcript parsing and workspace ingestion. Interrupted transcript ingestion
+therefore leaves the workflow snapshot available; missing transcript matches
+and usage remain unavailable until those conversations are indexed. Newest
+tasks are ingested first so recent sessions acquire their workflow links early.
+The database source version still prevents older captures from replacing newer
+analysis. `synced_at` is the time Pharos published that snapshot, not the time
+of the newest task or the source database's version.
+
+`get_archive_status` reports `tl1_analysis_pending` and
+`tl1_analysis_pending_installations` when analysis trails a retained database
+or a task workspace already ingested for that host and source. Unreadable
+capture metadata produces `tl1_analysis_unavailable`. An idle installation's
+old last-task date alone is not staleness evidence.
+
+A native Antigravity session inherits its explicitly linked TL1 task's
+repository project even when its cwd is an external, non-Git session folder.
+The native transcript remains the complete content source; the TL1 stream
+remains partial evidence. Before the TL1 stream's native session ID is indexed,
+its working folder remains its project. Folder basenames alone do not establish
+identity. The synthetic linking fixture exercises both ingestion orders with
+an external cwd; it does not establish the production batch's repaired totals.
