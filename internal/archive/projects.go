@@ -160,7 +160,7 @@ type projectChange struct{ id, folder, repository string }
 // projectChanges derives the project columns of the workspaces predicate (over
 // w) selects, and returns those that differ from the stored ones. It only reads.
 func projectChanges(ctx context.Context, q queryer, predicate string, args ...any) ([]projectChange, error) {
-	rows, err := queryMapsContext(ctx, q, `SELECT w.id,w.repository_id,w.location,w.project_folder,w.folder_repository_id FROM workspaces w WHERE `+predicate, args...)
+	rows, err := queryMapsContext(ctx, q, `SELECT w.id,w.source_kind,w.repository_id,w.location,w.project_folder,w.folder_repository_id FROM workspaces w WHERE `+predicate, args...)
 	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
@@ -176,6 +176,12 @@ func projectChanges(ctx context.Context, q queryer, predicate string, args ...an
 				}
 			}
 			repository = folderRepository(folderKey(location), roots)
+		}
+		if row["source_kind"] == "antigravity" && firstString(row["repository_id"]) == "" && repository == "" {
+			repository, err = tl1EvidenceProject(ctx, q, firstString(row["id"]))
+			if err != nil {
+				return nil, err
+			}
 		}
 		if folder != firstString(row["project_folder"]) || repository != firstString(row["folder_repository_id"]) {
 			changes = append(changes, projectChange{firstString(row["id"]), folder, repository})

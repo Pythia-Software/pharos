@@ -1403,6 +1403,9 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 	if err != nil {
 		return nil, err
 	}
+	if err := c.preferTL1NativeContent(context.Background(), conversations); err != nil {
+		return nil, err
+	}
 	if err := c.attachOrigins(context.Background(), conversations); err != nil {
 		return nil, err
 	}
@@ -1444,6 +1447,10 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 		conversation["token_usage"] = conversationTokenCounts(records)
 	}
 	result["conversations"] = conversations
+	contentIDs := []string{}
+	for _, conversation := range conversations {
+		contentIDs = append(contentIDs, firstString(conversation["id"]))
+	}
 	queries := []struct{ key, sql string }{
 		{"agent_sessions", `SELECT a.*,es.summary_json effort_summary,(SELECT COUNT(*) FROM agent_session_messages am WHERE am.agent_session_id=a.id) message_count
 			FROM agent_sessions a` + sessionEffortSummaryJoin + `WHERE a.workspace_id=? AND a.usage_status<>'in-child-conversation' ORDER BY a.depth,a.started_at,a.id`},
@@ -1463,7 +1470,12 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 		if !includeMessages && (query.key == "agent_sessions" || query.key == "token_evidence" || query.key == "metric_ledger" || query.key == "sightings") {
 			continue
 		}
-		values, e := queryMaps(c.reader(), query.sql, id)
+		statement, argument := query.sql, any(id)
+		if query.key == "agent_sessions" || query.key == "token_evidence" {
+			statement = strings.Replace(statement, "a.workspace_id=?", "a.conversation_id IN (SELECT value FROM json_each(?))", 1)
+			argument = jsonText(contentIDs)
+		}
+		values, e := queryMaps(c.reader(), statement, argument)
 		if e != nil {
 			return nil, e
 		}

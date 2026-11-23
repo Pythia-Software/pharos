@@ -192,7 +192,8 @@ func (c *Catalog) reasoningCoverage(ctx context.Context) (map[string]any, error)
 			row["status"] = "backfill_pending"
 		}
 		if firstString(row["source"]) == "antigravity" {
-			row["retention"] = "unsupported"
+			row["retention"] = "source_dependent"
+			row["detail"] = "Native planner thinking is retained as a summary when present; AGY stream-json does not include reasoning text. Older discarded summaries require reindexing native sources or captures."
 		} else {
 			row["retention"] = "source_dependent"
 		}

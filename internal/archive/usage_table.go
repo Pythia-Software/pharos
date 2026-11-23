@@ -466,6 +466,22 @@ func (c *Catalog) usageConversationRepresentatives(ctx context.Context, conversa
 	for _, row := range suppressMirrorRows(conversations, links) {
 		kept[firstString(row["id"])] = true
 	}
+	// Content/accounting preference is independent of the workflow envelope's
+	// source rank. Only substitute when native usage is actually available.
+	native, err := c.tl1NativeEvidence(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	available := map[string]bool{}
+	for _, row := range conversations {
+		available[firstString(row["id"])] = true
+	}
+	for fallback, id := range native {
+		if available[id] {
+			delete(kept, fallback)
+			kept[id] = true
+		}
+	}
 	return kept, nil
 }
 

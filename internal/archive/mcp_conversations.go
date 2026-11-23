@@ -324,6 +324,11 @@ func (c *Catalog) conversationCards(cards []map[string]any, parsed string) error
 }
 
 func (c *Catalog) collapseConversationMirrors(rows []map[string]any) []map[string]any {
+	native, _ := c.tl1NativeEvidence(context.Background(), false)
+	preferred := map[string]bool{}
+	for _, id := range native {
+		preferred[id] = true
+	}
 	byID := map[string]map[string]any{}
 	parent := map[string]string{}
 	for _, row := range rows {
@@ -352,7 +357,16 @@ func (c *Catalog) collapseConversationMirrors(rows []map[string]any) []map[strin
 	}
 	output := []map[string]any{}
 	for _, group := range groups {
-		sort.Slice(group, func(i, j int) bool { return group[i]["score"].(float64) > group[j]["score"].(float64) })
+		sort.Slice(group, func(i, j int) bool {
+			a, b := preferred[firstString(group[i]["conversation_id"])], preferred[firstString(group[j]["conversation_id"])]
+			if a != b {
+				return a
+			}
+			if group[i]["score"] != group[j]["score"] {
+				return group[i]["score"].(float64) > group[j]["score"].(float64)
+			}
+			return firstString(group[i]["conversation_id"]) < firstString(group[j]["conversation_id"])
+		})
 		chosen := group[0]
 		if len(group) > 1 {
 			aliases := []string{}
@@ -406,6 +420,11 @@ func (c *Catalog) conversationOverview(args map[string]any) (map[string]any, err
 		"workspace_outcome": clipText(firstString(row["outcome"]), 200),
 		"note":              "Extractive previews; inspect cited messages before treating an outcome as verified."}
 	copyOrigin(result, row)
+	if content, err := c.tl1ContentConversation(context.Background(), id); err != nil {
+		return nil, err
+	} else if content != id {
+		result["content_conversation_id"] = content
+	}
 	if contents, err := c.conversationContents(context.Background(), []string{id}); err != nil {
 		return nil, err
 	} else if held := contents[id]; held != nil {
