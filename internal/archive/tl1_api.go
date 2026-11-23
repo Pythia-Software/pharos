@@ -110,14 +110,13 @@ func tl1JSONValue(value any) any {
 }
 
 func tl1TaskRowJSON(data *tl1Data, task *tl1Task) map[string]any {
-	cost, priced, duration := 0.0, false, 0.0
+	cost, priced := 0.0, false
 	configurations := []string{}
 	for _, attempt := range task.Attempts {
 		if attempt.HasCost {
 			cost += attempt.Cost
 			priced = true
 		}
-		duration += attempt.Duration
 		if attempt.Configuration != "" {
 			configurations = append(configurations, attempt.Configuration)
 		}
@@ -129,9 +128,17 @@ func tl1TaskRowJSON(data *tl1Data, task *tl1Task) map[string]any {
 	row := map[string]any{"task_id": task.ID, "workspace_id": task.WorkspaceID, "title": task.Title, "flavor": task.Flavor, "execution_class": task.ExecutionClass,
 		"status": task.Status, "outcome": nilIfEmpty(task.Outcome), "disposition": task.disposition(), "error_class": nilIfEmpty(task.ErrorClass),
 		"error_signature": nilIfEmpty(task.ErrorSignature), "error_text": nilIfEmpty(tl1Clip(task.ErrorText, 600)), "attempts": len(task.Attempts),
-		"configurations": uniqueStrings(configurations), "cost_usd": tl1Optional(cost, priced), "duration_ms": tl1Optional(duration, duration > 0),
+		"configurations": uniqueStrings(configurations), "cost_usd": tl1Optional(cost, priced), "duration_ms": nil,
 		"created_at": task.CreatedAt, "claimed_at": nilIfEmpty(task.ClaimedAt), "completed_at": nilIfEmpty(task.CompletedAt), "parent_task_id": nilIfEmpty(task.ParentID),
 		"shape_version": nilIfEmpty(task.ShapeVersion), "revisit": task.Revisit, "installation_id": task.Installation["installation_id"], "mac": task.Installation["host_label"]}
+	for key, value := range tl1TaskTiming(task) {
+		row[key] = value
+	}
+	if seconds, ok := row["attempt_seconds"].(float64); ok {
+		row["duration_ms"] = seconds * 1000
+	} else {
+		row["duration_ms"] = nil
+	}
 	if final != nil {
 		row["conversation_native_id"] = nilIfEmpty(final.Conversation)
 		row["transcript_path"] = nilIfEmpty(tl1TranscriptPath(data, task, final))
@@ -162,12 +169,14 @@ func (c *Catalog) TL1Candidate(selection tl1Selection, candidateID string) (map[
 		return nil, fmt.Errorf("unknown TL1 candidate %q", candidateID)
 	}
 	tasks := []map[string]any{}
+	timingTasks := []*tl1Task{}
 	ids := map[string]bool{}
 	total, priced, unpriced := 0.0, false, 0
 	for _, task := range data.Tasks {
 		if task.CandidateID != candidateID {
 			continue
 		}
+		timingTasks = append(timingTasks, task)
 		ids[task.ID] = true
 		row := tl1TaskRowJSON(data, task)
 		if cost, ok := row["cost_usd"].(float64); ok {
@@ -188,7 +197,7 @@ func (c *Catalog) TL1Candidate(selection tl1Selection, candidateID string) (map[
 		sort.SliceStable(kept, func(i, j int) bool { return firstString(kept[i]["created_at"]) < firstString(kept[j]["created_at"]) })
 		return kept
 	}
-	return map[string]any{"project": data.Project, "installations": data.Installations, "candidate": candidate, "cost_usd": tl1Optional(total, priced), "unpriced_agent_tasks": unpriced, "tasks": tasks,
+	return map[string]any{"project": data.Project, "installations": data.Installations, "candidate": candidate, "timing": tl1TimingSummary(timingTasks), "cost_usd": tl1Optional(total, priced), "unpriced_agent_tasks": unpriced, "tasks": tasks,
 		"events": pick(data.Events), "review_findings": pick(data.Findings), "human_touches": pick(data.Touches)}, nil
 }
 
@@ -236,6 +245,8 @@ func (c *Catalog) tl1AttemptRowsContext(ctx context.Context) ([]map[string]any, 
 				"model_effort": modelEffort(attempt.Model, attempt.Effort),
 				"error_class":  nilIfEmpty(attempt.ErrorClass), "error_attribution": nilIfEmpty(attempt.ErrorAttribution), "error_signature": nilIfEmpty(attempt.ErrorSignature),
 				"candidate_id": nilIfEmpty(task.CandidateID), "started_at": nilIfEmpty(attempt.StartedAt), "task_created_at": nilIfEmpty(task.CreatedAt), "day": nilIfEmpty(day),
+				"completed_at": nilIfEmpty(attempt.CompletedAt), "attempt_seconds": tl1AttemptSeconds(attempt),
+				"queue_wait_seconds": tl1Seconds(task.CreatedAt, task.ClaimedAt), "wall_seconds": tl1Seconds(task.CreatedAt, task.CompletedAt),
 				"duration_ms": tl1Optional(attempt.Duration, attempt.HasDuration), "cost_usd": tl1Optional(attempt.Cost, attempt.HasCost),
 				"cost_source": nilIfEmpty(attempt.CostSource), "total_tokens": tokens, "output_tokens": attempt.Tokens["output_tokens"],
 				"reasoning_tokens": attempt.Tokens["reasoning_output_tokens"], "cache_read_share": cacheShare, "lines_changed": attempt.LinesChanged,

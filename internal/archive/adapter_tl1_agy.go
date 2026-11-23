@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -22,10 +24,11 @@ import (
 // becomes the TL1 conversation's alias, so the two link as one conversation
 // and TL1's copy, the workspace that counts, carries its usage.
 //
-// The stream holds less than Antigravity's own records: a tool step reports a
-// summary of its output ("1 lines, 38924 bytes") and no exit code, and no
-// event has a timestamp or reasoning text. The conversation is therefore
-// partial. The prompt is the stdin_text of the sibling <attempt>-agy-inputs.ndjson,
+// The stream holds less than Antigravity's own records: read_file output is
+// summarized and write/edit output can be empty. run_command retains command
+// output and exit lines, except when replaced by a truncation notice. Events
+// have no timestamp or reasoning text. Coverage is therefore partial. The prompt
+// is the stdin_text of the sibling <attempt>-agy-inputs.ndjson,
 // whose launch and exit times bound the run.
 
 // tl1AGYInputsSuffix names the file beside an agy transcript that records
@@ -285,10 +288,12 @@ func (s sourceFiles) parseAGYStream(path, origin, inputs string) (ConversationRe
 				emitCall(index, c)
 				details := mapValue(step["tool_info"])
 				failure := mapValue(details["error"])
-				failed := state == "ERROR" || failure != nil
-				payload := map[string]any{"tool": c.name, "content": firstNonNil(details["output"], failure["message"]), "is_error": failed}
-				if failure != nil {
-					payload["details"] = map[string]any{"error": firstNonNil(failure["message"], failure)}
+				failed := state == "ERROR" || toolResultHasError(details["error"]) || toolResultFailed(details)
+				payload := antigravityToolResult(c.name, firstNonNil(details["output"], failure["message"]), failed, "")
+				if toolResultHasError(details["error"]) {
+					extra := mapValueDefault(payload["details"])
+					extra["error"] = firstNonNil(failure["message"], details["error"])
+					payload["details"] = extra
 				}
 				kind := "tool_result"
 				if c.name == "invoke_subagent" {
@@ -349,4 +354,40 @@ func (s sourceFiles) parseAGYStream(path, origin, inputs string) (ConversationRe
 	nativeID := defaultString(conversationID, strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
 	return ConversationRecord{NativeID: nativeID, Provider: "antigravity", Model: model, Effort: effort, Origin: origin, Harness: "antigravity-cli", Coverage: "partial",
 		Messages: messages, StartedAt: invocation.launched, EndedAt: invocation.completed, Observed: info.ModTime().UnixNano()}, true, nil
+}
+
+// AGY prefixes results with Created At / Completed At headers, and may put the
+// exit line after other text. Match it anywhere, preserving the numeric code.
+var antigravityExitPattern = regexp.MustCompile(`\bCommand exited with code (-?\d+)\.`)
+
+func antigravityExitCode(content string) *int64 {
+	match := antigravityExitPattern.FindStringSubmatch(content)
+	if len(match) != 2 {
+		return nil
+	}
+	code, err := strconv.ParseInt(match[1], 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &code
+}
+
+func antigravityToolResult(tool string, content any, failed bool, message string) map[string]any {
+	payload := map[string]any{"tool": tool, "content": content, "is_error": failed || message != ""}
+	details := map[string]any{}
+	if tool == "run_command" {
+		text, _ := toolResultText(content)
+		if code := antigravityExitCode(text); code != nil {
+			payload["exit_code"] = *code
+			details["exit_code"] = *code
+			payload["is_error"] = failed || message != "" || *code != 0
+		}
+	}
+	if message != "" {
+		details["error"] = message
+	}
+	if len(details) > 0 {
+		payload["details"] = details
+	}
+	return payload
 }

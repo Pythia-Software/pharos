@@ -59,7 +59,7 @@ type tl1Task struct {
 type tl1Attempt struct {
 	ID, TaskID, Configuration, Executor, Model, Effort, Status           string
 	ErrorClass, ErrorSignature, ErrorAttribution, FailureReason, LogTail string
-	StartedAt, Conversation                                              string
+	StartedAt, CompletedAt, Conversation                                 string
 	Transcripts                                                          []string
 	Duration                                                             float64
 	HasDuration                                                          bool
@@ -315,7 +315,7 @@ func (c *Catalog) loadTL1Context(ctx context.Context, installations []map[string
 			attempt := &tl1Attempt{ID: firstString(row["attempt_id"]), TaskID: task.ID, Configuration: firstString(row["configuration"]), Executor: firstString(row["executor"]),
 				Model: firstString(row["model"]), Effort: firstString(row["effort"]), Status: firstString(row["status"]), ErrorClass: firstString(row["error_class"]),
 				ErrorSignature: firstString(row["error_signature"]), ErrorAttribution: firstString(row["error_attribution"]), FailureReason: firstString(row["failure_reason"]),
-				LogTail: firstString(row["log_tail"]), StartedAt: firstString(row["started_at"]), Conversation: firstString(row["conversation_native_id"]), Task: task}
+				LogTail: firstString(row["log_tail"]), StartedAt: firstString(row["started_at"]), CompletedAt: firstString(row["completed_at"]), Conversation: firstString(row["conversation_native_id"]), Task: task}
 			if attempt.FailureReason != "" {
 				attempt.ErrorClass, attempt.ErrorSignature, attempt.ErrorAttribution = classifyTL1Error(attempt.FailureReason)
 			} else if attempt.ErrorClass != "" {
@@ -412,6 +412,7 @@ func (c *Catalog) loadTL1Context(ctx context.Context, installations []map[string
 			task.Attempts[count-1].Final = true
 		}
 	}
+	tl1ApplyFirstClaims(data)
 	return data, nil
 }
 

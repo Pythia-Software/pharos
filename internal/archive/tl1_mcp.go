@@ -94,7 +94,9 @@ func tl1CompactOverview(overview map[string]any) map[string]any {
 		matrix = append(matrix, compact)
 	}
 	enqueues, _ := overview["enqueues"].([]map[string]any)
+	batches, _ := overview["timing_batches"].([]map[string]any)
 	return map[string]any{"project": overview["project"], "installations": overview["installations"], "window": overview["window"], "recent_enqueues": enqueues[:min(len(enqueues), 5)], "scope": overview["scope"], "totals": overview["totals"],
+		"timing": overview["timing"], "timing_batches": batches[:min(len(batches), 5)],
 		"coverage": overview["coverage"], "findings": overview["findings"], "matrix": matrix,
 		"note": "Recommendations are Pharos findings: read one with get_finding(id). Use tl1_flavor for a flavor's definition and tl1_errors for error clusters."}
 }

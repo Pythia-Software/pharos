@@ -339,7 +339,7 @@ func tl1ReadsTranscriptFile(name string) bool {
 // stream-json transcripts (parseAGYStream), which earlier versions passed to
 // the Claude Code parser and stored without messages. v9 selects the provider
 // from each transcript's filename before falling back to its attempt.
-func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v9-transcript-provider" }
+func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v10-agy-tool-exits" }
 
 func (a *tl1Adapter) Discover(emit func(WorkspaceRecord) error) error {
 	a.snapshots = nil

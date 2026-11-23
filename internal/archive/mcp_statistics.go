@@ -47,6 +47,9 @@ type statisticsSnapshot struct {
 }
 
 func (c *Catalog) queryStatistics(tool string, args map[string]any) (any, error) {
+	if tool == "query_statistics" && args["entity"] == "tool_call" {
+		return c.queryToolStatistics(args)
+	}
 	if tool == "query_statistics" && args["release_snapshot"] == true {
 		for key := range args {
 			if key != "snapshot_id" && key != "release_snapshot" {

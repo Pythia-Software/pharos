@@ -10,6 +10,10 @@ cards, including when the budget returns fewer than `limit`. A null offset ends
 the results. Work descriptions are short previews; use `get_work_detail` for
 full fields. A budget too small for one card returns an error.
 
+For per-call failure totals and exit-code histograms, use `entity: "tool_call"`
+as described in [Antigravity and TL1 telemetry](agy-telemetry.md). This separate
+report groups call evidence by executor/provider, model, project and day.
+
 ## Workspace and conversation usage
 
 `entity` chooses one row per workspace or conversation. `metric_scope` chooses

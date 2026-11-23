@@ -34,7 +34,14 @@ func init() {
 			tool["inputSchema"].(map[string]any)["properties"].(map[string]any)["include_metrics"] = map[string]any{"type": "boolean", "description": "Include the full own-stream metric set with quality evidence; increase max_output_tokens if needed."}
 		}
 		if name == "query_metrics" {
-			tool["description"] = "Legacy metric records with historical suppression behavior. Prefer query_statistics for scoped, sorted metrics and aggregates."
+			tool["description"] = "Legacy metric records with historical suppression behavior. Prefer query_statistics for scoped, sorted metrics and aggregates. name=tool_outcomes returns the tool_call histogram report with the same filters as query_statistics entity=tool_call."
+			properties := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
+			for _, field := range []string{"provider", "executor", "model", "project", "from", "to"} {
+				properties[field] = map[string]any{"type": "string"}
+			}
+			properties["group_by"] = map[string]any{"type": "array", "maxItems": 4, "items": map[string]any{"type": "string", "enum": []string{"executor", "provider", "model", "project", "day"}}}
+			properties["workspace_ids"] = map[string]any{"type": "array", "maxItems": 100, "items": map[string]any{"type": "string"}}
+			properties["max_output_tokens"] = map[string]any{"type": "integer", "minimum": 200, "maximum": 8000}
 		}
 		if name != "search_conversations" && name != "search_work" {
 			continue
@@ -64,13 +71,14 @@ func init() {
 		properties[key] = map[string]any{"type": "string"}
 	}
 	properties["outcome"].(map[string]any)["description"] = "Text in the outcome a source reported for the work, if any. For what became of a session's changes, use outcome_label."
+	properties["executor"] = map[string]any{"type": "string", "description": "For entity=tool_call only: agy maps to Antigravity; other values name the transcript provider."}
 	properties["file"].(map[string]any)["description"] = fileFilterDescription
 	properties["pr"] = map[string]any{"type": "integer"}
-	properties["entity"] = map[string]any{"type": "string", "enum": []string{"workspace", "conversation"}, "default": "workspace"}
+	properties["entity"] = map[string]any{"type": "string", "enum": []string{"workspace", "conversation", "tool_call"}, "default": "workspace"}
 	properties["result_type"] = map[string]any{"type": "string", "enum": []string{"rows", "aggregate"}, "default": "rows"}
 	properties["limit"] = map[string]any{"type": "integer", "minimum": 1, "maximum": 500, "default": 100}
 	properties["max_output_tokens"] = map[string]any{"type": "integer", "minimum": 200, "maximum": 8000, "default": 4000}
 	properties["aggregations"] = map[string]any{"type": "array", "maxItems": 8, "items": map[string]any{"type": "object", "required": []string{"id", "op"}, "additionalProperties": false, "properties": map[string]any{"id": map[string]any{"type": "string", "minLength": 1, "maxLength": 80}, "op": map[string]any{"type": "string", "enum": []string{"count", "sum", "avg", "min", "max"}}, "metric": map[string]any{"type": "string"}}}}
-	properties["group_by"] = map[string]any{"type": "array", "maxItems": 3, "uniqueItems": true, "items": map[string]any{"type": "string", "enum": []string{"project", "outcome_label", "repository", "source", "provider", "channel", "machine_id", "execution_machine_id", "channels", "machines"}}}
-	mcpTools = append(mcpTools, map[string]any{"name": "query_statistics", "description": "Query compact workspace/conversation IDs and selected metrics, or count/sum/avg/min/max over the full filtered canonical population. No previews or transcripts. Use entity=workspace for workspace totals including subagents, conversation for own-stream metrics. Omit query for exhaustive numeric discovery; text retrieval reports population_complete=false and matches word-indexed message text, which leaves out tool output (tool_result). Cursor pages freeze values for five minutes; copy the effective original arguments. Missing/partial evidence and aggregate denominators stay explicit.", "inputSchema": map[string]any{"type": "object", "properties": properties, "additionalProperties": false}}, map[string]any{"name": "list_metrics", "description": "Discover metric names, units, definitions, aliases, scopes and quality semantics before filtering or aggregating.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"metric_scope": map[string]any{"type": "string", "enum": []string{"workspace", "conversation"}}}, "additionalProperties": false}})
+	properties["group_by"] = map[string]any{"type": "array", "maxItems": 4, "uniqueItems": true, "items": map[string]any{"type": "string", "enum": []string{"project", "model", "day", "executor", "outcome_label", "repository", "source", "provider", "channel", "machine_id", "execution_machine_id", "channels", "machines"}}}
+	mcpTools = append(mcpTools, map[string]any{"name": "query_statistics", "description": "Query compact workspace/conversation IDs and selected metrics, or count/sum/avg/min/max over the full filtered canonical population. For entity=tool_call, returns fixed aggregate call/failure totals and an exit-code histogram (null means unknown); group by executor/provider, model, project, day (up to four). Supports provider/executor/model/project/from/to/workspace_ids filters, limit and max_output_tokens only; narrow oversized reports. No previews or transcripts. Use entity=workspace for workspace totals including subagents, conversation for own-stream metrics. Omit query for exhaustive numeric discovery; text retrieval reports population_complete=false and matches word-indexed message text, which leaves out tool output (tool_result). Cursor pages freeze values for five minutes; copy the effective original arguments. Missing/partial evidence and aggregate denominators stay explicit.", "inputSchema": map[string]any{"type": "object", "properties": properties, "additionalProperties": false}}, map[string]any{"name": "list_metrics", "description": "Discover metric names, units, definitions, aliases, scopes and quality semantics before filtering or aggregating.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"metric_scope": map[string]any{"type": "string", "enum": []string{"workspace", "conversation"}}}, "additionalProperties": false}})
 }

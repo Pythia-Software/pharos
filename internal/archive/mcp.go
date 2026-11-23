@@ -253,6 +253,15 @@ func callMCPContext(ctx context.Context, catalog *Catalog, name string, args map
 		}
 		return catalog.Search(options)
 	case "query_metrics":
+		if args["name"] == "tool_outcomes" {
+			report := map[string]any{"entity": "tool_call"}
+			for key, value := range args {
+				if key != "name" {
+					report[key] = value
+				}
+			}
+			return catalog.queryToolStatistics(report)
+		}
 		// Observed values are ranked through an index on (name, value). The
 		// workspaces with no value, which sort after them, are read only when
 		// the page has room for some.

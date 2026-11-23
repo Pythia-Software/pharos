@@ -933,7 +933,8 @@ func TestTL1AgyTranscriptLinksItsAntigravitySession(t *testing.T) {
 	const child = "aaaaaaaa-0000-4000-8000-000000000002"
 	antigravityTranscript(t, native, child, "transcript_full.jsonl", antigravitySteps(
 		map[string]any{"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Check the crib.", "created_at": "2026-11-20T22:05:00Z"},
-		map[string]any{"source": "MODEL", "type": "PLANNER_RESPONSE", "content": "Checked.", "created_at": "2026-11-20T22:06:00Z"},
+		map[string]any{"source": "MODEL", "type": "PLANNER_RESPONSE", "content": "Checked.", "created_at": "2026-11-20T22:06:00Z", "tool_calls": []any{map[string]any{"name": "read_file", "args": map[string]any{"Path": "crib.go"}}}},
+		map[string]any{"source": "MODEL", "type": "GENERIC", "content": "crib code", "created_at": "2026-11-20T22:06:01Z"},
 	))
 	antigravityRequestRows(t, native, child, []any{[]uint64{1}, "gemini-4-neon", 1000, 100, 0, 0})
 	antigravitySummaryRows(t, native,
@@ -1055,12 +1056,21 @@ func TestTL1AgyTranscriptLinksItsAntigravitySession(t *testing.T) {
 	if agy["attempts"] != 1 || agy["with_tokens"] != 1 || agy["priced_from_tokens"] != 1 {
 		t.Fatalf("agy coverage: %v", agy)
 	}
+	report := statisticsCall(t, catalog, "query_statistics", map[string]any{"entity": "tool_call", "provider": "antigravity"})
+	toolGroup := report["groups"].([]map[string]any)[0]
+	if integer(toolGroup["tool_call_count"]) != 3 || integer(toolGroup["failed_tool_call_count"]) != 1 {
+		t.Fatalf("native-only child must survive alias suppression: %v", report)
+	}
+
 	candidate, err := catalog.TL1Candidate(tl1Selection{}, "cand-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, task := range candidate["tasks"].([]map[string]any) {
 		if task["task_id"] == "task-agy" {
+			if task["queue_wait_seconds"] != float64(0) || task["attempt_seconds"] != float64(628) || task["wall_seconds"] != float64(629) {
+				t.Fatalf("persisted task timing: %v", task)
+			}
 			// $3 input, $0.15 cached input and $15 output per million.
 			if cost, _ := task["cost_usd"].(float64); math.Abs(cost-(200*3+3000*0.15+60*15)/1e6) > 1e-9 || task["tokens"] != int64(3260) {
 				t.Fatalf("agy task cost %v, tokens %v", task["cost_usd"], task["tokens"])
@@ -1104,4 +1114,134 @@ func tl1AGYFixture(t *testing.T, root string) string {
 		`{"event":"process_completed","format":"tl1.invocation/v1","observed_at":"2026-11-20T22:14:29.086Z","exit_code":0}`,
 	}, "\n")+"\n")
 	return session
+}
+
+// Synthetic parity fixture: the acceptance counts, without claiming to be the
+// corpus's original candidate or using a real user's Antigravity store.
+func TestTL1AGYToolExitTelemetry(t *testing.T) {
+	c, _ := testCatalog(t)
+	registry := tl1Fixture(t, 0)
+	root := filepath.Dir(registry)
+	session := tl1AGYFixture(t, root)
+	native := filepath.Join(t.TempDir(), "antigravity-cli")
+	stream := []string{jsonText(map[string]any{"event": "init", "conversation_id": session, "init": map[string]any{"model": "gemini-4-neon-medium"}})}
+	steps := []map[string]any{{"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Check the telemetry."}}
+	for index := 0; index < 27; index++ {
+		tool, output := "run_command", "Created At: now\nCompleted At: later\nCommand exited with code 0.\nOK"
+		if index < 6 {
+			code := 1
+			if index >= 4 {
+				code = 2
+			}
+			output = fmt.Sprintf("Created At: now\nCompleted At: later\nCommand exited with code %d.\nverdict", code)
+		}
+		if index == 26 {
+			tool, output = "read_file", "1 lines, 57266 bytes"
+		}
+		input := map[string]any{"CommandLine": "checker", "Cwd": "/repo"}
+		stream = append(stream, jsonText(map[string]any{"event": "step_update", "step_update": map[string]any{"step_index": index, "state": "DONE", "step_type": "tool", "tool_name": tool, "tool_info": map[string]any{"name": tool, "parameters": input, "output": output}}}))
+		steps = append(steps, map[string]any{"source": "MODEL", "type": "PLANNER_RESPONSE", "tool_calls": []any{map[string]any{"name": tool, "args": input}}}, map[string]any{"source": "MODEL", "type": "GENERIC", "content": output})
+	}
+	steps[1]["thinking"] = "Inspect queuecontrast reasoning summary."
+	writeSourceFile(t, filepath.Join(root, "transcripts", "task-agy", "1-agy.jsonl"), strings.Join(stream, "\n")+"\n")
+	antigravityTranscript(t, native, session, "transcript_full.jsonl", antigravitySteps(steps...))
+	antigravitySummaryRows(t, native, []any{session, "Telemetry", "[]", "", 0, ""})
+	check := func(wantCalls, wantFailed int64) {
+		t.Helper()
+		for _, tool := range []string{"query_statistics", "query_metrics"} {
+			args := map[string]any{"entity": "tool_call", "provider": "antigravity", "max_output_tokens": 8000}
+			if tool == "query_metrics" {
+				delete(args, "entity")
+				args["name"] = "tool_outcomes"
+			}
+			value, err := callMCP(c, tool, args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			report := value.(map[string]any)
+			groups := report["groups"].([]map[string]any)
+			if len(groups) != 1 {
+				t.Fatalf("groups: %v", report)
+			}
+			row := groups[0]
+			if integer(row["tool_call_count"]) != wantCalls || integer(row["failed_tool_call_count"]) != wantFailed || integer(row["unknown_exit_code_count"]) != 1 || report["population_complete"] != true {
+				t.Fatalf("tool outcomes: %v", report)
+			}
+			hist := map[string]int64{}
+			for _, bucket := range row["exit_code_histogram"].([]map[string]any) {
+				hist[fmt.Sprint(bucket["exit_code"])] = integer(bucket["tool_call_count"])
+			}
+			if hist["1"] != 4 || hist["2"] != 2 || hist["0"] != 20 || hist["<nil>"] != 1 {
+				t.Fatalf("histogram: %v", hist)
+			}
+		}
+	}
+	ingestFixture(t, c, "antigravity", native)
+	check(27, 6)
+	var cid string
+	if err := c.DB.QueryRow("SELECT id FROM conversations WHERE native_id=?", session).Scan(&cid); err != nil {
+		t.Fatal(err)
+	}
+	passages, err := callMCP(c, "search_conversation_passages", map[string]any{"conversation_id": cid, "query": "queuecontrast", "max_output_tokens": 2000})
+	if err != nil || len(passages.(map[string]any)["items"].([]map[string]any)) == 0 {
+		t.Fatalf("thinking search: %v %v", passages, err)
+	}
+	overview, err := callMCP(c, "get_conversation_overview", map[string]any{"conversation_id": cid, "max_output_tokens": 2000})
+	if err != nil || !strings.Contains(firstString(overview.(map[string]any)["reasoning_coverage_note"]), "summaries") {
+		t.Fatalf("thinking coverage: %v %v", overview, err)
+	}
+	// The linked fallback has the same evidence and must count only once.
+	ingestFixture(t, c, "tl1", registry)
+	check(27, 6)
+	grouped, err := callMCP(c, "query_statistics", map[string]any{"entity": "tool_call", "executor": "agy", "group_by": []string{"executor", "model", "project", "day"}, "max_output_tokens": 8000})
+	if err != nil || len(grouped.(map[string]any)["groups"].([]map[string]any)) != 1 {
+		t.Fatalf("dimensions: %v %v", grouped, err)
+	}
+	var recorded int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.native_id=? AND m.kind='tool_result' AND json_extract(m.text,'$.exit_code') IN (1,2)`, "install-1:att-agy:1-agy.jsonl").Scan(&recorded); err != nil || recorded != 6 {
+		t.Fatalf("numeric result codes: %d %v", recorded, err)
+	}
+}
+
+func TestTL1QueueAdjustedTiming(t *testing.T) {
+	at := func(seconds int) string { return fmt.Sprintf("2026-11-20T10:%02d:%02d.000Z", seconds/60, seconds%60) }
+	task := &tl1Task{ID: "task", ExecutionClass: "llm", CreatedAt: at(0), ClaimedAt: at(30), CompletedAt: at(100)}
+	task.Attempts = []*tl1Attempt{{StartedAt: at(10), CompletedAt: at(20), Task: task}, {StartedAt: at(30), CompletedAt: at(50), Task: task}}
+	events := []map[string]any{{"task_id": "task", "event_type": "claimed", "created_at": at(10)}}
+	tl1ApplyFirstClaims(&tl1Data{TaskByID: map[string]*tl1Task{"task": task}, Events: events})
+	row := tl1TaskTiming(task)
+	if row["queue_wait_seconds"] != float64(10) || row["attempt_seconds"] != float64(30) || row["wall_seconds"] != float64(100) {
+		t.Fatalf("task timing: %v", row)
+	}
+	summary := tl1TimingSummary([]*tl1Task{task})
+	if summary["makespan_seconds"] != float64(100) || summary["llm_attempt_seconds"] != float64(30) || summary["average_llm_concurrency"] != 0.3 || summary["slot_utilisation"] != nil || summary["idle_slot_hours"] != nil || summary["capacity_status"] != "unavailable" {
+		t.Fatalf("batch timing: %v", summary)
+	}
+	// Missing and invalid endpoints must not leave a plausible partial total.
+	for _, end := range []string{"", at(29)} {
+		task.Attempts[1].CompletedAt = end
+		if got := tl1TaskTiming(task); got["attempt_seconds"] != nil || got["known_attempt_seconds"] != float64(10) {
+			t.Fatalf("unfinished task: %v", got)
+		}
+	}
+	task.Attempts[1].CompletedAt = at(30)
+	if got := tl1TaskTiming(task); got["attempt_seconds"] != float64(10) {
+		t.Fatalf("zero interval lost: %v", got)
+	}
+	task.CompletedAt = ""
+	if got := tl1TimingSummary([]*tl1Task{task}); got["makespan_seconds"] != nil || got["average_llm_concurrency"] != nil {
+		t.Fatalf("unfinished batch: %v", got)
+	}
+	// Separate enqueue cohorts and retain descendants that finish in a later one.
+	tasks := []*tl1Task{}
+	for i := 0; i < 5; i++ {
+		tasks = append(tasks, &tl1Task{ID: fmt.Sprint(i), CreatedAt: at(i), CompletedAt: at(100), ClaimedAt: at(10)})
+	}
+	child := &tl1Task{ID: "child", ParentID: tasks[0].ID, Parent: tasks[0], CreatedAt: at(40), CompletedAt: at(120), ClaimedAt: at(50)}
+	tasks = append(tasks, child)
+	data := &tl1Data{Tasks: tasks, Enqueues: tl1EnqueueSpikes(tasks)}
+	batches := tl1TimingBatches(data)
+	if len(batches) != 1 || batches[0]["tasks"] != 6 || batches[0]["makespan_seconds"] != float64(120) {
+		t.Fatalf("enqueue timing: %v", batches)
+	}
 }
