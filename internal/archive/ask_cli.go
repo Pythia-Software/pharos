@@ -451,7 +451,7 @@ func askPrepareCLI(ctx context.Context, p askProvider, s askSelection, dir strin
 		// Codex asks to approve each MCP tool call, which approval_policy
 		// "never" refuses; preapprove the read-only Pharos server's tools only,
 		// as Claude's --allowedTools does.
-		args = []string{"exec", "--json", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-c", `approval_policy="never"`, "-c", "features.shell_tool=false", "-c", "features.apply_patch_freeform=false", "-c", `web_search="disabled"`, "--model", s.Model, "--output-schema", schema, "--output-last-message", filepath.Join(dir, "answer.json"), "--color", "never", "-"}
+		args = []string{"exec", "--json", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-c", `approval_policy="never"`, "-c", `model_reasoning_summary="detailed"`, "-c", "features.shell_tool=false", "-c", "features.apply_patch_freeform=false", "-c", `web_search="disabled"`, "--model", s.Model, "--output-schema", schema, "--output-last-message", filepath.Join(dir, "answer.json"), "--color", "never", "-"}
 		args = append(args[:len(args)-1], "-c", "mcp_servers.pharos.command="+jsonText(p.mcp.Command), "-c", "mcp_servers.pharos.args="+jsonText(p.mcp.Args), "-c", "mcp_servers.pharos.required=true", "-c", `mcp_servers.pharos.default_tools_approval_mode="approve"`, "-")
 		if s.Fast {
 			for _, m := range p.Models {

@@ -71,7 +71,7 @@ func labelingCommand(route, model, effort, schemaText, schemaPath, answerPath, s
 			"--name", "Pharos labeling", "--prompt-suggestions", "false"}, nil
 	case labelingRouteCodex:
 		args := []string{"exec", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--sandbox", "read-only",
-			"--model", model, "--config", `model_reasoning_effort="` + effort + `"`, "--config", "project_doc_max_bytes=0", "--config", `web_search="disabled"`, "--color", "never",
+			"--model", model, "--config", `model_reasoning_effort="` + effort + `"`, "--config", `model_reasoning_summary="detailed"`, "--config", "project_doc_max_bytes=0", "--config", `web_search="disabled"`, "--color", "never",
 			"--json", "--output-schema", schemaPath, "--output-last-message", answerPath}
 		for _, feature := range labelingCodexDisabled {
 			args = append(args, "--disable", feature)
@@ -130,9 +130,9 @@ func (s *labelingStream) model(name string) {
 	}
 }
 
-// sanitize keeps what the ledger needs from one raw event and drops private
-// reasoning text: Claude thinking blocks and Codex reasoning items keep
-// only their type and id. Usage is kept.
+// sanitize keeps what the ledger needs from one raw event, including Codex's
+// readable reasoning summaries. Claude thinking blocks retain only their type;
+// opaque reasoning payloads and signatures are omitted. Usage is kept.
 func (s *labelingStream) sanitize(event map[string]any) map[string]any {
 	kind := firstString(event["type"])
 	if s.route == labelingRouteClaude {
@@ -188,7 +188,7 @@ func (s *labelingStream) sanitize(event map[string]any) map[string]any {
 		out := pick(event, "type")
 		switch firstString(item["type"]) {
 		case "reasoning":
-			out["item"] = pick(item, "id", "type")
+			out["item"] = pick(item, "id", "type", "text")
 		case "agent_message":
 			out["item"] = pick(item, "id", "type", "text")
 		case "error":

@@ -1483,6 +1483,9 @@ func TestAskCLIConnections(t *testing.T) {
 				if config["mcp_servers.pharos.required"] != "true" || config["mcp_servers.pharos.default_tools_approval_mode"] != `"approve"` || config["features.shell_tool"] != "false" || flag("--sandbox") != "read-only" || cmd.Args[len(cmd.Args)-1] != "-" {
 					t.Fatalf("missing required MCP startup or sandbox: %v", cmd.Args)
 				}
+				if config["model_reasoning_summary"] != `"detailed"` || !slices.Contains(fast.Args, `model_reasoning_summary="detailed"`) {
+					t.Fatalf("reasoning summaries not requested: %v / %v", cmd.Args, fast.Args)
+				}
 				if slices.ContainsFunc(cmd.Args, func(arg string) bool { return strings.HasPrefix(arg, "service_tier=") }) || !slices.Contains(fast.Args, `service_tier="priority"`) || fast.Args[len(fast.Args)-1] != "-" {
 					t.Fatalf("fast tier: %v / %v", cmd.Args, fast.Args)
 				}

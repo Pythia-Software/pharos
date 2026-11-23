@@ -394,9 +394,10 @@ Each question uses noninteractive structured output, a disposable working
 directory, bounded output and a three-minute deadline. Browsing the site map
 adds tool calls inside that run; the motivating Opus-tokens question took
 12–22 s end to end on Claude and Codex (2026-10-28), so the deadline stays. Cancellation stops the
-process group. Codex runs ephemeral with read-only sandboxing and shell tools
-disabled; Claude runs without native tools, hooks, session persistence, or
-inherited MCP configuration; Antigravity uses a dedicated navigation agent,
+process group. Codex explicitly requests detailed reasoning summaries and runs
+ephemeral with read-only sandboxing and shell tools disabled; Claude runs without
+native tools, hooks, session persistence, or inherited MCP configuration;
+Antigravity uses a dedicated navigation agent,
 plan mode and its terminal sandbox. No adapter uses permission-bypass flags.
 Provider login remains the CLI's responsibility; Pharos accepts no API keys.
 
