@@ -1813,6 +1813,17 @@ func linkAliasesContext(ctx context.Context, tx *sql.Tx, conversationID string, 
 			return err
 		}
 	}
+	if provider == "antigravity" {
+		rows, err := queryMapsContext(ctx, tx, tl1NativeEvidenceSQL+" AND (t.id=? OR n.id=?)", conversationID, conversationID)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if err := resolveProjects(ctx, tx, "w.id=?", row["native_workspace_id"]); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

@@ -70,6 +70,7 @@ type tl1Attempt struct {
 	Tokens                                                               map[string]int64
 	Task                                                                 *tl1Task
 	Final                                                                bool
+	Evidence                                                             *tl1TranscriptEvidence
 }
 
 // Attempt dispositions. "advanced" moved the workflow on without error or a
@@ -307,6 +308,10 @@ func (c *Catalog) loadTL1Context(ctx context.Context, installations []map[string
 		if err != nil {
 			return nil, err
 		}
+		evidence, err := c.tl1TranscriptEvidence(ctx, installationID)
+		if err != nil {
+			return nil, err
+		}
 		for _, row := range attempts {
 			task := owns(firstString(row["task_id"]))
 			if task == nil {
@@ -316,6 +321,7 @@ func (c *Catalog) loadTL1Context(ctx context.Context, installations []map[string
 				Model: firstString(row["model"]), Effort: firstString(row["effort"]), Status: firstString(row["status"]), ErrorClass: firstString(row["error_class"]),
 				ErrorSignature: firstString(row["error_signature"]), ErrorAttribution: firstString(row["error_attribution"]), FailureReason: firstString(row["failure_reason"]),
 				LogTail: firstString(row["log_tail"]), StartedAt: firstString(row["started_at"]), Conversation: firstString(row["conversation_native_id"]), Task: task}
+			attempt.Evidence = evidence[attempt.Conversation]
 			if attempt.FailureReason != "" {
 				attempt.ErrorClass, attempt.ErrorSignature, attempt.ErrorAttribution = classifyTL1Error(attempt.FailureReason)
 			} else if attempt.ErrorClass != "" {
@@ -343,7 +349,11 @@ func (c *Catalog) loadTL1Context(ctx context.Context, installations []map[string
 			}
 			if !attempt.HasCost {
 				if value, ok := number(row["reported_cost_usd"]); ok {
-					attempt.Cost, attempt.HasCost, attempt.CostSource = value, true, "tl1-reported"
+					// Older TL1 summaries wrote zero for AGY runs with no
+					// metering. It is not evidence of a free execution.
+					if value != 0 || !matchesFold(attempt.Executor, "agy", "antigravity") || attempt.Tokens["total_tokens"] > 0 {
+						attempt.Cost, attempt.HasCost, attempt.CostSource = value, true, "tl1-reported"
+					}
 				}
 			}
 			if attempt.Configuration == "" && task.ExecutionClass == "llm" {
@@ -439,8 +449,11 @@ func (c *Catalog) tl1AttemptUsageContext(ctx context.Context, installationID str
 		sums[index] = "u." + field
 	}
 	prefix := installationID + ":"
-	rows, err := queryMapsContext(ctx, c.reader(), `SELECT c.native_id,u.usage_hour,u.model usage_model,s.model session_model,`+strings.Join(sums, ",")+`
-		FROM conversations c JOIN workspaces w ON w.id=c.workspace_id JOIN agent_sessions s ON s.conversation_id=c.id JOIN agent_session_usage u ON u.agent_session_id=s.id
+	rows, err := queryMapsContext(ctx, c.reader(), `WITH native AS (`+tl1NativeUsageSQL+` AND NOT `+tl1SharedNativeSQL+`)
+		SELECT c.native_id,u.usage_hour,u.model usage_model,s.model session_model,`+strings.Join(sums, ",")+`
+		FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
+		JOIN agent_sessions s ON s.conversation_id=COALESCE((SELECT native_id FROM native WHERE tl1_id=c.id),c.id)
+		JOIN agent_session_usage u ON u.agent_session_id=s.id
 		WHERE u.is_estimate=0 AND w.source_kind='tl1' AND c.native_id>=? AND c.native_id<? AND u.total_tokens>0`, prefix, prefix+"￿")
 	if err != nil {
 		return nil, err
