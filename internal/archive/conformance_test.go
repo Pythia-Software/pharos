@@ -685,7 +685,10 @@ func conformanceCapabilities(t *testing.T, kind string, records []WorkspaceRecor
 func conformanceClaude(t *testing.T) SourceConfig {
 	t.Helper()
 	main, agent := conformanceClaudeLines()
-	return claudeSessionFiles(t, map[string][]string{"claude-session.jsonl": main, "claude-session/subagents/agent-a7.jsonl": agent})
+	return claudeSessionFiles(t, map[string][]string{
+		"claude-session.jsonl": main, "claude-session/subagents/agent-a7.jsonl": agent,
+		"claude-retry-session.jsonl": strings.Split(strings.TrimSpace(claudeDiagnosticTranscript), "\n"),
+	})
 }
 
 // conformanceClaudeLines are a Claude Code session's lines and its subagent's.
@@ -904,6 +907,7 @@ func conformanceTL1(t *testing.T) SourceConfig {
 	_, agent := conformanceCodexLines()
 	writeSourceFile(t, filepath.Join(root, "transcripts", "task-claude", "1-claude.jsonl"), strings.Join(main, "\n")+"\n")
 	writeSourceFile(t, filepath.Join(root, "transcripts", "task-claude", "1-codex.jsonl"), strings.Join(agent, "\n")+"\n")
+	writeSourceFile(t, filepath.Join(root, "transcripts", "task-review", "1-claude.jsonl"), claudeDiagnosticTranscript)
 	// A Codex exec run that was resumed: the second part numbers its items
 	// from item_0 again, and its command fails where the first one's passed.
 	writeSourceFile(t, filepath.Join(root, "transcripts", "task-review", "1-codex.jsonl"), strings.Join([]string{

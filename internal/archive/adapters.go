@@ -574,8 +574,9 @@ func (a *jsonlAdapter) partExtractor() string { return a.provider + ":" + a.extr
 // v4 keeps a background task's notice delivered mid-turn (a queued_command
 // attachment) as task_notification context, as one delivered as a user event,
 // and what the person typed mid-turn as their message; a ScheduleWakeup's
-// prompt is scheduled_wakeup context.
-const claudeExtractor = "claude-v4-queued-input"
+// prompt is scheduled_wakeup context. v5 retains stream startup, rate-limit
+// and API retry diagnostics, including runs that stopped before any reply.
+const claudeExtractor = "claude-v5-stream-diagnostics"
 
 func (a *jsonlAdapter) extractorVersion() string {
 	if a.provider == "claude" {
@@ -1202,7 +1203,11 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 			messages = append(messages, MessageRecord{NativeID: fmt.Sprintf("compact-%d", integer(event["_line"])), Role: "system", Kind: "metadata", Text: jsonText(event), Model: model, Effort: effort, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
 		}
 		if role != "user" && role != "assistant" {
-			if hasUsageEvidence(event) {
+			// A stream can stop before its first reply. These records explain
+			// that attempt and are valid evidence even without token usage.
+			if role == "system" && matchesFold(firstString(event["subtype"]), "init", "api_retry") || role == "rate_limit_event" {
+				messages = append(messages, MessageRecord{NativeID: defaultString(event["uuid"], fmt.Sprintf("event-%d", integer(event["_line"]))), Role: "system", Kind: "metadata", Text: jsonText(event), Model: model, Effort: effort, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
+			} else if hasUsageEvidence(event) {
 				messages = append(messages, MessageRecord{NativeID: fmt.Sprintf("usage-%d", integer(event["_line"])), Role: "system", Kind: "metadata", Text: jsonText(event), Model: model, Effort: effort, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
 			}
 			continue

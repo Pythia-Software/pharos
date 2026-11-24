@@ -1237,6 +1237,23 @@ func TestTL1TranscriptParserMismatchIsReported(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	registry := tl1Fixture(t, 0)
 	root := filepath.Dir(registry)
+	claudePath := filepath.Join(root, "transcripts", "task-review", "1-claude.jsonl")
+	writeSourceFile(t, claudePath, claudeDiagnosticTranscript)
+	ingestTL1Registry(t, catalog, registry)
+	var diagnostics, replies int
+	if err := catalog.DB.QueryRow(`SELECT COUNT(*),COUNT(CASE WHEN m.role='assistant' AND m.kind='message' THEN 1 END)
+FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.native_id='install-1:att-review:1-claude.jsonl'`).Scan(&diagnostics, &replies); err != nil || diagnostics != 6 || replies != 0 {
+		t.Fatalf("Claude attempt diagnostics=%d replies=%d: %v", diagnostics, replies, err)
+	}
+	// Recognizing runtime diagnostics must not hide an unsupported format.
+	writeSourceFile(t, claudePath, `{"type":"unsupported","opaque":true}`+"\n")
+	_, _, claudeErr := (&tl1Adapter{}).transcript(tl1Installation{ID: "install-1", Transcripts: filepath.Join(root, "transcripts")}, "task-review", map[string]any{"id": "att-review"}, "1-claude.jsonl")
+	if claudeErr == nil || !strings.Contains(claudeErr.Error(), "parser mismatch") {
+		t.Fatalf("unsupported Claude transcript reported success: %v", claudeErr)
+	}
+	if err := os.Remove(claudePath); err != nil {
+		t.Fatal(err)
+	}
 	tl1AGYFixture(t, root)
 	path := filepath.Join(root, "transcripts", "task-agy", "1-agy.jsonl")
 	// A still-starting run has an identity but no messages yet.

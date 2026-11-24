@@ -1,5 +1,5 @@
 {
-  "index_version": "tl1-analysis-v12-workflow-snapshot-first",
+  "index_version": "tl1-analysis-v13-claude-diagnostics",
   "records": [
     {
       "SourceID": "install-1:task-agy",
@@ -799,11 +799,123 @@
       },
       "Conversations": [
         {
-          "SessionBounds": {
-            "started_at": "2026-09-20T10:21:02.000Z",
-            "ended_at": "2026-09-20T10:21:04.000Z",
-            "source": "attempt-envelope"
+          "NativeContext": {
+            "entrypoint": ""
           },
+          "NativeID": "install-1:att-review:1-claude.jsonl",
+          "Provider": "claude",
+          "Model": "gpt-5.6-terra",
+          "Effort": "high",
+          "Account": "local",
+          "ParentNativeID": "",
+          "Origin": "$ROOT/002/transcripts/task-review/1-claude.jsonl",
+          "Coverage": "complete",
+          "StartedAt": "2026-09-20T10:21:02.000Z",
+          "EndedAt": "2026-09-20T10:21:04.000Z",
+          "Harness": "claude-code",
+          "Aliases": [
+            "claude-retry-session"
+          ],
+          "Messages": [
+            {
+              "NativeID": "init",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"_line\":1,\"claude_code_version\":\"2.1.119\",\"cwd\":\"/work/app\",\"model\":\"claude-sonnet-4-6\",\"session_id\":\"claude-retry-session\",\"subtype\":\"init\",\"type\":\"system\",\"uuid\":\"init\"}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-review/1-claude.jsonl:1",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "rate",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"_line\":2,\"rate_limit_info\":{\"rateLimitType\":\"five_hour\",\"status\":\"allowed\"},\"session_id\":\"claude-retry-session\",\"type\":\"rate_limit_event\",\"uuid\":\"rate\"}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-review/1-claude.jsonl:2",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "retry-1",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"_line\":3,\"attempt\":1,\"error\":\"unknown\",\"error_status\":null,\"max_retries\":10,\"retry_delay_ms\":511.78,\"session_id\":\"claude-retry-session\",\"subtype\":\"api_retry\",\"type\":\"system\",\"uuid\":\"retry-1\"}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-review/1-claude.jsonl:3",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "retry-2",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"_line\":4,\"attempt\":2,\"error\":\"unknown\",\"error_status\":null,\"max_retries\":10,\"retry_delay_ms\":1153.4,\"session_id\":\"claude-retry-session\",\"subtype\":\"api_retry\",\"type\":\"system\",\"uuid\":\"retry-2\"}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-review/1-claude.jsonl:4",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "retry-3",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"_line\":5,\"attempt\":3,\"error\":\"unknown\",\"error_status\":null,\"max_retries\":10,\"retry_delay_ms\":2158.87,\"session_id\":\"claude-retry-session\",\"subtype\":\"api_retry\",\"type\":\"system\",\"uuid\":\"retry-3\"}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-review/1-claude.jsonl:5",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            },
+            {
+              "NativeID": "retry-4",
+              "Role": "system",
+              "Kind": "metadata",
+              "Text": "{\"_line\":6,\"attempt\":4,\"error\":\"unknown\",\"error_status\":null,\"max_retries\":10,\"retry_delay_ms\":4813.01,\"session_id\":\"claude-retry-session\",\"subtype\":\"api_retry\",\"type\":\"system\",\"uuid\":\"retry-4\"}",
+              "Model": "gpt-5.6-terra",
+              "Effort": "high",
+              "CreatedAt": "",
+              "ParentNativeID": "",
+              "PreviousNativeID": "",
+              "CallID": "",
+              "EvidenceLocator": "$ROOT/002/transcripts/task-review/1-claude.jsonl:6",
+              "RawText": "",
+              "SourceOrder": 0,
+              "Selected": true
+            }
+          ]
+        },
+        {
           "NativeID": "install-1:att-review:1-codex.jsonl",
           "Provider": "codex",
           "Model": "gpt-5.6-terra",

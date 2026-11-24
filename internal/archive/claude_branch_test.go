@@ -74,6 +74,58 @@ func entrySelected(t *testing.T, messages []MessageRecord) map[string]bool {
 	return selected
 }
 
+// A Claude stream can stop during API retries before its first reply.
+const claudeDiagnosticTranscript = `{"type":"system","subtype":"init","session_id":"claude-retry-session","uuid":"init","cwd":"/work/app","model":"claude-sonnet-4-6","claude_code_version":"2.1.119"}
+{"type":"rate_limit_event","session_id":"claude-retry-session","uuid":"rate","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour"}}
+{"type":"system","subtype":"api_retry","session_id":"claude-retry-session","uuid":"retry-1","attempt":1,"max_retries":10,"retry_delay_ms":511.78,"error_status":null,"error":"unknown"}
+{"type":"system","subtype":"api_retry","session_id":"claude-retry-session","uuid":"retry-2","attempt":2,"max_retries":10,"retry_delay_ms":1153.4,"error_status":null,"error":"unknown"}
+{"type":"system","subtype":"api_retry","session_id":"claude-retry-session","uuid":"retry-3","attempt":3,"max_retries":10,"retry_delay_ms":2158.87,"error_status":null,"error":"unknown"}
+{"type":"system","subtype":"api_retry","session_id":"claude-retry-session","uuid":"retry-4","attempt":4,"max_retries":10,"retry_delay_ms":4813.01,"error_status":null,"error":"unknown"}
+`
+
+func TestClaudeStreamDiagnosticsBeforeAnyReply(t *testing.T) {
+	lines := strings.Split(strings.TrimSpace(claudeDiagnosticTranscript), "\n")
+	for _, check := range []struct {
+		name  string
+		lines []string
+	}{
+		{"init only", lines[:1]},
+		{"rate limit only", lines[1:2]},
+		{"retry only", lines[2:3]},
+		{"interrupted retries", lines},
+		{"replayed retry", append(append([]string{}, lines...), lines[2])},
+		{"without uuid", []string{`{"type":"system","subtype":"api_retry","attempt":1,"error":"unknown"}`}},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "1-claude.jsonl")
+			messages := parseJSONL(t, "claude", path, check.lines...)
+			want := len(check.lines)
+			if check.name == "replayed retry" {
+				want--
+			}
+			if len(messages) != want {
+				t.Fatalf("retained %d diagnostics, want %d: %+v", len(messages), want, messages)
+			}
+			for i, message := range messages {
+				var got, original map[string]any
+				if err := json.Unmarshal([]byte(message.Text), &got); err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal([]byte(check.lines[i]), &original); err != nil {
+					t.Fatal(err)
+				}
+				delete(got, "_line")
+				if jsonText(got) != jsonText(original) || message.Role != "system" || message.Kind != "metadata" || !message.Selected || message.EvidenceLocator != fmt.Sprintf("%s:%d", path, i+1) || message.NativeID == "" {
+					t.Fatalf("diagnostic evidence changed: %+v", message)
+				}
+			}
+			if len(humanTurns(messages)) != 0 || len(conversationTokenCounts(messages)) != 0 {
+				t.Fatalf("diagnostics invented a human message or token usage: %+v", messages)
+			}
+		})
+	}
+}
+
 func TestClaudeExecutionModelSurvivesSyntheticErrors(t *testing.T) {
 	for _, check := range []struct {
 		name   string
